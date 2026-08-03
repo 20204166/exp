@@ -24,6 +24,7 @@ class DashboardSnapshot:
         for resource in self.resources:
             if resource.key == key:
                 return resource
+
         raise KeyError(f"Unknown resource: {key}")
 
 
@@ -52,4 +53,11 @@ class ProcessActionResult:
     requested: int
     stopped: tuple[int, ...]
     force_required: tuple[int, ...]
+    errors: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FileActionResult:
+    requested: int
+    moved: tuple[Path, ...]
     errors: tuple[str, ...]
