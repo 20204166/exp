@@ -1,6 +1,6 @@
 import tkinter as tk 
 
-from algo import generate_random_number, analyze_number, NumberAnalyzer
+from algo import generate_random_number, analyze_number
 
 class Appwindow:
     def __init__(self, master):

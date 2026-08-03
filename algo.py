@@ -3,7 +3,6 @@ import random
 final = 0
 number = 0
 
-number = int(input("Enter a number: ")) 
 
 def generate_random_number() ->int:
     return random.randint(1, 1000)
