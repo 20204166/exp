@@ -14,5 +14,13 @@ def analyze_number(number: int) -> str:
         number = final
         return "Less"
     if final % 2 == 1:
+        number = final 
         return "Greater"
-    return f"The number is {number} and the random number is {final}"
+    return f"The number is {number} and the random number is {final}."
+
+
+class NumberAnalyzer: 
+    def __init__(self, number: int):
+        self.number = number
+        self.final = generate_random_number()
+
