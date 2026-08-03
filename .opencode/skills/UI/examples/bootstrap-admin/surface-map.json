@@ -1,0 +1,27 @@
+{
+  "surface": "Admin user table",
+  "slug": "admin-users",
+  "routes": ["/admin/users"],
+  "templates": [
+    "templates/admin/base.html",
+    "templates/admin/users.html",
+    "templates/admin/_user_row.html",
+    "_variables.scss",
+    "scss/_custom.scss"
+  ],
+  "styles": [
+    "scss/main.scss",
+    "scss/_variables.scss",
+    "scss/_custom.scss",
+    "node_modules/bootstrap/scss/bootstrap.scss"
+  ],
+  "scripts": ["static/js/admin-users.js"],
+  "components": ["<table>", "btn-*", "nav-tabs", "dropdown-menu", "form-check-input"],
+  "states": ["default", "loading", "empty", "no-result", "permission-denied"],
+  "viewports": [375, 768, 1024, 1280],
+  "tokens_referenced": ["$primary", "$gray-700", "$border-color", "$btn-padding-y", "$table-cell-padding-y", "--bs-body-color"],
+  "accessibility_landmarks": ["header", "main", "footer"],
+  "evidence_availability": "browser-automatable",
+  "stack": "bootstrap",
+  "discovery_notes": "Bootstrap 5.2 with Sass overrides in _variables.scss and runtime overrides in :root. Theme toggle via [data-bs-theme='dark']. Table rows rendered server-side; dropdown menus use Bootstrap JS. State classes .active/.disabled/.show preserved on touched controls."
+}

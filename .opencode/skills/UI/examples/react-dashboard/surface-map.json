@@ -1,0 +1,26 @@
+{
+  "surface": "Operations dashboard",
+  "slug": "ops-dashboard",
+  "routes": ["/ops/dashboard"],
+  "templates": [],
+  "styles": [
+    "src/styles/tokens.module.css",
+    "src/components/Dashboard/Dashboard.module.css",
+    "src/components/MetricTile/MetricTile.module.css",
+    "src/components/TrendChart/TrendChart.module.css"
+  ],
+  "scripts": [
+    "src/components/Dashboard/Dashboard.tsx",
+    "src/components/MetricTile/MetricTile.tsx",
+    "src/components/TrendChart/TrendChart.tsx",
+    "src/hook/useDashboardData.ts"
+  ],
+  "components": ["Dashboard", "MetricTile", "TrendChart", "SidebarNav", "FilterChip"],
+  "states": ["default", "loading", "error", "empty", "permission-denied"],
+  "viewports": [375, 768, 1280, 1440],
+  "tokens_referenced": ["--space-2", "--space-4", "--space-6", "--color-bg-elevated", "--radius-md", "--shadow-1", "--motion-fast"],
+  "accessibility_landmarks": ["header", "main", "aside", "footer"],
+  "evidence_availability": "browser-automatable",
+  "stack": "react",
+  "discovery_notes": "CSS Modules. MetricTile slotted inside Dashboard.module.css grid. Dashboard fetches via useDashboardData composable; loading/error/empty states handled at Tile level. Storybook stories exist for MetricTile but not Dashboard."
+}

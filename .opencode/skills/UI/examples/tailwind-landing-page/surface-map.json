@@ -1,0 +1,20 @@
+{
+  "surface": "Landing page",
+  "slug": "landing",
+  "routes": ["/"],
+  "templates": ["src/pages/Landing.tsx"],
+  "styles": [
+    "tailwind.config.ts",
+    "src/styles/globals.css",
+    "src/pages/Landing.tsx"
+  ],
+  "scripts": ["src/pages/Landing.tsx", "src/components/Hero.tsx", "src/components/FeatureGrid.tsx", "src/components/CTA.tsx"],
+  "components": ["Hero", "FeatureGrid", "CTA", "SiteHeader", "SiteFooter"],
+  "states": ["default", "loaded-image-pending", "loaded-image-failed"],
+  "viewports": [375, 390, 768, 1024, 1280, 1440],
+  "tokens_referenced": ["theme.colors", "theme.spacing", "theme.fontSize", "theme.screens", "theme.extend.container"],
+  "accessibility_landmarks": ["header", "main", "footer"],
+  "evidence_availability": "browser-automatable",
+  "stack": "tailwind",
+  "discovery_notes": "Tailwind v4 via @import \"tailwindcss\"; theme overrides via @theme in globals.css. Container queries used by FeatureGrid via @container utilities. Arbitrary-value classes seen 7 times in Hero (p-[14px], gap-[18px]) — token candidates."
+}

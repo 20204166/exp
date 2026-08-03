@@ -1,0 +1,24 @@
+{
+  "surface": "Refund claim form",
+  "slug": "claims-new",
+  "routes": ["/claims/new"],
+  "templates": [
+    "templates/base.html",
+    "templates/claims/new.html",
+    "templates/claims/_field_group.html",
+    "templates/claims/_progress_stepper.html"
+  ],
+  "styles": [
+    "static/css/app.css",
+    "static/css/forms.css"
+  ],
+  "scripts": ["static/js/claim-form.js"],
+  "components": ["ClaimForm", "FieldGroup", "ProgressStepper"],
+  "states": ["default", "validation-error", "loading", "submit-success", "permission-denied"],
+  "viewports": [375, 768, 1280],
+  "tokens_referenced": ["--space-2", "--space-4", "--color-text-primary", "--color-danger", "--radius-md"],
+  "accessibility_landmarks": ["header", "main", "footer"],
+  "evidence_availability": "browser-automatable",
+  "stack": "django",
+  "discovery_notes": "Form fields rendered by django-crispy-forms template pack; widget templates under templates/crispy_forms/. Field-group partial uses {% include %}. Progress stepper renders server-side via context var stepper_steps. CSRF token placement near top of base; do not move for visual reasons."
+}

@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://railrefund.local/.opencode/skills/UI/schemas/surface-map.schema.json",
+  "title": "UI Surface Map",
+  "description": "Machine-readable surface discovery output for the UI skill (Stage 1). Conforms to the surface evidence model in core/surface-discovery.md.",
+  "type": "object",
+  "required": ["surface", "slug", "routes", "templates", "states", "viewports", "evidence_availability"],
+  "additionalProperties": false,
+  "properties": {
+    "surface": {
+      "type": "string",
+      "description": "Human-readable surface name."
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Machine slug used as the .ui/<slug>/ directory name."
+    },
+    "routes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Routes that lead to the surface (URL paths or route names)."
+    },
+    "templates": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Template files including base/layout/extends/includes/macros."
+    },
+    "styles": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "CSS / SCSS / CSS Modules / Tailwind config entrypoints relevant to the surface."
+    },
+    "scripts": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "JS / TS interaction files wired to the surface."
+    },
+    "components": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Component names / paths in framework stacks."
+    },
+    "states": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "States the surface can be in (default, loading, error, empty, success, ...)."
+    },
+    "viewports": {
+      "type": "array",
+      "items": {"type": "integer"},
+      "minItems": 1,
+      "description": "Viewport widths (CSS px) to audit. Minimum three (smallest, mid, largest target) unless single-viewport surface."
+    },
+    "tokens_referenced": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Design tokens (CSS custom properties / theme keys / Sass vars) referenced by the surface."
+    },
+    "accessibility_landmarks": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Landmark elements on the surface (header, nav, main, aside, footer)."
+    },
+    "evidence_availability": {
+      "type": "string",
+      "enum": ["code only", "renderable", "browser-automatable", "ci-backed"],
+      "description": "Highest evidence tier achievable for the surface. Caps allowed confidence (see core/evidence-model.md)."
+    },
+    "stack": {
+      "type": "string",
+      "description": "Detected stack (react, vue, jinja, django, flask, fastapi, tailwind, bootstrap, vanilla css, scss, css modules, css-in-js, unknown)."
+    },
+    "discovery_notes": {
+      "type": "string",
+      "description": "Free-text notes about discovery gaps, mis-named prompts, sampling decisions."
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://railrefund.local/.opencode/skills/UI/schemas/opposition.schema.json",
+  "title": "UI Opposition Report",
+  "description": "Machine-readable opposition output (Stage 9). Human-readable companion: templates/ui-opposition-report.md.",
+  "type": "object",
+  "required": ["surface_slug", "critics", "findings", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "surface_slug": {"type": "string"},
+    "status": {
+      "type": "string",
+      "enum": ["complete", "incomplete"],
+      "description": "complete only if every required critic section was written by that critic. The orchestrator must not backfill."
+    },
+    "incomplete_reason": {"type": "string"},
+    "critics": {
+      "type": "array",
+      "description": "Critics actually used (escalation chosen at Stage 0). Specialist critics added when escalated.",
+      "items": {
+        "type": "object",
+        "required": ["role", "section_written_by_critic"],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": ["opposition-critic", "visual-consistency", "accessibility", "css-architecture", "responsive", "scope-regression", "smaller-fix"]
+          },
+          "section_written_by_critic": {"type": "boolean"},
+          "section_ref": {"type": "string", "description": "Anchor / line range in ui-opposition-report.md."}
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/finding"}
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": ["id", "proposed_change", "challenge_surface", "decision", "reason", "evidence_cited"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^OPP-[0-9]{3}$"},
+        "proposed_change": {"type": "string"},
+        "challenge_surface": {
+          "type": "string",
+          "enum": ["visual consistency", "accessibility", "css architecture", "responsive", "scope", "smaller-fix"]
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["ACCEPT", "ACCEPT WITH MODIFICATION", "BLOCK", "DEFER", "NEEDS EVIDENCE", "HAND OFF TO BUGGUARD"]
+        },
+        "reason": {"type": "string"},
+        "safer_alternative": {"type": "string", "description": "Required when decision is not ACCEPT."},
+        "evidence_cited": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    }
+  }
+}

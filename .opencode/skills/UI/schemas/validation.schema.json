@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://railrefund.local/.opencode/skills/UI/schemas/validation.schema.json",
+  "title": "UI Validation Report",
+  "description": "Machine-readable validation (Stages 12-14). Human-readable companion: templates/ui-validation-report.md / ui-report.md validation block.",
+  "type": "object",
+  "required": ["surface_slug", "gates", "coverage", "known_limitations"],
+  "additionalProperties": false,
+  "properties": {
+    "surface_slug": {"type": "string"},
+    "gates": {
+      "type": "array",
+      "description": "Production-readiness gates (core/orchestrator.md).",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": ["surface", "design-language", "scope", "accessibility", "responsive", "css-architecture", "visual-evidence", "opposition"]
+          },
+          "status": {"type": "string", "enum": ["passed", "failed", "incomplete", "not-applicable"]},
+          "evidence": {"type": "array", "items": {"type": "string"}},
+          "reason": {"type": "string", "description": "Required when status is failed/incomplete/not-applicable."}
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["viewports", "states"],
+      "properties": {
+        "viewports": {
+          "type": "array",
+          "items": {"type": "integer"},
+          "description": "Viewport widths (CSS px) actually exercised."
+        },
+        "states": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "States actually exercised (default, error, loading, focus-visible, ...)."
+        },
+        "themes": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Themes exercised (light, dark, hc) if the product has themes."
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "properties": {
+        "static": {
+          "type": "object",
+          "properties": {
+            "specificity_delta": {"type": "string"},
+            "new_hardcoded_values": {"type": "integer"},
+            "new_important": {"type": "integer"},
+            "new_global_selectors": {"type": "integer"},
+            "new_dependency": {"type": "boolean"}
+          }
+        },
+        "render": {
+          "type": "object",
+          "properties": {
+            "diff_max_pct": {"type": "number"},
+            "overflow": {"type": "boolean"},
+            "horizontal_scroll": {"type": "boolean"},
+            "layout_shift": {"type": "string"}
+          }
+        },
+        "accessibility": {
+          "type": "object",
+          "properties": {
+            "axe_findings": {"type": "integer"},
+            "keyboard_walkthrough": {"type": "string", "enum": ["passed", "failed", "not-run"]},
+            "focus_visible": {"type": "string", "enum": ["passed", "failed", "not-run"]},
+            "contrast_text": {"type": "string", "enum": ["passed", "failed", "not-run"]},
+            "contrast_non_text": {"type": "string", "enum": ["passed", "failed", "not-run"]},
+            "reduced_motion": {"type": "string", "enum": ["passed", "failed", "not-run"]}
+          }
+        },
+        "interaction": {
+          "type": "object",
+          "properties": {
+            "microinteraction_pairs": {"type": "string"},
+            "notes": {"type": "string"}
+          }
+        },
+        "performance_boundary": {
+          "type": "object",
+          "properties": {
+            "perceived_ui_risk": {"type": "array", "items": {"type": "string"}},
+            "bugguard_handoff": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "bugguard_boundary": {
+      "type": "object",
+      "required": ["touched_correctness_logic", "needs_followup"],
+      "properties": {
+        "touched_correctness_logic": {"type": "boolean"},
+        "touched_validation_logic": {"type": "boolean"},
+        "touched_performance_sensitive_path": {"type": "boolean"},
+        "needs_followup": {"type": "boolean"},
+        "followup_notes": {"type": "string"}
+      }
+    },
+    "known_limitations": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

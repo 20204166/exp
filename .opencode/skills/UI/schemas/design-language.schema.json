@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://railrefund.local/.opencode/skills/UI/schemas/design-language.schema.json",
+  "title": "UI Design Language Inference",
+  "description": "Machine-readable design-language inference (Stage 3). Mandatory before proposing visual changes. The companion human-readable artifact is templates/design-language.md.",
+  "type": "object",
+  "required": ["surface_slug", "inferred", "constraints", "evidence"],
+  "additionalProperties": false,
+  "properties": {
+    "surface_slug": {"type": "string"},
+    "inferred": {
+      "type": "object",
+      "description": "Inferred design language dimensions. Each value cites at least one evidence row.",
+      "required": ["density", "spacing_rhythm", "type_scale", "colour_usage", "radius_language", "shadow_elevation", "icon_style", "button_hierarchy", "form_style", "motion_personality"],
+      "properties": {
+        "brand_tone": {"type": "string"},
+        "density": {"type": "string", "enum": ["compact", "cozy", "comfortable", "airy", "unknown"]},
+        "spacing_rhythm": {"type": "string", "description": "e.g. '8px base, scale 2/4/8/12/16/24'"},
+        "type_scale": {"type": "string"},
+        "colour_usage": {"type": "string"},
+        "radius_language": {"type": "string"},
+        "shadow_elevation": {"type": "string"},
+        "icon_style": {"type": "string"},
+        "component_conventions": {"type": "string"},
+        "button_hierarchy": {"type": "string"},
+        "form_style": {"type": "string"},
+        "empty_loading_error_state_style": {"type": "string"},
+        "layout_grid": {"type": "string"},
+        "motion_personality": {"type": "string"}
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "required": ["must_reuse", "must_preserve", "do_not_introduce"],
+      "properties": {
+        "must_reuse": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Tokens / variants / patterns that any change must reuse."
+        },
+        "must_preserve": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Product-language traits that must survive the change."
+        },
+        "do_not_introduce": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Anti-generic-AI defaults; widen only with explicit user request. See packs/anti-patterns/generic-ai-ui.md."
+        },
+        "spa_or_marketing_only": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Patterns allowed only on marketing/(S)PA surfaces, not utility surfaces."
+        }
+      }
+    },
+    "tokens": {
+      "type": "array",
+      "description": "Token inventory summary (full optional artifact: token-inventory.json).",
+      "items": {
+        "type": "object",
+        "required": ["name", "value", "source"],
+        "properties": {
+          "name": {"type": "string"},
+          "value": {"type": "string"},
+          "source": {"type": "string", "description": "file:line of the token definition."},
+          "duplicate_value_of": {"type": "string", "description": "Name of another token with the same value, if any."}
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "description": "Evidence rows cited by inferred dimensions and constraints.",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "ref", "claim"],
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"type": "string", "enum": ["screenshot", "css", "dom", "computed-style", "a11y-tree", "code", "config"]},
+          "ref": {"type": "string", "description": "Path / selector / line / artifact id."},
+          "claim": {"type": "string", "description": "What this evidence row supports."}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://railrefund.local/.opencode/skills/UI/schemas/ui-audit.schema.json",
+  "title": "UI Audit Issues",
+  "description": "Machine-readable UI audit (Stage 6). Conforms to core/audit-taxonomy.md. The human-readable companion is templates/ui-report.md / ui-audit.md.",
+  "type": "object",
+  "required": ["surface_slug", "mode", "issues"],
+  "additionalProperties": false,
+  "properties": {
+    "surface_slug": {"type": "string"},
+    "mode": {
+      "type": "string",
+      "enum": ["audit only", "audit + patch", "visual polish", "css architecture", "responsive fix", "accessibility fix", "design-system cleanup", "component state improvement", "full surface refinement", "implement design", "match screenshot"]
+    },
+    "risk": {"type": "string", "enum": ["low", "medium", "high", "design-system-altering"]},
+    "issues": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/issue"}
+    }
+  },
+  "$defs": {
+    "issue": {
+      "type": "object",
+      "required": ["id", "surface", "mode", "category", "severity", "confidence", "evidence", "design_language_fit", "user_impact", "recommended_fix", "regression_risk", "validation"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^UI-[0-9]{3}$"},
+        "surface": {"type": "string"},
+        "mode": {"type": "string"},
+        "category": {
+          "type": "string",
+          "enum": ["layout", "spacing", "typography", "colour", "component-drift", "state", "responsive", "accessibility", "css-architecture", "interaction-feedback"]
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "high", "medium", "low", "deferred", "blocked", "needs-evidence"]
+        },
+        "confidence": {
+          "type": "string",
+          "enum": ["speculative", "low", "medium", "high"],
+          "description": "Minimum evidence tier across cited evidence (core/evidence-model.md)."
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"},
+          "description": "Citations to evidence rows: screenshot, css, dom, etc."
+        },
+        "design_language_fit": {
+          "type": "string",
+          "description": "Whether the defect violates an existing design-language contract."
+        },
+        "user_impact": {"type": "string"},
+        "recommended_fix": {"type": "string"},
+        "regression_risk": {"type": "string", "enum": ["low", "medium", "high"]},
+        "validation": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Validation evidence required to confirm the fix."
+        }
+      }
+    }
+  }
+}
