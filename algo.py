@@ -18,9 +18,3 @@ def analyze_number(number: int) -> str:
         return "Greater"
     return f"The number is {number} and the random number is {final}."
 
-
-class NumberAnalyzer: 
-    def __init__(self, number: int):
-        self.number = number
-        self.final = generate_random_number()
-
