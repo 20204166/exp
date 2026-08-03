@@ -1,19 +1,19 @@
-import random 
-
-final = 0
-number = 0
+import random
 
 
-def generate_random_number() ->int:
+def generate_random_number() -> int:
+    """Return a random whole number between 1 and 1000."""
     return random.randint(1, 1000)
 
-def analyze_number(number: int) -> str:
-    final = generate_random_number()
-    if final % 2 == 0:
-        number = final
-        return "Less"
-    if final % 2 == 1:
-        number = final 
-        return "Greater"
-    return f"The number is {number} and the random number is {final}."
+
+def analyze_number(number: int, random_number: int) -> str:
+    """Compare the user's number with a generated random number."""
+    if number < random_number:
+        comparison = "less than"
+    elif number > random_number:
+        comparison = "greater than"
+    else:
+        comparison = "equal to"
+
+    return f"{number} is {comparison} {random_number}."
 

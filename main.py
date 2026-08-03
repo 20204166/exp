@@ -1,7 +1,8 @@
-from window import Appwindow
+from window import AppWindow
+
 
 def main() -> None:
-    app = Appwindow()
+    app = AppWindow()
     app.run()
 
 
