@@ -3,6 +3,9 @@ import platform
 import time
 from datetime import datetime
 
+from maintenance.models import DashboardSnapshot, FileCandidate, ProcessCandidate
+from maintenance.scanner import SystemScanner
+
 try:
     import psutil
 except ImportError:
@@ -35,6 +38,7 @@ class Analyzer:
         self.max_memory_test_bytes = int(
             max_memory_test_gib * self.BYTES_IN_GIB
         )
+        self.scanner = SystemScanner()
 
     @staticmethod
     def _require_psutil() -> None:
@@ -127,7 +131,10 @@ class Analyzer:
         return lines or ["No accessible storage partitions were found."]
 
     def gpu_info(self) -> list[str]:
-        """Return NVIDIA GPU information when monitoring is available."""
+        """Return platform-appropriate GPU information when available."""
+        if platform.system() == "Darwin":
+            return list(self.scanner.gpu_details())
+
         if pynvml is None:
             return [
                 "GPU details unavailable. For NVIDIA GPUs, run: "
@@ -248,3 +255,15 @@ class Analyzer:
     def analyze_all(self) -> str:
         """Return the system report and controlled RAM test together."""
         return f"{self.full_report()}\n\n{self.test_memory()}"
+
+    def dashboard_snapshot(self) -> DashboardSnapshot:
+        """Return structured data for the interactive dashboard."""
+        return self.scanner.scan_dashboard()
+
+    def process_candidates(self) -> list[ProcessCandidate]:
+        """Return reviewable processes for the CPU and memory views."""
+        return self.scanner.scan_processes()
+
+    def storage_candidates(self) -> list[FileCandidate]:
+        """Return large and duplicate files discovered in Downloads."""
+        return self.scanner.scan_downloads()
