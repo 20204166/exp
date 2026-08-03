@@ -1,6 +1,8 @@
+import logging
 import threading
 import tkinter as tk
 from collections.abc import Callable
+from queue import Empty, Queue
 from tkinter import messagebox, ttk
 
 import algo
@@ -14,6 +16,9 @@ from maintenance.dialogs import (
 from maintenance.models import DashboardSnapshot
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 class AppWindow:
     BACKGROUND = "#F4F7FB"
     CARD_BACKGROUND = "#FFFFFF"
@@ -23,6 +28,17 @@ class AppWindow:
     ACCENT_ACTIVE = "#4338CA"
     BORDER = "#E4E7EC"
     AUTO_SCAN_MILLISECONDS = 4 * 60 * 60 * 1000
+    UI_FONT = "Helvetica"
+    FIXED_FONT = "TkFixedFont"
+    TITLE_FONT = (UI_FONT, 24, "bold")
+    SECTION_FONT = (UI_FONT, 14, "bold")
+    BODY_FONT = (UI_FONT, 10)
+    BUTTON_FONT = (UI_FONT, 11, "bold")
+    DANGER_BUTTON_FONT = (UI_FONT, 10, "bold")
+    STATUS_FONT = (UI_FONT, 10, "bold")
+    OUTPUT_HEADER_FONT = (UI_FONT, 10, "bold")
+    OUTPUT_FONT = FIXED_FONT
+    BACKGROUND_POLL_MILLISECONDS = 10
 
     RESOURCE_CARDS = (
         ("cpu", "CPU"),
@@ -39,16 +55,24 @@ class AppWindow:
         self.file_manager = FileManager(self.analyzer.scanner.downloads_path)
         self.snapshot: DashboardSnapshot | None = None
         self.auto_scan_id: str | None = None
+        self._is_closing = False
+        self._pending_after_ids: set[str] = set()
+        self._background_poll_id: str | None = None
+        self._background_tasks = 0
+        self._background_queue: Queue[
+            tuple[Callable[..., None], tuple[object, ...]] | None
+        ] = Queue()
 
         self.master = tk.Tk()
         self.master.title("System Analyzer")
         self.master.geometry("1040x760")
         self.master.minsize(900, 680)
         self.master.configure(bg=self.BACKGROUND)
+        self.master.protocol("WM_DELETE_WINDOW", self._close)
 
         self._configure_styles()
         self._build_window()
-        self.master.after(350, self.handle_analyze)
+        self._schedule_timer(350, self.handle_analyze)
 
     @property
     def colors(self) -> dict[str, str]:
@@ -169,7 +193,7 @@ class AppWindow:
             text="LATEST SCAN",
             bg=self.CARD_BACKGROUND,
             fg=self.TEXT_SECONDARY,
-            font=("Helvetica", 10, "bold"),
+            font=self.OUTPUT_HEADER_FONT,
         )
         self.output_header.pack(anchor=tk.W, padx=18, pady=(14, 8))
 
@@ -197,7 +221,7 @@ class AppWindow:
             padx=14,
             pady=10,
             height=8,
-            font=("Menlo", 10),
+            font=self.OUTPUT_FONT,
             spacing1=2,
             spacing3=3,
         )
@@ -218,25 +242,25 @@ class AppWindow:
             "Title.TLabel",
             background=self.BACKGROUND,
             foreground=self.TEXT_PRIMARY,
-            font=("Helvetica", 24, "bold"),
+            font=self.TITLE_FONT,
         )
         style.configure(
             "Section.TLabel",
             background=self.BACKGROUND,
             foreground=self.TEXT_PRIMARY,
-            font=("Helvetica", 14, "bold"),
+            font=self.SECTION_FONT,
         )
         style.configure(
             "Description.TLabel",
             background=self.BACKGROUND,
             foreground=self.TEXT_SECONDARY,
-            font=("Helvetica", 10),
+            font=self.BODY_FONT,
         )
         style.configure(
             "Primary.TButton",
             background=self.ACCENT,
             foreground="#FFFFFF",
-            font=("Helvetica", 11, "bold"),
+            font=self.BUTTON_FONT,
             padding=(18, 11),
             borderwidth=0,
             focusthickness=0,
@@ -254,7 +278,7 @@ class AppWindow:
             "Danger.TButton",
             background="#B42318",
             foreground="#FFFFFF",
-            font=("Helvetica", 10, "bold"),
+            font=self.DANGER_BUTTON_FONT,
             padding=(12, 8),
         )
         style.map(
@@ -265,13 +289,13 @@ class AppWindow:
             "Ready.Status.TLabel",
             background=self.BACKGROUND,
             foreground="#16803C",
-            font=("Helvetica", 10, "bold"),
+            font=self.STATUS_FONT,
         )
         style.configure(
             "Busy.Status.TLabel",
             background=self.BACKGROUND,
             foreground="#B45309",
-            font=("Helvetica", 10, "bold"),
+            font=self.STATUS_FONT,
         )
         style.configure(
             "Analysis.Horizontal.TProgressbar",
@@ -317,21 +341,55 @@ class AppWindow:
         task: Callable[[], DashboardSnapshot],
     ) -> None:
         self._set_busy(True)
+        self._background_tasks += 1
+        self._start_background_poll()
 
         def worker() -> None:
             try:
                 result = task()
             except Exception as error:
-                self.master.after(0, self._show_error, str(error))
+                self._background_queue.put((self._show_error, (str(error),)))
             else:
-                self.master.after(0, self._show_snapshot, result)
+                self._background_queue.put((self._show_snapshot, (result,)))
+            finally:
+                self._background_queue.put(None)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _start_background_poll(self) -> None:
+        if self._background_poll_id is None and not self._is_closing:
+            self._background_poll_id = self._schedule_timer(
+                self.BACKGROUND_POLL_MILLISECONDS,
+                self._drain_background_queue,
+            )
+
+    def _drain_background_queue(self) -> None:
+        self._background_poll_id = None
+
+        while True:
+            try:
+                item = self._background_queue.get_nowait()
+            except Empty:
+                break
+
+            if item is None:
+                self._background_tasks -= 1
+                continue
+
+            callback, args = item
+            if not self._is_closing:
+                callback(*args)
+
+        if self._background_tasks > 0 and not self._is_closing:
+            self._start_background_poll()
 
     def handle_analyze(self) -> None:
         self._run_in_background(self.analyzer.dashboard_snapshot)
 
     def _show_snapshot(self, snapshot: DashboardSnapshot) -> None:
+        if self._is_closing:
+            return
+
         self.snapshot = snapshot
         for resource in snapshot.resources:
             self.cards[resource.key].update_summary(resource)
@@ -386,19 +444,90 @@ class AppWindow:
             InfoDialog(self.master, summary=summary, colors=self.colors)
 
     def _rescan_after_change(self) -> None:
-        self.master.after(500, self.handle_analyze)
+        self._schedule_timer(500, self.handle_analyze)
 
     def _schedule_auto_scan(self) -> None:
-        if self.auto_scan_id is not None:
-            self.master.after_cancel(self.auto_scan_id)
-        self.auto_scan_id = self.master.after(
+        if self._is_closing:
+            return
+
+        if not self._cancel_timer(self.auto_scan_id):
+            return
+        self.auto_scan_id = self._schedule_timer(
             self.AUTO_SCAN_MILLISECONDS,
-            self.handle_analyze,
+            self._run_auto_scan,
         )
 
+    def _schedule_timer(
+        self,
+        delay: int,
+        callback: Callable[..., None],
+        *args: object,
+    ) -> str | None:
+        if self._is_closing:
+            return None
+
+        identifier: str | None = None
+
+        def run_callback() -> None:
+            if identifier is not None:
+                self._pending_after_ids.discard(identifier)
+            if not self._is_closing:
+                callback(*args)
+
+        try:
+            identifier = self.master.after(delay, run_callback)
+        except (RuntimeError, tk.TclError):
+            if not self._is_closing:
+                LOGGER.exception("Failed to schedule Tkinter work")
+            return None
+
+        self._pending_after_ids.add(identifier)
+        return identifier
+
+    def _cancel_timer(self, identifier: str | None) -> bool:
+        if identifier is None:
+            return True
+
+        try:
+            self.master.after_cancel(identifier)
+        except (RuntimeError, tk.TclError):
+            if not self._is_closing:
+                LOGGER.exception("Failed to cancel Tkinter work")
+            else:
+                self._pending_after_ids.discard(identifier)
+            return False
+
+        self._pending_after_ids.discard(identifier)
+        return True
+
+    def _run_auto_scan(self) -> None:
+        self.auto_scan_id = None
+        if not self._is_closing:
+            self.handle_analyze()
+
+    def _cancel_pending_timers(self) -> None:
+        for identifier in tuple(self._pending_after_ids):
+            self._cancel_timer(identifier)
+
+    def _close(self) -> None:
+        self._is_closing = True
+        self._cancel_pending_timers()
+        self.auto_scan_id = None
+        self._background_poll_id = None
+        self.master.destroy()
+
     def _show_error(self, message: str) -> None:
+        if self._is_closing:
+            return
+
         self._set_busy(False)
         messagebox.showerror("Analysis Error", message, parent=self.master)
 
     def run(self) -> None:
-        self.master.mainloop()
+        try:
+            self.master.mainloop()
+        finally:
+            self._is_closing = True
+            self._cancel_pending_timers()
+            self.auto_scan_id = None
+            self._background_poll_id = None

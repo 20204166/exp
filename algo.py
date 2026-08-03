@@ -23,6 +23,10 @@ class Analyzer:
     BYTES_IN_GIB = 1024**3
     MEMORY_PAGE_BYTES = 4096
     POST_TEST_DELAY_SECONDS = 0.2
+    GPU_DETAILS_UNAVAILABLE_MESSAGE = (
+        "GPU details unavailable. For NVIDIA GPUs, run: "
+        "python -m pip install nvidia-ml-py"
+    )
 
     def __init__(
         self,
@@ -35,9 +39,7 @@ class Analyzer:
             raise ValueError("max_memory_test_gib must be greater than 0.")
 
         self.memory_test_percent = memory_test_percent
-        self.max_memory_test_bytes = int(
-            max_memory_test_gib * self.BYTES_IN_GIB
-        )
+        self.max_memory_test_bytes = int(max_memory_test_gib * self.BYTES_IN_GIB)
         self.scanner = SystemScanner()
 
     @staticmethod
@@ -77,9 +79,7 @@ class Analyzer:
         """Return CPU usage, core-count, and frequency information."""
         self._require_psutil()
         frequency = psutil.cpu_freq()
-        frequency_text = (
-            f"{frequency.current:.0f} MHz" if frequency else "Unavailable"
-        )
+        frequency_text = f"{frequency.current:.0f} MHz" if frequency else "Unavailable"
 
         return [
             f"CPU usage: {psutil.cpu_percent(interval=0.1):.1f}%",
@@ -136,46 +136,56 @@ class Analyzer:
             return list(self.scanner.gpu_details())
 
         if pynvml is None:
-            return [
-                "GPU details unavailable. For NVIDIA GPUs, run: "
-                "python -m pip install nvidia-ml-py"
-            ]
+            return [self.GPU_DETAILS_UNAVAILABLE_MESSAGE]
 
         try:
             pynvml.nvmlInit()
-            lines: list[str] = []
-
-            for index in range(pynvml.nvmlDeviceGetCount()):
-                handle = pynvml.nvmlDeviceGetHandleByIndex(index)
-                name = pynvml.nvmlDeviceGetName(handle)
-                memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                utilisation = pynvml.nvmlDeviceGetUtilizationRates(handle)
-                temperature = pynvml.nvmlDeviceGetTemperature(
-                    handle,
-                    pynvml.NVML_TEMPERATURE_GPU,
-                )
-
-                if isinstance(name, bytes):
-                    name = name.decode(errors="replace")
-
-                lines.extend(
-                    [
-                        f"GPU {index}: {name}",
-                        f"GPU usage: {utilisation.gpu}%",
-                        f"GPU memory used: {self._format_bytes(memory.used)} "
-                        f"of {self._format_bytes(memory.total)}",
-                        f"GPU temperature: {temperature}°C",
-                    ]
-                )
-
-            return lines or ["No NVIDIA GPU was detected."]
+            return self._nvidia_gpu_lines()
         except Exception as error:
             return [f"GPU details unavailable: {error}"]
         finally:
-            try:
-                pynvml.nvmlShutdown()
-            except Exception:
-                pass
+            self._shutdown_pynvml()
+
+    def _nvidia_gpu_lines(self) -> list[str]:
+        if pynvml is None:
+            return [self.GPU_DETAILS_UNAVAILABLE_MESSAGE]
+
+        lines: list[str] = []
+
+        for index in range(pynvml.nvmlDeviceGetCount()):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+            name = pynvml.nvmlDeviceGetName(handle)
+            memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            utilisation = pynvml.nvmlDeviceGetUtilizationRates(handle)
+            temperature = pynvml.nvmlDeviceGetTemperature(
+                handle,
+                pynvml.NVML_TEMPERATURE_GPU,
+            )
+
+            if isinstance(name, bytes):
+                name = name.decode(errors="replace")
+
+            lines.extend(
+                [
+                    f"GPU {index}: {name}",
+                    f"GPU usage: {utilisation.gpu}%",
+                    f"GPU memory used: {self._format_bytes(memory.used)} "
+                    f"of {self._format_bytes(memory.total)}",
+                    f"GPU temperature: {temperature}°C",
+                ]
+            )
+
+        return lines or ["No NVIDIA GPU was detected."]
+
+    @staticmethod
+    def _shutdown_pynvml() -> None:
+        if pynvml is None:
+            return
+
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
 
     def network_info(self) -> list[str]:
         """Return total network traffic since the computer started."""
@@ -198,9 +208,8 @@ class Analyzer:
         state = "charging" if battery.power_plugged else "not charging"
         return [f"Battery: {battery.percent:.1f}% ({state})"]
 
-    def full_report(self) -> str:
-        """Combine every supported system measurement into one report."""
-        sections = (
+    def _report_sections(self) -> tuple[tuple[str, list[str]], ...]:
+        return (
             ("SYSTEM", self.system_info()),
             ("CPU", self.cpu_info()),
             ("RAM AND SWAP", self.memory_info()),
@@ -210,17 +219,18 @@ class Analyzer:
             ("BATTERY", self.battery_info()),
         )
 
+    def full_report(self) -> str:
+        """Combine every supported system measurement into one report."""
         return "\n\n".join(
-            self._format_section(title, lines) for title, lines in sections
+            self._format_section(title, lines)
+            for title, lines in self._report_sections()
         )
 
     def test_memory(self, hold_seconds: float = 2.0) -> str:
         """Temporarily allocate part of available RAM, then release it."""
         self._require_psutil()
         before = psutil.virtual_memory()
-        requested_bytes = int(
-            before.available * self.memory_test_percent / 100
-        )
+        requested_bytes = int(before.available * self.memory_test_percent / 100)
         allocation_bytes = min(requested_bytes, self.max_memory_test_bytes)
         was_capped = allocation_bytes < requested_bytes
         memory_block: bytearray | None = None
