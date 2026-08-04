@@ -27,6 +27,14 @@ from typing import Any
 
 from maintenance.models import FileCandidate
 
+
+# =============================================================================
+# Shared types and Windows interop support
+# Implementation: maintenance/components.py
+# Shared by: maintenance/scanner.py, maintenance/dialogs.py
+# Tests: tests/test_components.py, tests/test_maintenance.py
+# =============================================================================
+
 ProgressCallback = Callable[[str], None]
 ProgressTask = Callable[[ProgressCallback, threading.Event], Any]
 HashFingerprint = tuple[int, int, int, int, int]
@@ -51,6 +59,14 @@ _WINDOWS_DOWNLOADS_GUID = _WindowsGuid(
     0x4565,
     (ctypes.c_ubyte * 8)(0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B),
 )
+
+
+# =============================================================================
+# Downloads path resolution
+# Domain owner: maintenance/scanner.py
+# Implementation: maintenance/components.py
+# Tests: tests/test_components.py, tests/test_maintenance.py
+# =============================================================================
 
 
 class DownloadsPathResolver:
@@ -171,6 +187,15 @@ class DownloadsPathResolver:
                     co_uninitialize()
                 except (OSError, TypeError, AttributeError, ctypes.ArgumentError):
                     pass
+
+
+# =============================================================================
+# Downloads discovery, duplicate detection, and hash caching
+# Domain owner: maintenance/scanner.py
+# Implementation: maintenance/components.py
+# Facade and compatibility hooks: maintenance/scanner.py
+# Tests: tests/test_components.py, tests/test_maintenance.py
+# =============================================================================
 
 
 class DownloadScanner:
@@ -563,6 +588,15 @@ class DownloadScanner:
         raise OSError(f"File changed while hashing: {path}")
 
 
+# =============================================================================
+# GPU platform selection
+# Domain owner: maintenance/scanner.py
+# Implementation: maintenance/components.py
+# Consumer and compatibility hooks: maintenance/scanner.py
+# Tests: tests/test_components.py, tests/test_maintenance.py
+# =============================================================================
+
+
 class GpuDetector:
     """Select the correct GPU detail loader for the active platform.
 
@@ -602,6 +636,15 @@ class GpuDetector:
         if system == "Linux":
             return self._linux_loader()
         return ("GPU information unavailable",)
+
+
+# =============================================================================
+# Background Tk task delivery
+# Domain owner: maintenance/dialogs.py
+# Implementation: maintenance/components.py
+# Entry point: maintenance/dialogs.py
+# Tests: tests/test_components.py, tests/test_storage_dialog.py
+# =============================================================================
 
 
 class BackgroundTaskRunner:
@@ -684,6 +727,15 @@ class BackgroundTaskRunner:
             cancel_event=cancel_event,
             on_progress=on_progress,
         )
+
+
+# =============================================================================
+# Dashboard scan coordination
+# Domain owner: window.py
+# Implementation: maintenance/components.py
+# Consumer: window.py
+# Tests: tests/test_components.py, tests/test_window.py
+# =============================================================================
 
 
 @dataclass
