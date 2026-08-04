@@ -13,7 +13,9 @@ from maintenance.models import (
     ProcessCandidate,
     ResourceSummary,
 )
-from maintenance.scanner import SystemScanner
+from maintenance.scanner import ProgressCallback, ScanCancelled, SystemScanner
+
+ProgressTask = Callable[[ProgressCallback, threading.Event], Any]
 
 
 def run_in_thread(
@@ -21,19 +23,36 @@ def run_in_thread(
     task: Callable[[], Any],
     on_success: Callable[[Any], None],
     on_error: Callable[[str], None] | None = None,
+    *,
+    progress_task: ProgressTask | None = None,
+    cancel_event: threading.Event | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> None:
     """Run work off the Tkinter thread and safely deliver the result."""
+
+    operation_cancel_event = cancel_event or threading.Event()
 
     def deliver(callback: Callable, value: Any) -> None:
         try:
             if widget.winfo_exists():
                 callback(value)
-        except tk.TclError:
+        except (RuntimeError, tk.TclError):
+            pass
+
+    def report_progress(message: str) -> None:
+        if on_progress is None:
+            return
+        try:
+            widget.after(0, deliver, on_progress, message)
+        except (RuntimeError, tk.TclError):
             pass
 
     def worker() -> None:
         try:
-            result = task()
+            if progress_task is None:
+                result = task()
+            else:
+                result = progress_task(report_progress, operation_cancel_event)
         except Exception as error:
             callback = on_error or (
                 lambda message: messagebox.showerror(
@@ -44,12 +63,12 @@ def run_in_thread(
             )
             try:
                 widget.after(0, deliver, callback, str(error))
-            except tk.TclError:
+            except (RuntimeError, tk.TclError):
                 pass
         else:
             try:
                 widget.after(0, deliver, on_success, result)
-            except tk.TclError:
+            except (RuntimeError, tk.TclError):
                 pass
 
     threading.Thread(target=worker, daemon=True).start()
@@ -220,6 +239,9 @@ class ProcessDialog(tk.Toplevel):
         self.on_changed = on_changed
         self.processes: dict[int, ProcessCandidate] = {}
         self.normal_quit_result: ProcessActionResult | None = None
+        self._refresh_active = False
+        self._refresh_generation = 0
+        self._refresh_cancel_event: threading.Event | None = None
 
         title = "Memory Processes" if resource_key == "memory" else "CPU Processes"
         self.title(title)
@@ -227,6 +249,7 @@ class ProcessDialog(tk.Toplevel):
         self.minsize(760, 480)
         self.configure(bg=colors["background"])
         self.transient(master)
+        self.protocol("WM_DELETE_WINDOW", self._close)
 
         container = tk.Frame(self, bg=colors["background"], padx=24, pady=22)
         container.pack(fill=tk.BOTH, expand=True)
@@ -298,7 +321,8 @@ class ProcessDialog(tk.Toplevel):
             font=("Helvetica", 10),
         )
         self.status_label.pack(side=tk.LEFT)
-        ttk.Button(footer, text="Refresh", command=self.refresh).pack(
+        self.refresh_button = ttk.Button(footer, text="Refresh", command=self.refresh)
+        self.refresh_button.pack(
             side=tk.RIGHT,
             padx=(8, 0),
         )
@@ -313,14 +337,60 @@ class ProcessDialog(tk.Toplevel):
         self.refresh()
 
     def refresh(self) -> None:
+        if self._refresh_active:
+            return
+
+        self._refresh_active = True
+        self._refresh_generation += 1
+        generation = self._refresh_generation
+        cancel_event = threading.Event()
+        self._refresh_cancel_event = cancel_event
         self.quit_button.config(state=tk.DISABLED)
+        self.refresh_button.config(state=tk.DISABLED)
         self.status_label.config(text="Scanning active processes...")
+
+        def process_task(
+            _progress: ProgressCallback,
+            operation_cancel_event: threading.Event,
+        ) -> list[ProcessCandidate]:
+            try:
+                return self.analyzer.process_candidates(
+                    cancel_event=operation_cancel_event,
+                )
+            except TypeError as error:
+                if "unexpected keyword argument" not in str(error):
+                    raise
+                return self.analyzer.process_candidates()
+
         run_in_thread(
             self,
             self.analyzer.process_candidates,
-            self._show_processes,
-            self._show_error,
+            lambda processes: self._show_processes_for_generation(
+                generation,
+                processes,
+            ),
+            lambda message: self._show_error_for_generation(generation, message),
+            progress_task=process_task,
+            cancel_event=cancel_event,
         )
+
+    def _show_processes_for_generation(
+        self,
+        generation: int,
+        processes: list[ProcessCandidate],
+    ) -> None:
+        if generation != self._refresh_generation:
+            return
+        self._refresh_active = False
+        self._refresh_cancel_event = None
+        self._show_processes(processes)
+
+    def _show_error_for_generation(self, generation: int, message: str) -> None:
+        if generation != self._refresh_generation:
+            return
+        self._refresh_active = False
+        self._refresh_cancel_event = None
+        self._show_error(message)
 
     def _show_processes(self, processes: list[ProcessCandidate]) -> None:
         self.tree.delete(*self.tree.get_children())
@@ -359,6 +429,7 @@ class ProcessDialog(tk.Toplevel):
             text=f"{len(ordered)} shown • {allowed_count} available for review"
         )
         self.quit_button.config(state=tk.NORMAL)
+        self.refresh_button.config(state=tk.NORMAL)
 
     def quit_selected(self) -> None:
         selected = [int(item) for item in self.tree.selection()]
@@ -439,7 +510,15 @@ class ProcessDialog(tk.Toplevel):
         self.on_changed()
         self.refresh()
 
+    def _close(self) -> None:
+        if self._refresh_cancel_event is not None:
+            self._refresh_cancel_event.set()
+        self.destroy()
+
     def _show_error(self, message: str) -> None:
+        self._refresh_active = False
+        self._refresh_cancel_event = None
+        self.refresh_button.config(state=tk.NORMAL)
         self.quit_button.config(state=tk.NORMAL)
         self.status_label.config(text="Operation failed")
         messagebox.showerror("Process Error", message, parent=self)
@@ -460,12 +539,16 @@ class StorageDialog(tk.Toplevel):
         self.colors = colors
         self.on_changed = on_changed
         self.candidates: dict[str, FileCandidate] = {}
+        self._scan_active = False
+        self._scan_generation = 0
+        self._scan_cancel_event: threading.Event | None = None
 
         self.title("Storage Cleanup")
         self.geometry("980x580")
         self.minsize(820, 500)
         self.configure(bg=colors["background"])
         self.transient(master)
+        self.protocol("WM_DELETE_WINDOW", self._close)
 
         container = tk.Frame(self, bg=colors["background"], padx=24, pady=22)
         container.pack(fill=tk.BOTH, expand=True)
@@ -595,15 +678,102 @@ class StorageDialog(tk.Toplevel):
             self.tree.column(column, width=width)
 
     def scan(self) -> None:
-        self.scan_button.config(state=tk.DISABLED)
+        if self._scan_active:
+            return
+
+        self._scan_active = True
+        self._scan_generation += 1
+        generation = self._scan_generation
+        cancel_event = threading.Event()
+        self._scan_cancel_event = cancel_event
+        self.scan_button.config(
+            state=tk.NORMAL,
+            text="Cancel Scan",
+            command=self.cancel_scan,
+        )
         self.trash_button.config(state=tk.DISABLED)
         self.status_label.config(text="Scanning Downloads and checking duplicates...")
+
+        def scan_task(
+            progress: ProgressCallback,
+            operation_cancel_event: threading.Event,
+        ) -> list[FileCandidate]:
+            try:
+                return self.analyzer.storage_candidates(
+                    progress_callback=progress,
+                    cancel_event=operation_cancel_event,
+                )
+            except TypeError as error:
+                if "unexpected keyword argument" not in str(error):
+                    raise
+                return self.analyzer.storage_candidates()
+
         run_in_thread(
             self,
             self.analyzer.storage_candidates,
-            self._show_candidates,
-            self._show_error,
+            lambda candidates: self._show_candidates_for_generation(
+                generation,
+                candidates,
+                cancel_event,
+            ),
+            lambda message: self._show_error_for_generation(generation, message),
+            progress_task=scan_task,
+            cancel_event=cancel_event,
+            on_progress=lambda message: self._show_scan_progress(
+                generation,
+                message,
+            ),
         )
+
+    def cancel_scan(self) -> None:
+        if not self._scan_active or self._scan_cancel_event is None:
+            return
+        self._scan_cancel_event.set()
+        self.scan_button.config(state=tk.DISABLED)
+        self.status_label.config(text="Cancelling Downloads scan...")
+
+    def _close(self) -> None:
+        if self._scan_cancel_event is not None:
+            self._scan_cancel_event.set()
+        self.destroy()
+
+    def _show_scan_progress(self, generation: int, message: str) -> None:
+        if self._scan_active and generation == self._scan_generation:
+            self.status_label.config(text=message)
+
+    def _set_scan_idle(self) -> None:
+        self._scan_active = False
+        self._scan_cancel_event = None
+        self.scan_button.config(
+            state=tk.NORMAL,
+            text="Scan Downloads",
+            command=self.scan,
+        )
+        self.trash_button.config(state=tk.NORMAL)
+
+    def _show_candidates_for_generation(
+        self,
+        generation: int,
+        candidates: list[FileCandidate],
+        cancel_event: threading.Event,
+    ) -> None:
+        if generation != self._scan_generation:
+            return
+        if cancel_event.is_set():
+            self._set_scan_idle()
+            self.status_label.config(text="Scan cancelled; previous results remain")
+            return
+        self._set_scan_idle()
+        self._show_candidates(candidates)
+
+    def _show_error_for_generation(self, generation: int, message: str) -> None:
+        if generation != self._scan_generation:
+            return
+        self._set_scan_idle()
+        if message == str(ScanCancelled("Downloads scan cancelled")):
+            self.status_label.config(text="Scan cancelled; previous results remain")
+            return
+        self._show_error(message)
 
     def _show_candidates(self, candidates: list[FileCandidate]) -> None:
         self.tree.delete(*self.tree.get_children())

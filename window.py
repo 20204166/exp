@@ -59,6 +59,10 @@ class AppWindow:
         self._pending_after_ids: set[str] = set()
         self._background_poll_id: str | None = None
         self._background_tasks = 0
+        self._analysis_active = False
+        self._analysis_generation = 0
+        self._analysis_requested = False
+        self._analysis_cancel_event: threading.Event | None = None
         self._background_queue: Queue[
             tuple[Callable[..., None], tuple[object, ...]] | None
         ] = Queue()
@@ -339,18 +343,22 @@ class AppWindow:
     def _run_in_background(
         self,
         task: Callable[[], DashboardSnapshot],
+        on_success: Callable[[DashboardSnapshot], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
     ) -> None:
         self._set_busy(True)
         self._background_tasks += 1
         self._start_background_poll()
+        success_callback = on_success or self._show_snapshot
+        error_callback = on_error or self._show_error
 
         def worker() -> None:
             try:
                 result = task()
             except Exception as error:
-                self._background_queue.put((self._show_error, (str(error),)))
+                self._background_queue.put((error_callback, (str(error),)))
             else:
-                self._background_queue.put((self._show_snapshot, (result,)))
+                self._background_queue.put((success_callback, (result,)))
             finally:
                 self._background_queue.put(None)
 
@@ -384,7 +392,63 @@ class AppWindow:
             self._start_background_poll()
 
     def handle_analyze(self) -> None:
-        self._run_in_background(self.analyzer.dashboard_snapshot)
+        if self._is_closing:
+            return
+        if self._analysis_active:
+            self._analysis_requested = True
+            return
+
+        self._analysis_active = True
+        self._analysis_generation += 1
+        generation = self._analysis_generation
+        cancel_event = threading.Event()
+        self._analysis_cancel_event = cancel_event
+
+        def dashboard_task() -> DashboardSnapshot:
+            try:
+                return self.analyzer.dashboard_snapshot(cancel_event=cancel_event)
+            except TypeError as error:
+                if "unexpected keyword argument" not in str(error):
+                    raise
+                return self.analyzer.dashboard_snapshot()
+
+        self._run_in_background(
+            dashboard_task,
+            on_success=lambda snapshot: self._show_snapshot_for_generation(
+                generation,
+                snapshot,
+            ),
+            on_error=lambda message: self._show_error_for_generation(
+                generation,
+                message,
+            ),
+        )
+
+    def _show_snapshot_for_generation(
+        self,
+        generation: int,
+        snapshot: DashboardSnapshot,
+    ) -> None:
+        if generation != self._analysis_generation:
+            return
+        self._analysis_active = False
+        self._analysis_cancel_event = None
+        rerun_requested = self._analysis_requested
+        self._analysis_requested = False
+        self._show_snapshot(snapshot)
+        if rerun_requested and not self._is_closing:
+            self._schedule_timer(0, self.handle_analyze)
+
+    def _show_error_for_generation(self, generation: int, message: str) -> None:
+        if generation != self._analysis_generation:
+            return
+        self._analysis_active = False
+        self._analysis_cancel_event = None
+        rerun_requested = self._analysis_requested
+        self._analysis_requested = False
+        self._show_error(message)
+        if rerun_requested and not self._is_closing:
+            self._schedule_timer(0, self.handle_analyze)
 
     def _show_snapshot(self, snapshot: DashboardSnapshot) -> None:
         if self._is_closing:
@@ -511,6 +575,11 @@ class AppWindow:
 
     def _close(self) -> None:
         self._is_closing = True
+        self._analysis_active = False
+        self._analysis_requested = False
+        if self._analysis_cancel_event is not None:
+            self._analysis_cancel_event.set()
+        self._analysis_cancel_event = None
         self._cancel_pending_timers()
         self.auto_scan_id = None
         self._background_poll_id = None
@@ -520,6 +589,7 @@ class AppWindow:
         if self._is_closing:
             return
 
+        self._analysis_active = False
         self._set_busy(False)
         messagebox.showerror("Analysis Error", message, parent=self.master)
 

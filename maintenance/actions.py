@@ -5,6 +5,7 @@ from typing import Any
 from pathlib import Path
 
 from maintenance.models import FileActionResult, ProcessActionResult
+from maintenance.scanner import SystemScanner
 
 try:
     import psutil
@@ -161,7 +162,9 @@ class FileManager:
     """Move selected files to Trash after validating their location."""
 
     def __init__(self, allowed_root: Path | None = None) -> None:
-        self.allowed_root = (allowed_root or Path.home() / "Downloads").resolve()
+        self.allowed_root = (
+            allowed_root or SystemScanner._default_downloads_path()
+        ).resolve()
 
     @staticmethod
     def _require_send2trash() -> Any:
@@ -191,7 +194,8 @@ class FileManager:
                 continue
 
             if (
-                not resolved_path.is_relative_to(allowed_root)
+                not allowed_root.is_dir()
+                or not resolved_path.is_relative_to(allowed_root)
                 or not resolved_path.is_file()
             ):
                 errors.append(f"{path}: not an allowed Downloads file.")

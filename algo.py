@@ -1,10 +1,11 @@
 import gc
 import platform
+import threading
 import time
 from datetime import datetime
 
 from maintenance.models import DashboardSnapshot, FileCandidate, ProcessCandidate
-from maintenance.scanner import SystemScanner
+from maintenance.scanner import ProgressCallback, SystemScanner
 
 try:
     import psutil
@@ -266,14 +267,33 @@ class Analyzer:
         """Return the system report and controlled RAM test together."""
         return f"{self.full_report()}\n\n{self.test_memory()}"
 
-    def dashboard_snapshot(self) -> DashboardSnapshot:
+    def dashboard_snapshot(
+        self,
+        cancel_event: threading.Event | None = None,
+    ) -> DashboardSnapshot:
         """Return structured data for the interactive dashboard."""
-        return self.scanner.scan_dashboard()
+        if cancel_event is None:
+            return self.scanner.scan_dashboard()
+        return self.scanner.scan_dashboard(cancel_event=cancel_event)
 
-    def process_candidates(self) -> list[ProcessCandidate]:
+    def process_candidates(
+        self,
+        cancel_event: threading.Event | None = None,
+    ) -> list[ProcessCandidate]:
         """Return reviewable processes for the CPU and memory views."""
-        return self.scanner.scan_processes()
+        if cancel_event is None:
+            return self.scanner.scan_processes()
+        return self.scanner.scan_processes(cancel_event=cancel_event)
 
-    def storage_candidates(self) -> list[FileCandidate]:
+    def storage_candidates(
+        self,
+        progress_callback: ProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> list[FileCandidate]:
         """Return large and duplicate files discovered in Downloads."""
-        return self.scanner.scan_downloads()
+        if progress_callback is None and cancel_event is None:
+            return self.scanner.scan_downloads()
+        return self.scanner.scan_downloads(
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )

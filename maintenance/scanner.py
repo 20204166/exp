@@ -1,13 +1,17 @@
+import ctypes
 import getpass
 import hashlib
 import json
 import os
 import platform
 import subprocess
+import threading
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from maintenance.models import (
     DashboardSnapshot,
@@ -27,6 +31,38 @@ except ImportError:
     pynvml = None
 
 
+class ScanCancelled(Exception):
+    """Raised when a cancellable Downloads scan is stopped by the user."""
+
+
+class _WindowsGuid(ctypes.Structure):
+    _fields_ = [
+        ("data1", ctypes.c_ulong),
+        ("data2", ctypes.c_ushort),
+        ("data3", ctypes.c_ushort),
+        ("data4", ctypes.c_ubyte * 8),
+    ]
+
+
+class _RecycleBinInfo(ctypes.Structure):
+    _fields_ = [
+        ("cb_size", ctypes.c_ulong),
+        ("size", ctypes.c_longlong),
+        ("item_count", ctypes.c_longlong),
+    ]
+
+
+_WINDOWS_DOWNLOADS_GUID = _WindowsGuid(
+    0x374DE290,
+    0x123F,
+    0x4565,
+    (ctypes.c_ubyte * 8)(0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B),
+)
+
+ProgressCallback = Callable[[str], None]
+HashFingerprint = tuple[int, int, int, int, int]
+
+
 class SystemScanner:
     """Read system state and discover reviewable cleanup candidates."""
 
@@ -34,6 +70,7 @@ class SystemScanner:
     LARGE_FILE_BYTES: int = 100 * 1024**2
     DUPLICATE_MIN_BYTES: int = 1024**2
     HASH_CHUNK_BYTES: int = 1024**2
+    HASH_CACHE_MAX_ENTRIES: int = 1024
     PROCESS_MIN_BYTES: int = 10 * 1024**2
 
     PROTECTED_PROCESS_NAMES: set[str] = {
@@ -63,6 +100,13 @@ class SystemScanner:
 
     def __init__(self, downloads_path: Path | None = None) -> None:
         self.downloads_path = downloads_path or self._default_downloads_path()
+        self._hash_cache: OrderedDict[Path, tuple[HashFingerprint, bytes, str]] = (
+            OrderedDict()
+        )
+        self._hash_cache_lock = threading.Lock()
+        self._downloads_scan_lock = threading.Lock()
+        self._static_gpu_details: tuple[str, ...] | None = None
+        self._static_gpu_lock = threading.Lock()
 
     @staticmethod
     def _require_psutil() -> None:
@@ -80,10 +124,15 @@ class SystemScanner:
             value /= 1024
         return f"{value:.2f} TiB"
 
-    def scan_dashboard(self) -> DashboardSnapshot:
+    def scan_dashboard(
+        self,
+        cancel_event: threading.Event | None = None,
+    ) -> DashboardSnapshot:
         self._require_psutil()
+        self._check_cancelled(cancel_event)
 
         cpu_percent = psutil.cpu_percent(interval=0.2)
+        self._check_cancelled(cancel_event)
         frequency = psutil.cpu_freq()
         memory = psutil.virtual_memory()
         swap = psutil.swap_memory()
@@ -91,6 +140,9 @@ class SystemScanner:
         network = psutil.net_io_counters()
         battery = psutil.sensors_battery()
         gpu_details = self.gpu_details()
+        self._check_cancelled(cancel_event)
+        trash_bytes = self.trash_size()
+        self._check_cancelled(cancel_event)
 
         cpu_frequency = f"{frequency.current:.0f} MHz" if frequency else "Unavailable"
         battery_value = (
@@ -98,7 +150,7 @@ class SystemScanner:
         )
         battery_subtitle = "No battery information"
         battery_percent: float | None = None
-        battery_details = ("Battery information is unavailable.",)
+        battery_details: tuple[str, ...] = ("Battery information is unavailable.",)
 
         if battery is not None:
             battery_percent = battery.percent
@@ -149,7 +201,7 @@ class SystemScanner:
                     f"Used: {self.format_bytes(disk.used)}",
                     f"Free: {self.format_bytes(disk.free)}",
                     f"Downloads: {self.downloads_path}",
-                    f"Trash size: {self.format_bytes(self.trash_size())}",
+                    f"Trash size: {self.format_bytes(trash_bytes)}",
                 ),
                 actionable=True,
             ),
@@ -185,34 +237,81 @@ class SystemScanner:
         system_label = (
             f"{platform.system()} {platform.release()} • {platform.machine()}"
         )
+        self._check_cancelled(cancel_event)
         return DashboardSnapshot(
             system_label=system_label,
             scanned_at=datetime.now(),
             resources=resources,
         )
 
-    def scan_processes(self) -> list[ProcessCandidate]:
+    def scan_processes(
+        self,
+        cancel_event: threading.Event | None = None,
+    ) -> list[ProcessCandidate]:
+        self._check_cancelled(cancel_event)
         self._require_psutil()
         current_user = getpass.getuser()
         protected_pids = self._protected_pids()
-        processes = list(psutil.process_iter())
+        processes = list(self._process_iter(attrs=["pid", "create_time"]))
+        process_creation_times: dict[int, float] = {}
+        for process in processes:
+            self._check_cancelled(cancel_event)
+            try:
+                create_time = process.info.get("create_time")
+                if isinstance(create_time, (int, float)):
+                    process_creation_times[process.pid] = float(create_time)
+            except (AttributeError, KeyError, TypeError):
+                continue
 
         for process in processes:
+            self._check_cancelled(cancel_event)
             try:
                 process.cpu_percent(None)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
 
-        time.sleep(0.25)
+        if cancel_event is not None:
+            if cancel_event.wait(0.25):
+                raise ScanCancelled("Process scan cancelled")
+        else:
+            time.sleep(0.25)
+
         candidates: list[ProcessCandidate] = []
 
         for process in processes:
+            self._check_cancelled(cancel_event)
             try:
-                info = process.as_dict(attrs=["pid", "name", "username", "memory_info"])
+                info = process.as_dict(
+                    attrs=[
+                        "pid",
+                        "name",
+                        "username",
+                        "memory_info",
+                        "memory_percent",
+                        "create_time",
+                    ]
+                )
                 cpu_percent = process.cpu_percent(None)
-                memory_bytes = info["memory_info"].rss
-                memory_percent = process.memory_percent()
-            except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+                memory_info = info["memory_info"]
+                memory_bytes = memory_info.rss
+                memory_percent = info["memory_percent"]
+                expected_create_time = process_creation_times.get(info["pid"])
+                current_create_time = info.get("create_time")
+                if expected_create_time is None or not isinstance(
+                    current_create_time,
+                    (int, float),
+                ):
+                    continue
+                if float(current_create_time) != expected_create_time:
+                    continue
+                self._check_cancelled(cancel_event)
+            except (
+                psutil.NoSuchProcess,
+                psutil.AccessDenied,
+                AttributeError,
+                KeyError,
+                TypeError,
+            ):
                 continue
 
             if memory_bytes < self.PROCESS_MIN_BYTES and cpu_percent < 1:
@@ -243,37 +342,140 @@ class SystemScanner:
 
         return candidates
 
-    def scan_downloads(self) -> list[FileCandidate]:
+    @staticmethod
+    def _process_iter(*, attrs: list[str]) -> Any:
+        try:
+            return psutil.process_iter(attrs=attrs)
+        except TypeError:
+            return psutil.process_iter()
+
+    def scan_downloads(
+        self,
+        progress_callback: ProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> list[FileCandidate]:
+        while not self._downloads_scan_lock.acquire(timeout=0.1):
+            self._check_cancelled(cancel_event)
+        try:
+            return self._scan_downloads(
+                progress_callback=progress_callback,
+                cancel_event=cancel_event,
+            )
+        finally:
+            self._downloads_scan_lock.release()
+
+    def _scan_downloads(
+        self,
+        progress_callback: ProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> list[FileCandidate]:
+        self._check_cancelled(cancel_event)
         root = self.downloads_path.expanduser()
         if not root.exists():
+            self._prune_hash_cache({}, cancel_event=cancel_event)
             return []
 
-        file_stats = self._download_file_stats(root)
-        reasons = self._download_reasons(file_stats)
+        if progress_callback is None and cancel_event is None:
+            file_stats = self._download_file_stats(root)
+        else:
+            try:
+                file_stats = self._download_file_stats(
+                    root,
+                    progress_callback=progress_callback,
+                    cancel_event=cancel_event,
+                )
+            except TypeError as error:
+                if "unexpected keyword argument" not in str(error):
+                    raise
+                self._check_cancelled(cancel_event)
+                file_stats = self._download_file_stats(root)
+        self._prune_hash_cache(file_stats, cancel_event=cancel_event)
+        if progress_callback is None and cancel_event is None:
+            reasons = self._download_reasons(file_stats)
+        else:
+            try:
+                reasons = self._download_reasons(
+                    file_stats,
+                    progress_callback=progress_callback,
+                    cancel_event=cancel_event,
+                )
+            except TypeError as error:
+                if "unexpected keyword argument" not in str(error):
+                    raise
+                self._check_cancelled(cancel_event)
+                reasons = self._download_reasons(file_stats)
 
-        candidates = [
-            self._download_candidate(path, file_stats[path], path_reasons)
-            for path, path_reasons in reasons.items()
-        ]
-        return sorted(candidates, key=lambda item: item.size_bytes, reverse=True)
+        candidates: list[FileCandidate] = []
+        for path, path_reasons in reasons.items():
+            self._check_cancelled(cancel_event)
+            candidates.append(
+                self._download_candidate(path, file_stats[path], path_reasons)
+            )
+        self._check_cancelled(cancel_event)
+        if progress_callback is not None:
+            progress_callback(f"Scan complete: {len(candidates)} candidate(s)")
+        return sorted(
+            candidates,
+            key=lambda item: (
+                -item.size_bytes,
+                str(item.path).casefold(),
+                str(item.path),
+            ),
+        )
 
     def _download_file_stats(
         self,
         root: Path,
+        progress_callback: ProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> dict[Path, os.stat_result]:
         file_stats: dict[Path, os.stat_result] = {}
+        pending_directories = [root]
+        last_reported_file_count = 0
 
-        try:
-            for path in root.rglob("*"):
-                if not self._is_download_file(path, root):
-                    continue
+        while pending_directories:
+            self._check_cancelled(cancel_event)
+            directory = pending_directories.pop()
+            try:
+                entries = os.scandir(directory)
+            except OSError:
+                continue
 
-                try:
-                    file_stats[path] = path.stat()
-                except (OSError, ValueError):
-                    continue
-        except OSError:
-            return file_stats
+            try:
+                for entry in entries:
+                    self._check_cancelled(cancel_event)
+                    path = Path(entry.path)
+                    try:
+                        if entry.name.startswith("."):
+                            continue
+
+                        if entry.is_dir(follow_symlinks=False):
+                            pending_directories.append(path)
+                            continue
+
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+
+                        file_stats[path] = path.stat()
+                    except (OSError, ValueError):
+                        continue
+            except OSError:
+                pass
+            finally:
+                entries.close()
+
+            if progress_callback is not None and (
+                len(file_stats) == 1
+                or len(file_stats) - last_reported_file_count >= 100
+            ):
+                progress_callback(f"Found {len(file_stats)} file(s) in Downloads")
+                last_reported_file_count = len(file_stats)
+
+        if (
+            progress_callback is not None
+            and len(file_stats) != last_reported_file_count
+        ):
+            progress_callback(f"Found {len(file_stats)} file(s) in Downloads")
 
         return file_stats
 
@@ -292,18 +494,31 @@ class SystemScanner:
     def _download_reasons(
         self,
         file_stats: dict[Path, os.stat_result],
+        progress_callback: ProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> dict[Path, list[str]]:
         reasons: dict[Path, list[str]] = defaultdict(list)
-        self._mark_large_downloads(file_stats, reasons)
-        self._mark_duplicate_downloads(file_stats, reasons)
+        self._mark_large_downloads(
+            file_stats,
+            reasons,
+            cancel_event=cancel_event,
+        )
+        self._mark_duplicate_downloads(
+            file_stats,
+            reasons,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
         return reasons
 
     def _mark_large_downloads(
         self,
         file_stats: dict[Path, os.stat_result],
         reasons: dict[Path, list[str]],
+        cancel_event: threading.Event | None = None,
     ) -> None:
         for path, stat in file_stats.items():
+            self._check_cancelled(cancel_event)
             if stat.st_size >= self.LARGE_FILE_BYTES:
                 reasons[path].append("Large file")
 
@@ -311,22 +526,52 @@ class SystemScanner:
         self,
         file_stats: dict[Path, os.stat_result],
         reasons: dict[Path, list[str]],
+        progress_callback: ProgressCallback | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> None:
         files_by_size: dict[int, list[Path]] = defaultdict(list)
         for path, stat in file_stats.items():
+            self._check_cancelled(cancel_event)
             if stat.st_size >= self.DUPLICATE_MIN_BYTES:
                 files_by_size[stat.st_size].append(path)
 
+        hash_paths = [
+            path
+            for same_size_paths in files_by_size.values()
+            if len(same_size_paths) >= 2
+            for path in same_size_paths
+        ]
+        hash_total = len(hash_paths)
+        hashed_count = 0
+
         for same_size_paths in files_by_size.values():
+            self._check_cancelled(cancel_event)
             if len(same_size_paths) < 2:
                 continue
 
             files_by_hash: dict[str, list[Path]] = defaultdict(list)
             for path in same_size_paths:
+                self._check_cancelled(cancel_event)
                 try:
-                    files_by_hash[self._file_hash(path)].append(path)
+                    files_by_hash[
+                        self._cached_file_hash(
+                            path,
+                            file_stats[path],
+                            cancel_event=cancel_event,
+                        )
+                    ].append(path)
                 except OSError:
                     continue
+                finally:
+                    hashed_count += 1
+                    if progress_callback is not None and (
+                        hashed_count == 1
+                        or hashed_count == hash_total
+                        or hashed_count % 16 == 0
+                    ):
+                        progress_callback(
+                            f"Checking duplicates: {hashed_count}/{hash_total}"
+                        )
 
             for digest, duplicate_paths in files_by_hash.items():
                 if len(duplicate_paths) < 2:
@@ -334,7 +579,7 @@ class SystemScanner:
 
                 ordered_paths = sorted(
                     duplicate_paths,
-                    key=lambda item: str(item).casefold(),
+                    key=lambda item: (str(item).casefold(), str(item)),
                 )
                 for duplicate_path in ordered_paths[1:]:
                     reasons[duplicate_path].append(f"Duplicate file ({digest[:8]})")
@@ -353,17 +598,67 @@ class SystemScanner:
         )
 
     def trash_size(self) -> int:
+        if platform.system() == "Windows":
+            return self._windows_trash_size()
+
         total = 0
         for trash in self._trash_paths():
             if not trash.exists():
                 continue
-            for path in trash.rglob("*"):
-                try:
-                    if path.is_file() and not path.is_symlink():
-                        total += path.stat().st_size
-                except OSError:
-                    continue
+            total += self._directory_file_size(trash)
         return total
+
+    @staticmethod
+    def _directory_file_size(root: Path) -> int:
+        total = 0
+        pending_directories = [root]
+
+        while pending_directories:
+            directory = pending_directories.pop()
+            try:
+                entries = os.scandir(directory)
+            except OSError:
+                continue
+
+            try:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            pending_directories.append(Path(entry.path))
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+            except OSError:
+                pass
+            finally:
+                entries.close()
+
+        return total
+
+    @staticmethod
+    def _windows_trash_size() -> int:
+        try:
+            shell32 = ctypes.windll.shell32
+            query_recycle_bin = shell32.SHQueryRecycleBinW
+        except (AttributeError, OSError, ctypes.ArgumentError):
+            return 0
+
+        info = _RecycleBinInfo()
+        info.cb_size = ctypes.sizeof(info)
+        try:
+            query_recycle_bin.argtypes = [
+                ctypes.c_wchar_p,
+                ctypes.POINTER(_RecycleBinInfo),
+            ]
+            query_recycle_bin.restype = ctypes.c_long
+            result = query_recycle_bin(None, ctypes.byref(info))
+        except (OSError, TypeError, AttributeError, ctypes.ArgumentError):
+            return 0
+
+        if result != 0 or info.size < 0:
+            return 0
+        return int(info.size)
 
     def _protected_pids(self) -> set[int]:
         protected = {0, 1, os.getpid()}
@@ -378,27 +673,150 @@ class SystemScanner:
         return protected
 
     @classmethod
-    def _file_hash(cls, path: Path) -> str:
+    def _file_hash(
+        cls,
+        path: Path,
+        cancel_event: threading.Event | None = None,
+    ) -> str:
         digest = hashlib.sha256()
         with path.open("rb") as file:
             while chunk := file.read(cls.HASH_CHUNK_BYTES):
+                cls._check_cancelled(cancel_event)
                 digest.update(chunk)
         return digest.hexdigest()
 
+    @staticmethod
+    def _check_cancelled(cancel_event: threading.Event | None) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ScanCancelled("Downloads scan cancelled")
+
+    @staticmethod
+    def _hash_fingerprint(stat: os.stat_result) -> HashFingerprint:
+        return (
+            stat.st_size,
+            stat.st_mtime_ns,
+            getattr(stat, "st_ctime_ns", 0),
+            getattr(stat, "st_dev", 0),
+            getattr(stat, "st_ino", 0),
+        )
+
+    def _file_content_marker(
+        self,
+        path: Path,
+        cancel_event: threading.Event | None = None,
+    ) -> bytes:
+        """Validate the complete file content before reusing a digest."""
+        self._check_cancelled(cancel_event)
+        marker = hashlib.blake2b(digest_size=16)
+        with path.open("rb") as file:
+            while chunk := file.read(self.HASH_CHUNK_BYTES):
+                self._check_cancelled(cancel_event)
+                marker.update(chunk)
+        self._check_cancelled(cancel_event)
+        return marker.digest()
+
+    def _prune_hash_cache(
+        self,
+        file_stats: dict[Path, os.stat_result],
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        current_fingerprints: dict[Path, HashFingerprint] = {}
+        for path, stat in file_stats.items():
+            self._check_cancelled(cancel_event)
+            current_fingerprints[path] = self._hash_fingerprint(stat)
+        with self._hash_cache_lock:
+            self._hash_cache = OrderedDict(
+                (
+                    path,
+                    cached,
+                )
+                for path, cached in self._hash_cache.items()
+                if path in current_fingerprints
+                and cached[0] == current_fingerprints[path]
+            )
+            while len(self._hash_cache) > self.HASH_CACHE_MAX_ENTRIES:
+                self._hash_cache.popitem(last=False)
+
+    def _cached_file_hash(
+        self,
+        path: Path,
+        stat: os.stat_result,
+        cancel_event: threading.Event | None = None,
+    ) -> str:
+        for _attempt in range(2):
+            self._check_cancelled(cancel_event)
+            fingerprint = self._hash_fingerprint(stat)
+            marker = self._file_content_marker(path, cancel_event)
+            with self._hash_cache_lock:
+                cached = self._hash_cache.get(path)
+
+            if cached is not None and cached[0] == fingerprint and cached[1] == marker:
+                current_stat = path.stat()
+                current_marker = self._file_content_marker(path, cancel_event)
+                if (
+                    self._hash_fingerprint(current_stat) == fingerprint
+                    and current_marker == marker
+                ):
+                    with self._hash_cache_lock:
+                        self._hash_cache.move_to_end(path)
+                    return cached[2]
+                stat = current_stat
+                continue
+
+            if cancel_event is None:
+                digest = self._file_hash(path)
+            else:
+                try:
+                    digest = self._file_hash(path, cancel_event)
+                except TypeError as error:
+                    if "positional argument" not in str(error):
+                        raise
+                    digest = self._file_hash(path)
+                    self._check_cancelled(cancel_event)
+            current_stat = path.stat()
+            current_marker = self._file_content_marker(path, cancel_event)
+            if (
+                self._hash_fingerprint(current_stat) == fingerprint
+                and current_marker == marker
+            ):
+                with self._hash_cache_lock:
+                    self._hash_cache[path] = (fingerprint, current_marker, digest)
+                    self._hash_cache.move_to_end(path)
+                    while len(self._hash_cache) > self.HASH_CACHE_MAX_ENTRIES:
+                        self._hash_cache.popitem(last=False)
+                return digest
+            stat = current_stat
+
+        raise OSError(f"File changed while hashing: {path}")
+
     def gpu_details(self) -> tuple[str, ...]:
         """Return platform-appropriate GPU details."""
-        if platform.system() == "Darwin":
-            return self._mac_gpu_details()
+        system = platform.system()
+        if system == "Darwin":
+            return self._cached_static_gpu_details(self._mac_gpu_details)
 
         nvidia_details = self._nvidia_gpu_details()
         if nvidia_details:
             return nvidia_details
 
-        if platform.system() == "Windows":
-            return self._windows_gpu_details()
-        if platform.system() == "Linux":
-            return self._linux_gpu_details()
+        if system == "Windows":
+            return self._cached_static_gpu_details(self._windows_gpu_details)
+        if system == "Linux":
+            return self._cached_static_gpu_details(self._linux_gpu_details)
         return ("GPU information unavailable",)
+
+    def _cached_static_gpu_details(
+        self,
+        loader: Callable[[], tuple[str, ...]],
+    ) -> tuple[str, ...]:
+        with self._static_gpu_lock:
+            if self._static_gpu_details is not None:
+                return self._static_gpu_details
+
+            details = loader()
+            if details and not details[0].startswith("GPU information unavailable"):
+                self._static_gpu_details = details
+            return details
 
     def _nvidia_gpu_details(self) -> tuple[str, ...] | None:
         if pynvml is None:
@@ -512,13 +930,100 @@ class SystemScanner:
     @staticmethod
     def _default_downloads_path() -> Path:
         if platform.system() == "Windows":
+            known_folder = SystemScanner._windows_downloads_path()
+            if known_folder is not None and SystemScanner._is_directory(known_folder):
+                return known_folder
+
             home = Path(os.environ.get("USERPROFILE", Path.home()))
             one_drive = os.environ.get("OneDrive")
             one_drive_downloads = Path(one_drive) / "Downloads" if one_drive else None
-            if one_drive_downloads and one_drive_downloads.exists():
+            if one_drive_downloads and SystemScanner._is_directory(one_drive_downloads):
                 return one_drive_downloads
-            return home / "Downloads"
-        return Path.home() / "Downloads"
+            return SystemScanner._safe_downloads_fallback(home)
+        return SystemScanner._safe_downloads_fallback(Path.home())
+
+    @staticmethod
+    def _is_directory(path: Path) -> bool:
+        try:
+            return path.is_dir()
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
+    def _safe_downloads_fallback(home: Path) -> Path:
+        candidate = home / "Downloads"
+        if SystemScanner._path_exists(candidate) and not SystemScanner._is_directory(
+            candidate
+        ):
+            sentinel = home / "Downloads.__unavailable__"
+            suffix = 0
+            while SystemScanner._path_exists(sentinel):
+                suffix += 1
+                sentinel = home / f"Downloads.__unavailable__.{suffix}"
+            return sentinel
+        return candidate
+
+    @staticmethod
+    def _path_exists(path: Path) -> bool:
+        try:
+            return path.exists()
+        except (OSError, ValueError):
+            return True
+
+    @staticmethod
+    def _windows_downloads_path() -> Path | None:
+        try:
+            shell32 = ctypes.windll.shell32
+            ole32 = ctypes.windll.ole32
+            get_known_folder_path = shell32.SHGetKnownFolderPath
+            co_initialize = ole32.CoInitializeEx
+            co_uninitialize = ole32.CoUninitialize
+            free_memory = ole32.CoTaskMemFree
+        except (AttributeError, OSError, ctypes.ArgumentError):
+            return None
+
+        path_pointer = ctypes.c_wchar_p()
+        initialization_result: int | None = None
+        try:
+            co_initialize.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            co_initialize.restype = ctypes.c_long
+            initialization_result = co_initialize(None, 0x2)
+            if initialization_result not in (0, 1):
+                return None
+            co_uninitialize.argtypes = []
+            co_uninitialize.restype = None
+            free_memory.argtypes = [ctypes.c_void_p]
+            free_memory.restype = None
+            get_known_folder_path.argtypes = [
+                ctypes.POINTER(_WindowsGuid),
+                ctypes.c_uint32,
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_wchar_p),
+            ]
+            get_known_folder_path.restype = ctypes.c_long
+            result = get_known_folder_path(
+                ctypes.byref(_WINDOWS_DOWNLOADS_GUID),
+                0,
+                None,
+                ctypes.byref(path_pointer),
+            )
+            if result != 0 or not path_pointer.value:
+                return None
+            return Path(path_pointer.value)
+        except (OSError, TypeError, AttributeError, ctypes.ArgumentError):
+            return None
+        finally:
+            pointer_address = ctypes.cast(path_pointer, ctypes.c_void_p).value
+            if pointer_address:
+                try:
+                    free_memory(ctypes.c_void_p(pointer_address))
+                except (OSError, TypeError, AttributeError, ctypes.ArgumentError):
+                    pass
+            if initialization_result in (0, 1):
+                try:
+                    co_uninitialize()
+                except (OSError, TypeError, AttributeError, ctypes.ArgumentError):
+                    pass
 
     @staticmethod
     def _trash_paths() -> tuple[Path, ...]:

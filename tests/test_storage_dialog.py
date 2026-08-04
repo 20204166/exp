@@ -1,11 +1,12 @@
 from collections.abc import Callable
 import unittest
 from datetime import datetime
+import threading
 from typing import Any
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from maintenance.dialogs import StorageDialog
+from maintenance.dialogs import StorageDialog, run_in_thread
 from maintenance.models import FileCandidate
 
 
@@ -30,6 +31,14 @@ class FakeControl:
         del options
 
 
+class FailingAfterWidget:
+    def winfo_exists(self) -> bool:
+        return True
+
+    def after(self, _delay: int, _callback: object, *_args: object) -> None:
+        raise RuntimeError("event loop is stopping")
+
+
 class FakeManager:
     def __init__(self) -> None:
         self.paths: list[Path] = []
@@ -39,6 +48,19 @@ class FakeManager:
 
 
 class StorageDialogTests(unittest.TestCase):
+    def test_worker_delivery_ignores_runtime_error_during_tk_teardown(self) -> None:
+        task_finished = threading.Event()
+        success = Mock()
+
+        def task() -> None:
+            task_finished.set()
+
+        widget: Any = FailingAfterWidget()
+        run_in_thread(widget, task, success)
+
+        self.assertTrue(task_finished.wait(1))
+        success.assert_not_called()
+
     def test_resize_columns_gives_remaining_width_to_file_path(self) -> None:
         dialog: Any = object.__new__(StorageDialog)
         dialog.tree = FakeTree()

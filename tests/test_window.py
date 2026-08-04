@@ -47,6 +47,10 @@ class AppWindowTests(unittest.TestCase):
         window._pending_after_ids = set()
         window._background_poll_id = None
         window._background_tasks = 0
+        window._analysis_active = False
+        window._analysis_generation = 0
+        window._analysis_requested = False
+        window._analysis_cancel_event = None
         window._background_queue = Queue()
         return window
 
@@ -156,6 +160,31 @@ class AppWindowTests(unittest.TestCase):
 
         self.assertIsNone(window.auto_scan_id)
         window.handle_analyze.assert_called_once_with()
+
+    def test_dashboard_scan_does_not_overlap_when_requested_twice(self) -> None:
+        window = self.make_window()
+        window.analyzer = Mock()
+        window._run_in_background = Mock()
+
+        window.handle_analyze()
+        window.handle_analyze()
+
+        window._run_in_background.assert_called_once()
+        window.analyzer.dashboard_snapshot.assert_not_called()
+
+    def test_dashboard_request_during_scan_is_replayed_after_completion(self) -> None:
+        window = self.make_window()
+        window.analyzer = Mock()
+        window._run_in_background = Mock()
+        window._show_snapshot = Mock()
+        window._schedule_timer = Mock()
+
+        window.handle_analyze()
+        window.handle_analyze()
+        window._show_snapshot_for_generation(1, Mock())
+
+        window._show_snapshot.assert_called_once()
+        window._schedule_timer.assert_called_once_with(0, window.handle_analyze)
 
 
 if __name__ == "__main__":
