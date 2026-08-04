@@ -1,20 +1,18 @@
-"""Unwired extraction draft for future maintenance components.
+"""Shared maintenance components used by the scanner, dialogs, and window.
 
-These helpers are extracted seams. Some are still intentionally unwired.
-They document the intended seams so the next wiring step can stay small.
+These helpers are extracted seams kept in one place so wiring stays small.
 Current source references:
-- `DownloadsPathResolver` from `maintenance/scanner.py:101-109, 931-943`.
-- `DownloadScanner` from `maintenance/scanner.py:352-585, 703-790`.
-- `GpuDetector` from `maintenance/scanner.py:792-837`.
-- `BackgroundTaskRunner` from `maintenance/dialogs.py:21-74, 527-726`.
-- `ScanCoordinator` from `window.py:394-451`.
+- `DownloadsPathResolver` in `maintenance/scanner.py`.
+- `DownloadScanner` in `maintenance/scanner.py`.
+- `GpuDetector` in `maintenance/scanner.py`.
+- `BackgroundTaskRunner` in `maintenance/dialogs.py`.
+- `ScanCoordinator` in `window.py`.
 """
 
 from __future__ import annotations
 
 import ctypes
 import hashlib
-from datetime import datetime
 import os
 import platform
 import threading
@@ -22,10 +20,10 @@ import tkinter as tk
 from collections import OrderedDict, defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any
-
 from tkinter import messagebox
+from typing import Any
 
 from maintenance.models import FileCandidate
 
@@ -58,11 +56,7 @@ _WINDOWS_DOWNLOADS_GUID = _WindowsGuid(
 class DownloadsPathResolver:
     """Resolve the Downloads root.
 
-    Extracted from `maintenance/scanner.py:101-109` and
-    `maintenance/scanner.py:931-943`.
-
-    This stays intentionally independent so the resolver can be tested before
-    the scanner wiring step.
+    Extracted from the Downloads-root resolution code in `maintenance/scanner.py`.
     """
 
     def __init__(
@@ -74,7 +68,7 @@ class DownloadsPathResolver:
     ) -> None:
         self._system = system
         self._home = home
-        self._environment = dict(environment or os.environ)
+        self._environment = environment or os.environ
 
     def select(self, downloads_path: Path | None = None) -> Path:
         """Return the explicit Downloads path or the platform default."""
@@ -573,11 +567,7 @@ class GpuDetector:
     """Select the correct GPU detail loader for the active platform.
 
     Extracted from the platform-dispatch path in
-    `maintenance/scanner.py:792-837`.
-
-    Intended to sit behind `SystemScanner.gpu_details()` once wiring is
-    approved. Keeping the platform decision and fallback order here makes the
-    scanner easier to split later without changing the public API today.
+    `maintenance/scanner.py:792-837` and now used by `SystemScanner.gpu_details()`.
     """
 
     def __init__(

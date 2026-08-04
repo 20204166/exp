@@ -13,14 +13,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from maintenance.components import (
+    DownloadScanner as ComponentDownloadScanner,
+)
+from maintenance.components import (
+    DownloadsPathResolver,
+    GpuDetector,
+    ScanCancelled,
+)
 from maintenance.models import (
     DashboardSnapshot,
     FileCandidate,
     ProcessCandidate,
     ResourceSummary,
-)
-from maintenance.components import (
-    DownloadScanner as ComponentDownloadScanner,
 )
 
 try:
@@ -32,10 +37,6 @@ try:
     import pynvml
 except ImportError:
     pynvml = None
-
-
-class ScanCancelled(Exception):
-    """Raised when a cancellable Downloads scan is stopped by the user."""
 
 
 class _WindowsGuid(ctypes.Structure):
@@ -124,6 +125,15 @@ class SystemScanner:
         scanner._file_content_marker = self._download_file_content_marker
         return scanner
 
+    @classmethod
+    def _make_downloads_path_resolver(cls) -> DownloadsPathResolver:
+        resolver = DownloadsPathResolver()
+        resolver._windows_downloads_path = cls._windows_downloads_path  # type: ignore[attr-defined]
+        resolver._is_directory = cls._is_directory  # type: ignore[attr-defined]
+        resolver._path_exists = cls._path_exists  # type: ignore[attr-defined]
+        resolver._safe_downloads_fallback = cls._safe_downloads_fallback  # type: ignore[attr-defined]
+        return resolver
+
     def _download_file_hash(
         self,
         path: Path,
@@ -160,7 +170,7 @@ class SystemScanner:
             )
 
     @classmethod
-    def format_bytes(cls, number_of_bytes: int | float) -> str:
+    def format_bytes(cls, number_of_bytes: float) -> str:
         value = float(number_of_bytes)
         for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
             if abs(value) < 1024 or unit == "TiB":
@@ -617,19 +627,20 @@ class SystemScanner:
 
     def gpu_details(self) -> tuple[str, ...]:
         """Return platform-appropriate GPU details."""
-        system = platform.system()
-        if system == "Darwin":
-            return self._cached_static_gpu_details(self._mac_gpu_details)
+        return self._make_gpu_detector().detect()
 
-        nvidia_details = self._nvidia_gpu_details()
-        if nvidia_details:
-            return nvidia_details
-
-        if system == "Windows":
-            return self._cached_static_gpu_details(self._windows_gpu_details)
-        if system == "Linux":
-            return self._cached_static_gpu_details(self._linux_gpu_details)
-        return ("GPU information unavailable",)
+    def _make_gpu_detector(self) -> GpuDetector:
+        return GpuDetector(
+            system=platform.system,
+            nvidia_loader=self._nvidia_gpu_details,
+            mac_loader=lambda: self._cached_static_gpu_details(self._mac_gpu_details),
+            windows_loader=lambda: self._cached_static_gpu_details(
+                self._windows_gpu_details
+            ),
+            linux_loader=lambda: self._cached_static_gpu_details(
+                self._linux_gpu_details
+            ),
+        )
 
     def _cached_static_gpu_details(
         self,
@@ -753,103 +764,25 @@ class SystemScanner:
         ]
         return tuple(gpu_lines) or ("GPU information unavailable",)
 
-    @staticmethod
-    def _default_downloads_path() -> Path:
-        if platform.system() == "Windows":
-            known_folder = SystemScanner._windows_downloads_path()
-            if known_folder is not None and SystemScanner._is_directory(known_folder):
-                return known_folder
-
-            home = Path(os.environ.get("USERPROFILE", Path.home()))
-            one_drive = os.environ.get("OneDrive")
-            one_drive_downloads = Path(one_drive) / "Downloads" if one_drive else None
-            if one_drive_downloads and SystemScanner._is_directory(one_drive_downloads):
-                return one_drive_downloads
-            return SystemScanner._safe_downloads_fallback(home)
-        return SystemScanner._safe_downloads_fallback(Path.home())
+    @classmethod
+    def _default_downloads_path(cls) -> Path:
+        return cls._make_downloads_path_resolver().select()
 
     @staticmethod
     def _is_directory(path: Path) -> bool:
-        try:
-            return path.is_dir()
-        except (OSError, ValueError):
-            return False
+        return DownloadsPathResolver._is_directory(path)
 
     @staticmethod
     def _safe_downloads_fallback(home: Path) -> Path:
-        candidate = home / "Downloads"
-        if SystemScanner._path_exists(candidate) and not SystemScanner._is_directory(
-            candidate
-        ):
-            sentinel = home / "Downloads.__unavailable__"
-            suffix = 0
-            while SystemScanner._path_exists(sentinel):
-                suffix += 1
-                sentinel = home / f"Downloads.__unavailable__.{suffix}"
-            return sentinel
-        return candidate
+        return DownloadsPathResolver._safe_downloads_fallback(home)
 
     @staticmethod
     def _path_exists(path: Path) -> bool:
-        try:
-            return path.exists()
-        except (OSError, ValueError):
-            return True
+        return DownloadsPathResolver._path_exists(path)
 
     @staticmethod
     def _windows_downloads_path() -> Path | None:
-        try:
-            shell32 = ctypes.windll.shell32
-            ole32 = ctypes.windll.ole32
-            get_known_folder_path = shell32.SHGetKnownFolderPath
-            co_initialize = ole32.CoInitializeEx
-            co_uninitialize = ole32.CoUninitialize
-            free_memory = ole32.CoTaskMemFree
-        except (AttributeError, OSError, ctypes.ArgumentError):
-            return None
-
-        path_pointer = ctypes.c_wchar_p()
-        initialization_result: int | None = None
-        try:
-            co_initialize.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-            co_initialize.restype = ctypes.c_long
-            initialization_result = co_initialize(None, 0x2)
-            if initialization_result not in (0, 1):
-                return None
-            co_uninitialize.argtypes = []
-            co_uninitialize.restype = None
-            free_memory.argtypes = [ctypes.c_void_p]
-            free_memory.restype = None
-            get_known_folder_path.argtypes = [
-                ctypes.POINTER(_WindowsGuid),
-                ctypes.c_uint32,
-                ctypes.c_void_p,
-                ctypes.POINTER(ctypes.c_wchar_p),
-            ]
-            get_known_folder_path.restype = ctypes.c_long
-            result = get_known_folder_path(
-                ctypes.byref(_WINDOWS_DOWNLOADS_GUID),
-                0,
-                None,
-                ctypes.byref(path_pointer),
-            )
-            if result != 0 or not path_pointer.value:
-                return None
-            return Path(path_pointer.value)
-        except (OSError, TypeError, AttributeError, ctypes.ArgumentError):
-            return None
-        finally:
-            pointer_address = ctypes.cast(path_pointer, ctypes.c_void_p).value
-            if pointer_address:
-                try:
-                    free_memory(ctypes.c_void_p(pointer_address))
-                except (OSError, TypeError, AttributeError, ctypes.ArgumentError):
-                    pass
-            if initialization_result in (0, 1):
-                try:
-                    co_uninitialize()
-                except (OSError, TypeError, AttributeError, ctypes.ArgumentError):
-                    pass
+        return DownloadsPathResolver._windows_downloads_path()
 
     @staticmethod
     def _trash_paths() -> tuple[Path, ...]:

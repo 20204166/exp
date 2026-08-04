@@ -290,6 +290,28 @@ class ScannerTests(unittest.TestCase):
 
         self.assertEqual(loader.call_count, 2)
 
+    def test_gpu_details_uses_gpu_detector(self) -> None:
+        scanner = SystemScanner(Path("Downloads"))
+
+        with patch(
+            "maintenance.scanner.GpuDetector.detect",
+            return_value=("AMD Radeon",),
+        ) as detect:
+            self.assertEqual(scanner.gpu_details(), ("AMD Radeon",))
+
+        detect.assert_called_once_with()
+
+    def test_default_downloads_path_uses_downloads_path_resolver(self) -> None:
+        sentinel = Path("/tmp/downloads")
+
+        with patch(
+            "maintenance.scanner.DownloadsPathResolver.select",
+            return_value=sentinel,
+        ) as select:
+            self.assertEqual(SystemScanner._default_downloads_path(), sentinel)
+
+        select.assert_called_once_with()
+
     def test_windows_known_folder_is_used_before_environment_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             known_folder = Path(directory)

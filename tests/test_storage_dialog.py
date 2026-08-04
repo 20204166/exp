@@ -1,10 +1,10 @@
-from collections.abc import Callable
-import unittest
-from datetime import datetime
 import threading
-from typing import Any
+import unittest
+from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import Mock, patch
+from typing import Any
+from unittest.mock import ANY, Mock, patch
 
 from maintenance.dialogs import StorageDialog, run_in_thread
 from maintenance.models import FileCandidate
@@ -61,6 +61,23 @@ class StorageDialogTests(unittest.TestCase):
         self.assertTrue(task_finished.wait(1))
         success.assert_not_called()
 
+    def test_run_in_thread_delegates_to_background_task_runner(self) -> None:
+        widget: Any = object()
+        success = Mock()
+
+        with patch("maintenance.dialogs.BackgroundTaskRunner.run") as runner:
+            run_in_thread(widget, lambda: "done", success)
+
+        runner.assert_called_once_with(
+            widget,
+            ANY,
+            success,
+            None,
+            progress_task=None,
+            cancel_event=None,
+            on_progress=None,
+        )
+
     def test_resize_columns_gives_remaining_width_to_file_path(self) -> None:
         dialog: Any = object.__new__(StorageDialog)
         dialog.tree = FakeTree()
@@ -79,8 +96,18 @@ class StorageDialogTests(unittest.TestCase):
         first = Path("first.zip")
         second = Path("second.zip")
         candidates = {
-            "0": FileCandidate(first, 10, datetime.now(), "Large file"),
-            "1": FileCandidate(second, 20, datetime.now(), "Duplicate file"),
+            "0": FileCandidate(
+                first,
+                10,
+                datetime(2024, 1, 1, tzinfo=timezone.utc),
+                "Large file",
+            ),
+            "1": FileCandidate(
+                second,
+                20,
+                datetime(2024, 1, 1, tzinfo=timezone.utc),
+                "Duplicate file",
+            ),
         }
         manager = FakeManager()
         dialog: Any = object.__new__(StorageDialog)

@@ -1,0 +1,11 @@
+# Repo Guide
+- `main.py` is the app entrypoint (`python main.py`); it only creates `window.AppWindow`.
+- `window.py` owns the Tk root, scan timers, and `ScanCoordinator`; GUI tests use fake masters/widgets instead of a live Tk mainloop.
+- `algo.py` is the high-level report and memory-test facade; `maintenance/scanner.py` owns discovery and scan logic.
+- `maintenance/components.py` holds the extracted `DownloadsPathResolver`, `DownloadScanner`, `GpuDetector`, `BackgroundTaskRunner`, and `ScanCoordinator` seams, so scanner logic may be split across both files.
+- `maintenance/actions.py` is the only place that quits processes or moves files to Trash; it rejects protected or foreign-user PIDs and non-Downloads, symlink, or non-file cleanup targets.
+- Install from `requirements.txt` only; there is no `pyproject.toml`, `setup.py`, or `app/` tree. `psutil` is needed for most features, `send2trash` for cleanup, and `nvidia-ml-py` only for NVIDIA GPU details on non-Darwin.
+- Tests are `unittest` modules. Run all with `python -m unittest discover -s tests -v`; run one file with `python -m unittest tests.test_window -v` (swap the module name as needed).
+- If Python code changes, run `ruff check .` and `ruff format --check .` before handing off.
+- `docs/bug_hunts/*` are historical evidence trails, not the source of current behavior.
+- OpenCode-specific config lives in `opencode.json`; agent definitions are under `.opencode/agents/`.
