@@ -36,6 +36,26 @@ class ScannerTests(unittest.TestCase):
             self.assertIn(large, by_path)
             self.assertIn("Large file", by_path[large].reason)
 
+    def test_download_scan_ignores_hidden_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            downloads = Path(directory)
+            visible = downloads / "visible.bin"
+            hidden_dir = downloads / ".hidden"
+            hidden_file = hidden_dir / "secret.bin"
+
+            hidden_dir.mkdir()
+            visible.write_bytes(b"visible contents")
+            hidden_file.write_bytes(b"hidden contents")
+
+            scanner = SystemScanner(downloads)
+            scanner.DUPLICATE_MIN_BYTES = 1
+            scanner.LARGE_FILE_BYTES = 1
+            candidates = scanner.scan_downloads()
+
+            by_path = {candidate.path for candidate in candidates}
+            self.assertIn(visible, by_path)
+            self.assertNotIn(hidden_file, by_path)
+
     def test_snapshot_get_returns_resource_and_rejects_unknown_key(self) -> None:
         resource = ResourceSummary(
             key="cpu",
@@ -145,13 +165,16 @@ class FakePsutil:
 
     def __init__(self, processes: dict[int, FakeProcess]) -> None:
         self.processes = processes
+        self.wait_procs_calls = 0
 
     def Process(self, pid: int) -> FakeProcess:
         return self.processes[pid]
 
-    @staticmethod
-    def wait_procs(processes: list[FakeProcess], timeout: int) -> tuple[list, list]:
+    def wait_procs(
+        self, processes: list[FakeProcess], timeout: int
+    ) -> tuple[list, list]:
         del timeout
+        self.wait_procs_calls += 1
         return processes, []
 
 
@@ -168,6 +191,19 @@ class ProcessManagerTests(unittest.TestCase):
         self.assertTrue(allowed.terminated)
         self.assertEqual(result.stopped, (50001,))
         self.assertTrue(any("protected" in error for error in result.errors))
+
+    def test_empty_quit_request_returns_without_waiting(self) -> None:
+        current = FakeProcess(os.getpid(), "python", getpass.getuser())
+        fake_psutil = FakePsutil({os.getpid(): current})
+
+        with patch("maintenance.actions.psutil", fake_psutil):
+            result = ProcessManager().request_quit([])
+
+        self.assertEqual(result.requested, 0)
+        self.assertEqual(result.stopped, ())
+        self.assertEqual(result.force_required, ())
+        self.assertEqual(result.errors, ())
+        self.assertEqual(fake_psutil.wait_procs_calls, 0)
 
 
 class SourceIntegrationTests(unittest.TestCase):

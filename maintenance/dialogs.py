@@ -481,7 +481,8 @@ class StorageDialog(tk.Toplevel):
             container,
             text=(
                 "Find large files and verified duplicates in Downloads. "
-                "Only selected files are moved to Trash."
+                "Only selected files are moved to Trash. "
+                "Ctrl-click (Cmd-click on macOS) to select multiple files."
             ),
             bg=colors["background"],
             fg=colors["secondary"],
@@ -490,27 +491,51 @@ class StorageDialog(tk.Toplevel):
             justify=tk.LEFT,
         ).pack(anchor=tk.W, pady=(4, 14))
 
-        tree_frame = tk.Frame(container, bg=colors["card"])
-        tree_frame.pack(fill=tk.BOTH, expand=True)
+        self.tree_frame = tk.Frame(container, bg=colors["card"])
+        self.tree_frame.pack(fill=tk.BOTH, expand=True)
         columns = ("path", "reason", "size", "modified")
         self.tree = ttk.Treeview(
-            tree_frame,
+            self.tree_frame,
             columns=columns,
             show="headings",
-            selectmode="extended",
+            selectmode=tk.EXTENDED,
         )
         self.tree.heading("path", text="File")
         self.tree.heading("reason", text="Reason")
         self.tree.heading("size", text="Size")
         self.tree.heading("modified", text="Modified")
-        self.tree.column("path", width=480, anchor=tk.W)
-        self.tree.column("reason", width=180, anchor=tk.W)
-        self.tree.column("size", width=100, anchor=tk.W)
-        self.tree.column("modified", width=130, anchor=tk.W)
+        self.tree.column(
+            "path",
+            width=480,
+            minwidth=300,
+            anchor=tk.W,
+            stretch=False,
+        )
+        self.tree.column(
+            "reason",
+            width=180,
+            minwidth=140,
+            anchor=tk.W,
+            stretch=False,
+        )
+        self.tree.column(
+            "size",
+            width=100,
+            minwidth=85,
+            anchor=tk.W,
+            stretch=False,
+        )
+        self.tree.column(
+            "modified",
+            width=130,
+            minwidth=120,
+            anchor=tk.W,
+            stretch=False,
+        )
 
-        y_scroll = ttk.Scrollbar(tree_frame, command=self.tree.yview)
+        y_scroll = ttk.Scrollbar(self.tree_frame, command=self.tree.yview)
         x_scroll = ttk.Scrollbar(
-            tree_frame,
+            self.tree_frame,
             command=self.tree.xview,
             orient=tk.HORIZONTAL,
         )
@@ -518,8 +543,9 @@ class StorageDialog(tk.Toplevel):
         self.tree.grid(row=0, column=0, sticky="nsew")
         y_scroll.grid(row=0, column=1, sticky="ns")
         x_scroll.grid(row=1, column=0, sticky="ew")
-        tree_frame.grid_rowconfigure(0, weight=1)
-        tree_frame.grid_columnconfigure(0, weight=1)
+        self.tree_frame.grid_rowconfigure(0, weight=1)
+        self.tree_frame.grid_columnconfigure(0, weight=1)
+        self.tree.bind("<Configure>", self._resize_columns)
 
         footer = tk.Frame(container, bg=colors["background"])
         footer.pack(fill=tk.X, pady=(14, 0))
@@ -546,6 +572,27 @@ class StorageDialog(tk.Toplevel):
         self.trash_button.pack(side=tk.RIGHT)
 
         self.scan()
+
+    def _resize_columns(self, _event: tk.Event | None = None) -> None:
+        available_width = self.tree.winfo_width()
+        if available_width <= 1:
+            return
+
+        reason_width = 140
+        size_width = 85
+        modified_width = 120
+        path_width = max(
+            300,
+            available_width - reason_width - size_width - modified_width,
+        )
+        widths = {
+            "path": path_width,
+            "reason": reason_width,
+            "size": size_width,
+            "modified": modified_width,
+        }
+        for column, width in widths.items():
+            self.tree.column(column, width=width)
 
     def scan(self) -> None:
         self.scan_button.config(state=tk.DISABLED)

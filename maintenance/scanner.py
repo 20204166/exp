@@ -30,13 +30,13 @@ except ImportError:
 class SystemScanner:
     """Read system state and discover reviewable cleanup candidates."""
 
-    BYTES_IN_GIB = 1024**3
-    LARGE_FILE_BYTES = 100 * 1024**2
-    DUPLICATE_MIN_BYTES = 1024**2
-    HASH_CHUNK_BYTES = 1024**2
-    PROCESS_MIN_BYTES = 10 * 1024**2
+    BYTES_IN_GIB: int = 1024**3
+    LARGE_FILE_BYTES: int = 100 * 1024**2
+    DUPLICATE_MIN_BYTES: int = 1024**2
+    HASH_CHUNK_BYTES: int = 1024**2
+    PROCESS_MIN_BYTES: int = 10 * 1024**2
 
-    PROTECTED_PROCESS_NAMES = {
+    PROTECTED_PROCESS_NAMES: set[str] = {
         "csrss.exe",
         "controlcenter",
         "dwm.exe",
@@ -92,9 +92,7 @@ class SystemScanner:
         battery = psutil.sensors_battery()
         gpu_details = self.gpu_details()
 
-        cpu_frequency = (
-            f"{frequency.current:.0f} MHz" if frequency else "Unavailable"
-        )
+        cpu_frequency = f"{frequency.current:.0f} MHz" if frequency else "Unavailable"
         battery_value = (
             f"{battery.percent:.0f}%" if battery is not None else "Unavailable"
         )
@@ -104,9 +102,7 @@ class SystemScanner:
 
         if battery is not None:
             battery_percent = battery.percent
-            battery_subtitle = (
-                "Charging" if battery.power_plugged else "Not charging"
-            )
+            battery_subtitle = "Charging" if battery.power_plugged else "Not charging"
             battery_details = (
                 f"Charge: {battery.percent:.1f}%",
                 f"Power: {battery_subtitle}",
@@ -212,9 +208,7 @@ class SystemScanner:
 
         for process in processes:
             try:
-                info = process.as_dict(
-                    attrs=["pid", "name", "username", "memory_info"]
-                )
+                info = process.as_dict(attrs=["pid", "name", "username", "memory_info"])
                 cpu_percent = process.cpu_percent(None)
                 memory_bytes = info["memory_info"].rss
                 memory_percent = process.memory_percent()
@@ -254,28 +248,74 @@ class SystemScanner:
         if not root.exists():
             return []
 
+        file_stats = self._download_file_stats(root)
+        reasons = self._download_reasons(file_stats)
+
+        candidates = [
+            self._download_candidate(path, file_stats[path], path_reasons)
+            for path, path_reasons in reasons.items()
+        ]
+        return sorted(candidates, key=lambda item: item.size_bytes, reverse=True)
+
+    def _download_file_stats(
+        self,
+        root: Path,
+    ) -> dict[Path, os.stat_result]:
         file_stats: dict[Path, os.stat_result] = {}
-        files_by_size: dict[int, list[Path]] = defaultdict(list)
 
-        for path in root.rglob("*"):
-            try:
-                if path.is_symlink() or not path.is_file():
+        try:
+            for path in root.rglob("*"):
+                if not self._is_download_file(path, root):
                     continue
-                relative_parts = path.relative_to(root).parts
-                if any(part.startswith(".") for part in relative_parts):
+
+                try:
+                    file_stats[path] = path.stat()
+                except (OSError, ValueError):
                     continue
-                stat = path.stat()
-            except (OSError, ValueError):
-                continue
+        except OSError:
+            return file_stats
 
-            file_stats[path] = stat
-            if stat.st_size >= self.DUPLICATE_MIN_BYTES:
-                files_by_size[stat.st_size].append(path)
+        return file_stats
 
+    @staticmethod
+    def _is_download_file(path: Path, root: Path) -> bool:
+        if path.is_symlink() or not path.is_file():
+            return False
+
+        try:
+            relative_parts = path.relative_to(root).parts
+        except ValueError:
+            return False
+
+        return not any(part.startswith(".") for part in relative_parts)
+
+    def _download_reasons(
+        self,
+        file_stats: dict[Path, os.stat_result],
+    ) -> dict[Path, list[str]]:
         reasons: dict[Path, list[str]] = defaultdict(list)
+        self._mark_large_downloads(file_stats, reasons)
+        self._mark_duplicate_downloads(file_stats, reasons)
+        return reasons
+
+    def _mark_large_downloads(
+        self,
+        file_stats: dict[Path, os.stat_result],
+        reasons: dict[Path, list[str]],
+    ) -> None:
         for path, stat in file_stats.items():
             if stat.st_size >= self.LARGE_FILE_BYTES:
                 reasons[path].append("Large file")
+
+    def _mark_duplicate_downloads(
+        self,
+        file_stats: dict[Path, os.stat_result],
+        reasons: dict[Path, list[str]],
+    ) -> None:
+        files_by_size: dict[int, list[Path]] = defaultdict(list)
+        for path, stat in file_stats.items():
+            if stat.st_size >= self.DUPLICATE_MIN_BYTES:
+                files_by_size[stat.st_size].append(path)
 
         for same_size_paths in files_by_size.values():
             if len(same_size_paths) < 2:
@@ -291,22 +331,26 @@ class SystemScanner:
             for digest, duplicate_paths in files_by_hash.items():
                 if len(duplicate_paths) < 2:
                     continue
-                ordered_paths = sorted(duplicate_paths, key=lambda item: str(item).casefold())
-                for duplicate_path in ordered_paths[1:]:
-                    reasons[duplicate_path].append(
-                        f"Duplicate file ({digest[:8]})"
-                    )
 
-        candidates = [
-            FileCandidate(
-                path=path,
-                size_bytes=file_stats[path].st_size,
-                modified_at=datetime.fromtimestamp(file_stats[path].st_mtime),
-                reason=", ".join(path_reasons),
-            )
-            for path, path_reasons in reasons.items()
-        ]
-        return sorted(candidates, key=lambda item: item.size_bytes, reverse=True)
+                ordered_paths = sorted(
+                    duplicate_paths,
+                    key=lambda item: str(item).casefold(),
+                )
+                for duplicate_path in ordered_paths[1:]:
+                    reasons[duplicate_path].append(f"Duplicate file ({digest[:8]})")
+
+    @staticmethod
+    def _download_candidate(
+        path: Path,
+        stat: os.stat_result,
+        reasons: list[str],
+    ) -> FileCandidate:
+        return FileCandidate(
+            path=path,
+            size_bytes=stat.st_size,
+            modified_at=datetime.fromtimestamp(stat.st_mtime),
+            reason=", ".join(reasons),
+        )
 
     def trash_size(self) -> int:
         total = 0

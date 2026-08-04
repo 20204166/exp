@@ -127,6 +127,16 @@ class AppWindowTests(unittest.TestCase):
         self.assertEqual(window._pending_after_ids, {"after#1"})
         self.assertEqual(window.master.scheduled, [])
 
+    def test_auto_scan_uses_live_poll_interval(self) -> None:
+        window = self.make_window()
+
+        window._schedule_auto_scan()
+
+        self.assertEqual(
+            window.master.scheduled[0][0],
+            AppWindow.AUTO_SCAN_MILLISECONDS,
+        )
+
     def test_late_snapshot_and_error_callbacks_are_ignored(self) -> None:
         window = self.make_window()
         window._is_closing = True
