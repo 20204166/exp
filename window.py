@@ -27,7 +27,7 @@ class AppWindow:
     ACCENT = "#4F46E5"
     ACCENT_ACTIVE = "#4338CA"
     BORDER = "#E4E7EC"
-    AUTO_SCAN_MILLISECONDS = 750
+    AUTO_SCAN_MILLISECONDS = 5000
     UI_FONT = "Helvetica"
     FIXED_FONT = "TkFixedFont"
     TITLE_FONT = (UI_FONT, 24, "bold")

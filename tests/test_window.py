@@ -127,7 +127,7 @@ class AppWindowTests(unittest.TestCase):
         self.assertEqual(window._pending_after_ids, {"after#1"})
         self.assertEqual(window.master.scheduled, [])
 
-    def test_auto_scan_uses_live_poll_interval(self) -> None:
+    def test_auto_scan_uses_five_second_interval(self) -> None:
         window = self.make_window()
 
         window._schedule_auto_scan()
