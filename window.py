@@ -6,6 +6,7 @@ from queue import Empty, Queue
 from tkinter import messagebox, ttk
 
 import algo
+from maintenance.components import ScanCoordinator
 from maintenance.actions import FileManager, ProcessManager
 from maintenance.dialogs import (
     InfoDialog,
@@ -59,9 +60,7 @@ class AppWindow:
         self._pending_after_ids: set[str] = set()
         self._background_poll_id: str | None = None
         self._background_tasks = 0
-        self._analysis_active = False
-        self._analysis_generation = 0
-        self._analysis_requested = False
+        self._scan_coordinator = ScanCoordinator()
         self._analysis_cancel_event: threading.Event | None = None
         self._background_queue: Queue[
             tuple[Callable[..., None], tuple[object, ...]] | None
@@ -88,6 +87,13 @@ class AppWindow:
             "accent": self.ACCENT,
             "border": self.BORDER,
         }
+
+    def _scan_coordinator_state(self) -> ScanCoordinator:
+        coordinator = self.__dict__.get("_scan_coordinator")
+        if coordinator is None:
+            coordinator = ScanCoordinator()
+            self.__dict__["_scan_coordinator"] = coordinator
+        return coordinator
 
     def _build_window(self) -> None:
         self.main_frame = ttk.Frame(
@@ -394,13 +400,10 @@ class AppWindow:
     def handle_analyze(self) -> None:
         if self._is_closing:
             return
-        if self._analysis_active:
-            self._analysis_requested = True
+        generation, started = self._scan_coordinator_state().begin()
+        if not started:
             return
 
-        self._analysis_active = True
-        self._analysis_generation += 1
-        generation = self._analysis_generation
         cancel_event = threading.Event()
         self._analysis_cancel_event = cancel_event
 
@@ -429,23 +432,19 @@ class AppWindow:
         generation: int,
         snapshot: DashboardSnapshot,
     ) -> None:
-        if generation != self._analysis_generation:
+        finished, rerun_requested = self._scan_coordinator_state().finish(generation)
+        if not finished:
             return
-        self._analysis_active = False
         self._analysis_cancel_event = None
-        rerun_requested = self._analysis_requested
-        self._analysis_requested = False
         self._show_snapshot(snapshot)
         if rerun_requested and not self._is_closing:
             self._schedule_timer(0, self.handle_analyze)
 
     def _show_error_for_generation(self, generation: int, message: str) -> None:
-        if generation != self._analysis_generation:
+        finished, rerun_requested = self._scan_coordinator_state().finish(generation)
+        if not finished:
             return
-        self._analysis_active = False
         self._analysis_cancel_event = None
-        rerun_requested = self._analysis_requested
-        self._analysis_requested = False
         self._show_error(message)
         if rerun_requested and not self._is_closing:
             self._schedule_timer(0, self.handle_analyze)
@@ -575,8 +574,7 @@ class AppWindow:
 
     def _close(self) -> None:
         self._is_closing = True
-        self._analysis_active = False
-        self._analysis_requested = False
+        self._scan_coordinator_state().cancel()
         if self._analysis_cancel_event is not None:
             self._analysis_cancel_event.set()
         self._analysis_cancel_event = None
@@ -589,7 +587,6 @@ class AppWindow:
         if self._is_closing:
             return
 
-        self._analysis_active = False
         self._set_busy(False)
         messagebox.showerror("Analysis Error", message, parent=self.master)
 
@@ -598,6 +595,7 @@ class AppWindow:
             self.master.mainloop()
         finally:
             self._is_closing = True
+            self._scan_coordinator_state().cancel()
             self._cancel_pending_timers()
             self.auto_scan_id = None
             self._background_poll_id = None

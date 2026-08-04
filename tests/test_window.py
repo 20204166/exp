@@ -3,6 +3,7 @@ from typing import Any
 from unittest.mock import Mock
 from queue import Queue
 
+from maintenance.components import ScanCoordinator
 from window import AppWindow
 
 
@@ -47,9 +48,7 @@ class AppWindowTests(unittest.TestCase):
         window._pending_after_ids = set()
         window._background_poll_id = None
         window._background_tasks = 0
-        window._analysis_active = False
-        window._analysis_generation = 0
-        window._analysis_requested = False
+        window._scan_coordinator = ScanCoordinator()
         window._analysis_cancel_event = None
         window._background_queue = Queue()
         return window
