@@ -2,10 +2,14 @@
 
 These helpers are extracted seams kept in one place so wiring stays small.
 Current source references:
+- `ProcessSafetyPolicy` for future wiring in `maintenance/scanner.py` and
+  `maintenance/actions.py`.
 - `DownloadsPathResolver` in `maintenance/scanner.py`.
 - `DownloadScanner` in `maintenance/scanner.py`.
 - `GpuDetector` in `maintenance/scanner.py`.
 - `BackgroundTaskRunner` in `maintenance/dialogs.py`.
+- `ResourceFeatureCatalog` for future wiring in `window.py`, `algo.py`, and
+  `maintenance/scanner.py`.
 - `ScanCoordinator` in `window.py`.
 """
 
@@ -18,7 +22,7 @@ import platform
 import threading
 import tkinter as tk
 from collections import OrderedDict, defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +30,6 @@ from tkinter import messagebox
 from typing import Any
 
 from maintenance.models import FileCandidate
-
 
 # =============================================================================
 # Shared types and Windows interop support
@@ -59,6 +62,176 @@ _WINDOWS_DOWNLOADS_GUID = _WindowsGuid(
     0x4565,
     (ctypes.c_ubyte * 8)(0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B),
 )
+
+
+# =============================================================================
+# Process safety decisions
+# Domain owners: maintenance/scanner.py, maintenance/actions.py
+# Implementation: maintenance/components.py
+# Tests: tests/test_components.py, tests/test_maintenance.py
+# =============================================================================
+
+
+class ProcessSafetyPolicy:
+    """Answer whether a process may be managed without performing the action.
+
+    The policy keeps the scanner and process-action protection rules together,
+    but it never terminates or otherwise changes a process. Missing or
+    inaccessible process information is treated as protected.
+    """
+
+    PROTECTED_NAMES: frozenset[str] = frozenset(
+        {
+            "csrss.exe",
+            "controlcenter",
+            "dwm.exe",
+            "dock",
+            "explorer.exe",
+            "finder",
+            "init",
+            "kernel_task",
+            "kthreadd",
+            "launchd",
+            "lsass.exe",
+            "loginwindow",
+            "registry",
+            "services.exe",
+            "smss.exe",
+            "system",
+            "systemd",
+            "systemuiserver",
+            "terminal",
+            "wininit.exe",
+            "winlogon.exe",
+            "windowserver",
+        }
+    )
+
+    def __init__(
+        self,
+        *,
+        current_pid_loader: Callable[[], int] = os.getpid,
+        process_loader: Callable[[int], Any] | None = None,
+        protected_names: Iterable[str] | None = None,
+    ) -> None:
+        self._current_pid_loader = current_pid_loader
+        self._process_loader = process_loader or self._default_process_loader
+        names = self.PROTECTED_NAMES if protected_names is None else protected_names
+        self._protected_names = frozenset(
+            name.casefold() for name in names if isinstance(name, str) and name
+        )
+
+    def protected_pids(self) -> set[int]:
+        """Return PID 0, PID 1, this process, and its known parent chain."""
+
+        protected, _complete = self._protected_pid_snapshot()
+        return protected
+
+    def same_user(self, username: str, current_user: str) -> bool:
+        """Compare local usernames while ignoring Windows domain prefixes."""
+
+        normalized_username = self._normalize_username(username)
+        normalized_current_user = self._normalize_username(current_user)
+        return (
+            bool(normalized_username) and normalized_username == normalized_current_user
+        )
+
+    def can_manage(
+        self,
+        *,
+        pid: int,
+        name: str,
+        username: str,
+        current_user: str,
+    ) -> bool:
+        """Return whether a process with the supplied facts may be managed."""
+
+        protected_pids, complete = self._protected_pid_snapshot()
+        if not complete:
+            return False
+        return self._can_manage_with_pids(
+            pid=pid,
+            name=name,
+            username=username,
+            current_user=current_user,
+            protected_pids=protected_pids,
+        )
+
+    def can_manage_process(self, *, pid: int, current_user: str) -> bool:
+        """Load one process and apply the policy, failing closed on lookup errors."""
+
+        protected_pids, complete = self._protected_pid_snapshot()
+        if not complete or not isinstance(pid, int) or pid in protected_pids:
+            return False
+
+        try:
+            process = self._process_loader(pid)
+            name = process.name()
+            username = process.username()
+        except Exception:  # noqa: BLE001 - fail closed on any loader failure.
+            # A disappearing or inaccessible process cannot be safely offered.
+            return False
+
+        return self._can_manage_with_pids(
+            pid=pid,
+            name=name,
+            username=username,
+            current_user=current_user,
+            protected_pids=protected_pids,
+        )
+
+    def _protected_pid_snapshot(self) -> tuple[set[int], bool]:
+        protected = {0, 1}
+        try:
+            current_pid = self._current_pid_loader()
+            if not isinstance(current_pid, int) or current_pid < 0:
+                return protected, False
+            protected.add(current_pid)
+
+            process = self._process_loader(current_pid)
+            for parent in process.parents():
+                parent_pid = getattr(parent, "pid", None)
+                if not isinstance(parent_pid, int) or parent_pid < 0:
+                    return protected, False
+                protected.add(parent_pid)
+        except Exception:  # noqa: BLE001 - fail closed on any ancestry failure.
+            # Keep the base protected PIDs visible, but do not permit management
+            # when the current process ancestry cannot be established.
+            return protected, False
+        return protected, True
+
+    def _can_manage_with_pids(
+        self,
+        *,
+        pid: int,
+        name: str,
+        username: str,
+        current_user: str,
+        protected_pids: set[int],
+    ) -> bool:
+        if not isinstance(pid, int) or pid < 0 or pid in protected_pids:
+            return False
+        if not isinstance(name, str) or not name:
+            return False
+        if name.casefold() in self._protected_names:
+            return False
+        return self.same_user(username, current_user)
+
+    @staticmethod
+    def _normalize_username(value: str) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.replace("/", "\\").rsplit("\\", 1)[-1].casefold()
+
+    @staticmethod
+    def _default_process_loader(pid: int) -> Any:
+        try:
+            import psutil
+        except ImportError as error:
+            raise RuntimeError(
+                "psutil is not installed. Run: python -m pip install psutil"
+            ) from error
+        return psutil.Process(pid)
 
 
 # =============================================================================
@@ -726,6 +899,119 @@ class BackgroundTaskRunner:
             progress_task=progress_task,
             cancel_event=cancel_event,
             on_progress=on_progress,
+        )
+
+
+# =============================================================================
+# Resource feature metadata
+# Domain owners: window.py, algo.py, maintenance/scanner.py
+# Implementation: maintenance/components.py
+# Consumers to wire later: window.py, algo.py, maintenance/scanner.py
+# Tests: tests/test_components.py, tests/test_maintenance.py
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceFeature:
+    """Immutable metadata for one dashboard resource category.
+
+    ``loader_name`` names an existing analyzer detail method for future
+    wiring. The catalog describes metadata only; it never imports or calls
+    scanners, handlers, widgets, or destructive actions.
+    """
+
+    key: str
+    title: str
+    order: int
+    action_kind: str
+    loader_name: str
+    platforms: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not self.key
+            or not self.title
+            or not self.action_kind
+            or not self.loader_name
+        ):
+            raise ValueError("Resource feature metadata fields cannot be empty")
+        if self.order < 0:
+            raise ValueError("Resource feature order cannot be negative")
+
+        if self.platforms is not None:
+            platforms = tuple(self.platforms)
+            if not platforms or any(not platform for platform in platforms):
+                raise ValueError("Resource feature platforms cannot be empty")
+            object.__setattr__(self, "platforms", platforms)
+
+    def is_available_on(self, platform_name: str) -> bool:
+        """Return whether this feature is declared for a platform."""
+
+        if self.platforms is None:
+            return True
+        normalized_platform = platform_name.casefold()
+        return any(
+            platform.casefold() == normalized_platform for platform in self.platforms
+        )
+
+
+class ResourceFeatureCatalog:
+    """Own isolated, deterministic metadata for dashboard resource features.
+
+    The default entries mirror the current dashboard. Registering a feature
+    extends one catalog instance only, so future feature experiments cannot
+    mutate another window or a process-wide registry by accident.
+    """
+
+    DEFAULT_FEATURES: tuple[ResourceFeature, ...] = (
+        ResourceFeature("cpu", "CPU", 0, "process", "cpu_info"),
+        ResourceFeature("memory", "Memory", 1, "process", "memory_info"),
+        ResourceFeature("storage", "Storage", 2, "storage", "storage_info"),
+        ResourceFeature("gpu", "GPU", 3, "informational", "gpu_info"),
+        ResourceFeature("network", "Network", 4, "informational", "network_info"),
+        ResourceFeature("battery", "Battery", 5, "informational", "battery_info"),
+    )
+
+    def __init__(
+        self,
+        features: Iterable[ResourceFeature] | None = None,
+    ) -> None:
+        self._features: dict[str, ResourceFeature] = {}
+        for feature in self.DEFAULT_FEATURES if features is None else features:
+            self.register(feature)
+
+    def all(self) -> tuple[ResourceFeature, ...]:
+        """Return features in deterministic display order."""
+
+        return tuple(
+            sorted(
+                self._features.values(),
+                key=lambda feature: (feature.order, feature.key),
+            )
+        )
+
+    def get(self, key: str) -> ResourceFeature:
+        """Return one feature or raise a clear error for an unknown key."""
+
+        try:
+            return self._features[key]
+        except KeyError as error:
+            raise KeyError(f"Unknown resource feature: {key}") from error
+
+    def register(self, feature: ResourceFeature) -> None:
+        """Register one immutable feature, rejecting duplicate keys."""
+
+        if not isinstance(feature, ResourceFeature):
+            raise TypeError("feature must be a ResourceFeature")
+        if feature.key in self._features:
+            raise ValueError(f"Resource feature already registered: {feature.key}")
+        self._features[feature.key] = feature
+
+    def available_on(self, platform_name: str) -> tuple[ResourceFeature, ...]:
+        """Return the ordered features declared for one platform."""
+
+        return tuple(
+            feature for feature in self.all() if feature.is_available_on(platform_name)
         )
 
 

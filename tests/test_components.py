@@ -3,6 +3,7 @@ import tempfile
 import threading
 import unittest
 from collections.abc import Callable
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
@@ -12,8 +13,11 @@ from maintenance.components import (
     DownloadScanner,
     DownloadsPathResolver,
     GpuDetector,
-    ScanCoordinator,
+    ProcessSafetyPolicy,
+    ResourceFeature,
+    ResourceFeatureCatalog,
     ScanCancelled,
+    ScanCoordinator,
 )
 
 
@@ -31,6 +35,29 @@ class ImmediateAfterWidget:
 
     def after(self, _delay: int, callback: Callable[..., Any], *args: object) -> None:
         callback(*args)
+
+
+class PolicyProcess:
+    def __init__(
+        self,
+        pid: int,
+        name: str = "Example App",
+        username: str = "alice",
+        parents: list["PolicyProcess"] | None = None,
+    ) -> None:
+        self.pid = pid
+        self._name = name
+        self._username = username
+        self._parents = parents or []
+
+    def name(self) -> str:
+        return self._name
+
+    def username(self) -> str:
+        return self._username
+
+    def parents(self) -> list["PolicyProcess"]:
+        return self._parents
 
 
 class DownloadsPathResolverTests(unittest.TestCase):
@@ -223,6 +250,330 @@ class GpuDetectorTests(unittest.TestCase):
 
         self.assertEqual(detector.detect(), ("linux",))
         self.assertEqual(calls, ["nvidia", "linux"])
+
+
+class ProcessSafetyPolicyTests(unittest.TestCase):
+    CURRENT_PID = 100
+
+    def setUp(self) -> None:
+        self.current = PolicyProcess(
+            self.CURRENT_PID,
+            parents=[PolicyProcess(90), PolicyProcess(80)],
+        )
+        self.processes = {self.CURRENT_PID: self.current}
+        self.policy = ProcessSafetyPolicy(
+            current_pid_loader=lambda: self.CURRENT_PID,
+            process_loader=self.processes.__getitem__,
+        )
+
+    def test_same_local_user_is_allowed(self) -> None:
+        self.assertTrue(self.policy.same_user("alice", "ALICE"))
+
+    def test_different_user_is_rejected(self) -> None:
+        self.assertFalse(self.policy.same_user("alice", "bob"))
+
+    def test_windows_domain_prefix_is_ignored(self) -> None:
+        self.assertTrue(self.policy.same_user(r"WORKGROUP\Alice", "alice"))
+        self.assertTrue(self.policy.same_user("WORKGROUP/Alice", "ALICE"))
+
+    def test_protected_name_is_case_insensitive(self) -> None:
+        self.assertFalse(
+            self.policy.can_manage(
+                pid=200,
+                name="EXPLORER.EXE",
+                username="alice",
+                current_user="alice",
+            )
+        )
+
+    def test_base_current_and_parent_pids_are_protected(self) -> None:
+        protected = self.policy.protected_pids()
+
+        self.assertTrue({0, 1, 80, 90, self.CURRENT_PID} <= protected)
+        for pid in (0, 1, 80, 90, self.CURRENT_PID):
+            self.assertFalse(
+                self.policy.can_manage(
+                    pid=pid,
+                    name="Example App",
+                    username="alice",
+                    current_user="alice",
+                )
+            )
+
+    def test_normal_same_user_application_is_allowed(self) -> None:
+        self.assertTrue(
+            self.policy.can_manage(
+                pid=200,
+                name="Example App",
+                username="alice",
+                current_user="alice",
+            )
+        )
+
+    def test_missing_process_is_protected(self) -> None:
+        self.assertFalse(self.policy.can_manage_process(pid=201, current_user="alice"))
+
+    def test_access_denied_process_information_is_protected(self) -> None:
+        def loader(pid: int) -> PolicyProcess:
+            if pid == self.CURRENT_PID:
+                return self.current
+            raise PermissionError("access denied")
+
+        policy = ProcessSafetyPolicy(
+            current_pid_loader=lambda: self.CURRENT_PID,
+            process_loader=loader,
+        )
+
+        self.assertFalse(policy.can_manage_process(pid=202, current_user="alice"))
+
+    def test_access_denied_current_process_ancestry_fails_closed(self) -> None:
+        def loader(_pid: int) -> PolicyProcess:
+            raise PermissionError("access denied")
+
+        policy = ProcessSafetyPolicy(
+            current_pid_loader=lambda: self.CURRENT_PID,
+            process_loader=loader,
+        )
+
+        self.assertEqual(policy.protected_pids(), {0, 1, self.CURRENT_PID})
+        self.assertFalse(
+            policy.can_manage(
+                pid=200,
+                name="Example App",
+                username="alice",
+                current_user="alice",
+            )
+        )
+
+    def test_can_manage_process_uses_loaded_name_and_user(self) -> None:
+        self.processes[200] = PolicyProcess(
+            200,
+            name="Example App",
+            username=r"WORKGROUP\Alice",
+        )
+
+        self.assertTrue(self.policy.can_manage_process(pid=200, current_user="alice"))
+
+
+class ResourceFeatureCatalogTests(unittest.TestCase):
+    EXPECTED_KEYS = ("cpu", "memory", "storage", "gpu", "network", "battery")
+
+    def test_default_catalog_preserves_current_six_resources_and_order(self) -> None:
+        catalog = ResourceFeatureCatalog()
+
+        self.assertEqual(
+            tuple(feature.key for feature in catalog.all()),
+            self.EXPECTED_KEYS,
+        )
+        self.assertEqual(
+            tuple(feature.title for feature in catalog.all()),
+            ("CPU", "Memory", "Storage", "GPU", "Network", "Battery"),
+        )
+        self.assertEqual(
+            tuple(feature.loader_name for feature in catalog.all()),
+            (
+                "cpu_info",
+                "memory_info",
+                "storage_info",
+                "gpu_info",
+                "network_info",
+                "battery_info",
+            ),
+        )
+
+    def test_action_categories_match_current_resource_handlers(self) -> None:
+        catalog = ResourceFeatureCatalog()
+
+        self.assertEqual(catalog.get("cpu").action_kind, "process")
+        self.assertEqual(catalog.get("memory").action_kind, "process")
+        self.assertEqual(catalog.get("storage").action_kind, "storage")
+        self.assertEqual(catalog.get("gpu").action_kind, "informational")
+        self.assertEqual(catalog.get("network").action_kind, "informational")
+        self.assertEqual(catalog.get("battery").action_kind, "informational")
+
+    def test_lookup_and_unknown_key_behavior_are_explicit(self) -> None:
+        catalog = ResourceFeatureCatalog()
+
+        self.assertEqual(catalog.get("gpu").title, "GPU")
+        with self.assertRaisesRegex(KeyError, "Unknown resource feature"):
+            catalog.get("missing")
+
+    def test_register_rejects_duplicate_keys(self) -> None:
+        catalog = ResourceFeatureCatalog()
+
+        with self.assertRaisesRegex(ValueError, "already registered"):
+            catalog.register(ResourceFeature("cpu", "Other CPU", 9, "info", "other"))
+
+    def test_ordering_is_deterministic_for_custom_features(self) -> None:
+        catalog = ResourceFeatureCatalog(
+            (
+                ResourceFeature("later", "Later", 4, "info", "later_info"),
+                ResourceFeature("same-b", "Same B", 2, "info", "b_info"),
+                ResourceFeature("first", "First", 1, "info", "first_info"),
+                ResourceFeature("same-a", "Same A", 2, "info", "a_info"),
+            )
+        )
+
+        self.assertEqual(
+            tuple(feature.key for feature in catalog.all()),
+            ("first", "same-a", "same-b", "later"),
+        )
+
+    def test_platform_availability_is_metadata_not_ui_logic(self) -> None:
+        feature = ResourceFeature(
+            "windows-only",
+            "Windows Only",
+            6,
+            "informational",
+            "windows_info",
+            platforms=("Windows", "Darwin"),
+        )
+        catalog = ResourceFeatureCatalog(features=(feature,))
+
+        self.assertTrue(feature.is_available_on("windows"))
+        self.assertTrue(feature.is_available_on("DARWIN"))
+        self.assertFalse(feature.is_available_on("Linux"))
+        self.assertEqual(catalog.available_on("linux"), ())
+
+    def test_separate_catalog_instances_are_isolated(self) -> None:
+        first = ResourceFeatureCatalog()
+        second = ResourceFeatureCatalog()
+        extra = ResourceFeature("extra", "Extra", 6, "informational", "extra_info")
+
+        first.register(extra)
+
+        self.assertEqual(first.get("extra"), extra)
+        with self.assertRaises(KeyError):
+            second.get("extra")
+
+    def test_feature_definitions_are_immutable_and_all_returns_tuple(self) -> None:
+        feature = ResourceFeature("test", "Test", 0, "informational", "test_info")
+        catalog = ResourceFeatureCatalog(features=(feature,))
+
+        with self.assertRaises(FrozenInstanceError):
+            feature.title = "Changed"  # type: ignore[misc]
+        self.assertIsInstance(catalog.all(), tuple)
+
+
+class ProcessSafetyPolicyParityTests(unittest.TestCase):
+    CURRENT = 5555
+
+    def _policy(self) -> ProcessSafetyPolicy:
+        def loader(pid: int) -> PolicyProcess:
+            if pid == self.CURRENT:
+                return PolicyProcess(self.CURRENT)
+            raise KeyError(pid)
+
+        return ProcessSafetyPolicy(
+            current_pid_loader=lambda: self.CURRENT,
+            process_loader=loader,
+        )
+
+    def test_same_user_matches_existing_implementations(self) -> None:
+        from maintenance.actions import ProcessManager
+        from maintenance.scanner import SystemScanner
+
+        policy = ProcessSafetyPolicy(
+            current_pid_loader=lambda: 0,
+            process_loader=lambda pid: PolicyProcess(pid),
+        )
+        pairs = (
+            ("alice", "ALICE"),
+            (r"WORKGROUP\Iryna", "iryna"),
+            ("WORKGROUP/Alice", "alice"),
+            ("alice", "bob"),
+            ("", "alice"),
+        )
+        for username, current_user in pairs:
+            expected = SystemScanner._same_user(username, current_user)
+            self.assertEqual(policy.same_user(username, current_user), expected)
+            self.assertEqual(
+                ProcessManager._same_user(username, current_user), expected
+            )
+
+    def test_protected_names_cover_both_existing_collections(self) -> None:
+        from maintenance.actions import ProcessManager
+        from maintenance.scanner import SystemScanner
+
+        expected = set(SystemScanner.PROTECTED_PROCESS_NAMES)
+        self.assertEqual(set(ProcessSafetyPolicy.PROTECTED_NAMES), expected)
+        self.assertEqual(set(ProcessManager.PROTECTED_NAMES), expected)
+
+    def test_base_protected_pids_match_existing_defaults(self) -> None:
+        from maintenance.scanner import SystemScanner
+
+        base = {0, 1, os.getpid()}
+        self.assertLessEqual(base, ProcessSafetyPolicy().protected_pids())
+        self.assertLessEqual(base, SystemScanner(Path("Downloads"))._protected_pids())
+
+    def test_decision_parity_with_scanner_and_manager_for_established_cases(
+        self,
+    ) -> None:
+        from maintenance.actions import ProcessManager
+        from maintenance.scanner import SystemScanner
+
+        policy = self._policy()
+        base = {0, 1, self.CURRENT}
+        cases: tuple[tuple[int, str, str, str], ...] = (
+            (self.CURRENT, "Example App", "alice", "alice"),
+            (0, "Example App", "alice", "alice"),
+            (1, "Example App", "alice", "alice"),
+            (9999, "EXPLORER.EXE", "alice", "alice"),
+            (9999, "Example App", "bob", "alice"),
+            (9999, "Example App", r"WORKGROUP\Alice", "alice"),
+            (9999, "Example App", "alice", "ALICE"),
+            (9999, "Example App", "alice", "alice"),
+        )
+
+        def existing_decision(
+            same_user: object,
+            protected_names: set[str],
+            pid: int,
+            name: str,
+            username: str,
+            current_user: str,
+        ) -> bool:
+            return bool(
+                same_user(username, current_user)
+                and pid not in base
+                and name.casefold() not in protected_names
+            )
+
+        for pid, name, username, current_user in cases:
+            policy_decision = policy.can_manage(
+                pid=pid,
+                name=name,
+                username=username,
+                current_user=current_user,
+            )
+            scanner_decision = existing_decision(
+                SystemScanner._same_user,
+                set(SystemScanner.PROTECTED_PROCESS_NAMES),
+                pid,
+                name,
+                username,
+                current_user,
+            )
+            manager_decision = existing_decision(
+                ProcessManager._same_user,
+                set(ProcessManager.PROTECTED_NAMES),
+                pid,
+                name,
+                username,
+                current_user,
+            )
+            self.assertEqual(policy_decision, scanner_decision)
+            self.assertEqual(policy_decision, manager_decision)
+
+
+class ResourceFeatureCatalogParityTests(unittest.TestCase):
+    def test_default_keys_match_window_dashboard_resource_cards(self) -> None:
+        from window import AppWindow
+
+        self.assertEqual(
+            tuple(feature.key for feature in ResourceFeatureCatalog().all()),
+            tuple(key for key, _ in AppWindow.RESOURCE_CARDS),
+        )
 
 
 class ScanCoordinatorTests(unittest.TestCase):
