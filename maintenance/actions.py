@@ -1,16 +1,22 @@
-from collections.abc import Callable, Iterable
 import getpass
-import os
-from typing import Any
+from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import Any
 
+from maintenance.components import (
+    PROTECTED_PROCESS_NAMES,
+    protected_process_pids,
+    require_psutil,
+    usernames_match,
+)
+from maintenance.components.process_safety import is_protected_process_name
 from maintenance.models import FileActionResult, ProcessActionResult
 from maintenance.scanner import SystemScanner
 
 try:
     import psutil
 except ImportError:
-    psutil = None
+    psutil = None  # type: ignore[assignment]
 
 try:
     from send2trash import send2trash
@@ -21,47 +27,34 @@ except ImportError:
 class ProcessManager:
     """Quit selected user processes with explicit safety checks."""
 
-    PROTECTED_NAMES = {
-        "csrss.exe",
-        "controlcenter",
-        "dwm.exe",
-        "dock",
-        "explorer.exe",
-        "finder",
-        "init",
-        "kernel_task",
-        "kthreadd",
-        "launchd",
-        "lsass.exe",
-        "loginwindow",
-        "registry",
-        "services.exe",
-        "smss.exe",
-        "system",
-        "systemd",
-        "systemuiserver",
-        "terminal",
-        "wininit.exe",
-        "winlogon.exe",
-        "windowserver",
-    }
+    PROTECTED_NAMES: frozenset[str] = PROTECTED_PROCESS_NAMES
 
     @staticmethod
     def _require_psutil() -> Any:
-        if psutil is None:
-            raise RuntimeError(
-                "psutil is not installed. Run: python -m pip install psutil"
-            )
-        return psutil
+        return require_psutil(psutil)
 
-    def request_quit(self, pids: list[int]) -> ProcessActionResult:
-        return self._run_process_action(pids, lambda process: process.terminate())
+    def request_quit(
+        self,
+        pids: list[int],
+        expected_create_times: dict[int, float] | None = None,
+    ) -> ProcessActionResult:
+        return self._run_process_action(
+            pids,
+            lambda process: process.terminate(),
+            expected_create_times=expected_create_times,
+        )
 
-    def force_quit(self, pids: list[int]) -> ProcessActionResult:
+    def force_quit(
+        self,
+        pids: list[int],
+        expected_create_times: dict[int, float] | None = None,
+    ) -> ProcessActionResult:
         return self._run_process_action(
             pids,
             lambda process: process.kill(),
             alive_message="did not stop.",
+            expected_create_times=expected_create_times,
+            include_children=True,
         )
 
     def _run_process_action(
@@ -69,9 +62,15 @@ class ProcessManager:
         pids: list[int],
         action: Callable[[Any], None],
         alive_message: str | None = None,
+        expected_create_times: dict[int, float] | None = None,
+        include_children: bool = False,
     ) -> ProcessActionResult:
         psutil_module = self._require_psutil()
-        processes, errors = self._allowed_processes(pids, psutil_module)
+        processes, errors = self._allowed_processes(
+            pids,
+            psutil_module,
+            expected_create_times,
+        )
         if not processes:
             return self._build_process_action_result(pids, (), (), errors)
 
@@ -79,11 +78,32 @@ class ProcessManager:
             psutil_module.NoSuchProcess,
             psutil_module.AccessDenied,
         )
+        current_user = getpass.getuser()
+        protected_pids = self._protected_pids(psutil_module)
+
+        targets: list[Any] = []
         for process in processes:
+            if include_children:
+                try:
+                    children = process.children(recursive=True)
+                except process_errors:
+                    children = []
+                for child in children:
+                    if self._is_allowed_target(
+                        child,
+                        current_user,
+                        protected_pids,
+                    ):
+                        targets.append(child)
+                    else:
+                        errors.append(f"PID {child.pid} is protected.")
+            targets.append(process)
+
+        for target in targets:
             try:
-                action(process)
+                action(target)
             except process_errors as error:
-                errors.append(f"PID {process.pid}: {error}")
+                errors.append(f"PID {target.pid}: {error}")
 
         gone, alive = psutil_module.wait_procs(processes, timeout=3)
         if alive_message is not None:
@@ -108,12 +128,12 @@ class ProcessManager:
         self,
         pids: list[int],
         psutil_module: Any,
+        expected_create_times: dict[int, float] | None = None,
     ) -> tuple[list[Any], list[str]]:
         current_user = getpass.getuser()
         protected_pids = self._protected_pids(psutil_module)
         process_factory = psutil_module.Process
         same_user = self._same_user
-        protected_names = self.PROTECTED_NAMES
         processes: list[Any] = []
         errors: list[str] = []
 
@@ -126,13 +146,17 @@ class ProcessManager:
                 process = process_factory(pid)
                 name = process.name()
                 username = process.username()
+                if expected_create_times and pid in expected_create_times:
+                    actual_create_time = process.create_time()
+                    if float(actual_create_time) != float(expected_create_times[pid]):
+                        errors.append(f"PID {pid} changed since it was scanned.")
+                        continue
             except (psutil_module.NoSuchProcess, psutil_module.AccessDenied) as error:
                 errors.append(f"PID {pid}: {error}")
                 continue
 
-            if (
-                not same_user(username, current_user)
-                or name.casefold() in protected_names
+            if not same_user(username, current_user) or self._is_protected_process(
+                name, process
             ):
                 errors.append(f"{name} (PID {pid}) is protected.")
                 continue
@@ -140,22 +164,61 @@ class ProcessManager:
 
         return processes, errors
 
+    def _is_allowed_target(
+        self,
+        process: Any,
+        current_user: str,
+        protected_pids: set[int],
+    ) -> bool:
+        """Return whether a force-quit child may be acted on.
+
+        Recursively discovered children must pass the same safety checks as a
+        directly requested process: not a protected PID, owned by the current
+        user, and not a protected name/executable. A child that cannot be read
+        is treated as protected (fail closed) so a force quit never kills an
+        unsafe descendant merely because its parent was approved.
+        """
+
+        if process.pid in protected_pids:
+            return False
+        try:
+            name = process.name()
+            username = process.username()
+        except Exception:  # noqa: BLE001 - unreadable children are protected (fail closed).
+            return False
+        if not self._same_user(username, current_user):
+            return False
+        return not self._is_protected_process(name, process)
+
+    @staticmethod
+    def _is_protected_process(name: str, process: Any) -> bool:
+        """Return whether a process is protected by name or executable path.
+
+        The executable path is a more reliable identifier than the display
+        name on some platforms, so it is consulted as a second, fail-closed
+        check whenever psutil can read it.
+        """
+
+        if is_protected_process_name(name, ProcessManager.PROTECTED_NAMES):
+            return True
+        try:
+            executable = process.exe()
+        except Exception:  # noqa: BLE001 - executable path is best-effort.
+            return False
+        if executable:
+            return is_protected_process_name(
+                Path(executable).name,
+                ProcessManager.PROTECTED_NAMES,
+            )
+        return False
+
     @staticmethod
     def _protected_pids(psutil_module: Any) -> set[int]:
-        protected = {0, 1, os.getpid()}
-        try:
-            process = psutil_module.Process(os.getpid())
-            protected.update(parent.pid for parent in process.parents())
-        except (psutil_module.NoSuchProcess, psutil_module.AccessDenied):
-            pass
-        return protected
+        return protected_process_pids(psutil_module)
 
     @staticmethod
     def _same_user(username: str, current_user: str) -> bool:
-        def normalise(value: str) -> str:
-            return value.replace("/", "\\").rsplit("\\", 1)[-1].casefold()
-
-        return normalise(username) == normalise(current_user)
+        return usernames_match(username, current_user)
 
 
 class FileManager:

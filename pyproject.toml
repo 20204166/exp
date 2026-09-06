@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "system-analyzer"
+version = "1.0.0"
+description = "Local system dashboard and safe cleanup for the current machine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "UNLICENSED" }
+dependencies = [
+    "psutil>=5.9",
+    "send2trash>=1.8",
+    'nvidia-ml-py>=12.0; platform_system != "Darwin"',
+]
+
+[project.scripts]
+system-analyzer = "main:main"
+system-analyzer-snapshot = "maintenance.snapshot:main"
+
+[tool.setuptools]
+# The app keeps its historical top-level modules (main/window/algo) as the
+# public entry surface so `python main.py` and existing imports keep working;
+# installing them as top-level py-modules preserves that exactly. The
+# maintenance package (and its component/UI subpackages) carry the shared
+# implementation, including the read-only snapshot command.
+packages = [
+    "maintenance",
+    "maintenance.components",
+    "maintenance.ui",
+]
+py-modules = [
+    "main",
+    "window",
+    "algo",
+]
+
+[tool.mypy]
+# In-tree `pip install .`/`pip install -e .` leaves build/ and *.egg-info/
+# beside the sources; keep the documented `mypy --ignore-missing-imports .`
+# gate clean by never type-checking those copies.
+exclude = "(^|/)(build|dist)/|(^|/).*\\.egg-info/"

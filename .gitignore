@@ -7,3 +7,8 @@ __pycache__/
 .vscode/
 .pytest/
 .ui/
+
+# local packaging artifacts
+*.egg-info/
+build/
+dist/

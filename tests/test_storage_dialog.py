@@ -1,4 +1,5 @@
 import threading
+import tkinter as tk
 import unittest
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -6,8 +7,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import ANY, Mock, patch
 
-from maintenance.dialogs import StorageDialog, run_in_thread
+from maintenance.components.coordinator import AppCoordinator
+from maintenance.dialogs import StorageDialog, run_in_thread, show_action_result
 from maintenance.models import FileCandidate
+from tests.support.scheduling import DeferredRunner
 
 
 class FakeTree:
@@ -15,6 +18,7 @@ class FakeTree:
         self.selected = selected
         self.width = 755
         self.widths: dict[str, int] = {}
+        self.rows: list[Any] = []
 
     def selection(self) -> tuple[str, ...]:
         return self.selected
@@ -25,10 +29,26 @@ class FakeTree:
     def column(self, name: str, **options: int) -> None:
         self.widths[name] = options["width"]
 
+    def delete(self, *items: object) -> None:
+        self.rows.clear()
+
+    def get_children(self) -> tuple[()]:
+        return ()
+
+    def insert(self, *args: object, **kwargs: object) -> None:
+        self.rows.append(args)
+
 
 class FakeControl:
+    def __init__(self) -> None:
+        self.state: str | None = None
+        self.text: str | None = None
+
     def config(self, **options: object) -> None:
-        del options
+        state = options.get("state")
+        text = options.get("text")
+        self.state = state if isinstance(state, str) else None
+        self.text = text if isinstance(text, str) else None
 
 
 class FailingAfterWidget:
@@ -78,6 +98,26 @@ class StorageDialogTests(unittest.TestCase):
             on_progress=None,
         )
 
+    def test_show_action_result_appends_first_errors(self) -> None:
+        widget: Any = object()
+
+        with patch("maintenance.dialogs.messagebox.showinfo") as showinfo:
+            show_action_result(widget, "Cleanup", "Done.", ("error one", "error two"))
+
+        showinfo.assert_called_once_with(
+            "Cleanup",
+            "Done.\n\nerror one\nerror two",
+            parent=widget,
+        )
+
+    def test_show_action_result_without_errors_is_clean(self) -> None:
+        widget: Any = object()
+
+        with patch("maintenance.dialogs.messagebox.showinfo") as showinfo:
+            show_action_result(widget, "Cleanup", "Done.", ())
+
+        showinfo.assert_called_once_with("Cleanup", "Done.", parent=widget)
+
     def test_resize_columns_gives_remaining_width_to_file_path(self) -> None:
         dialog: Any = object.__new__(StorageDialog)
         dialog.tree = FakeTree()
@@ -106,7 +146,7 @@ class StorageDialogTests(unittest.TestCase):
                 second,
                 20,
                 datetime(2024, 1, 1, tzinfo=timezone.utc),
-                "Duplicate file",
+                "Verified duplicate",
             ),
         }
         manager = FakeManager()
@@ -132,6 +172,140 @@ class StorageDialogTests(unittest.TestCase):
             dialog.move_selected()
 
         self.assertEqual(manager.paths, [first, second])
+
+    def test_show_candidates_empty_state_is_intentional(self) -> None:
+        dialog: Any = object.__new__(StorageDialog)
+        dialog.tree = FakeTree()
+        dialog.candidates = {}
+        dialog.status_label = FakeControl()
+        dialog.scan_button = FakeControl()
+        dialog.trash_button = FakeControl()
+
+        dialog._show_candidates([])
+
+        self.assertEqual(dialog.status_label.text, "No cleanup candidates found.")
+        self.assertEqual(dialog.scan_button.state, tk.NORMAL)
+        self.assertEqual(dialog.trash_button.state, tk.DISABLED)
+
+    def test_show_candidates_non_empty_state_is_unchanged(self) -> None:
+        candidate = FileCandidate(
+            Path("first.zip"),
+            10,
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            "Large file",
+        )
+        dialog: Any = object.__new__(StorageDialog)
+        dialog.tree = FakeTree()
+        dialog.candidates = {}
+        dialog.status_label = FakeControl()
+        dialog.scan_button = FakeControl()
+        dialog.trash_button = FakeControl()
+
+        dialog._show_candidates([candidate])
+
+        self.assertEqual(
+            dialog.status_label.text,
+            "1 candidate(s) • up to 10.00 B reviewable",
+        )
+        self.assertEqual(dialog.scan_button.state, tk.NORMAL)
+        self.assertEqual(dialog.trash_button.state, tk.NORMAL)
+
+
+class StorageDialogCoordinatorTests(unittest.TestCase):
+    def _dialog(self) -> Any:
+        dialog: Any = object.__new__(StorageDialog)
+        dialog.coordinator = AppCoordinator()
+        dialog.analyzer = Mock()
+        dialog._waiting_for_shared = False
+        dialog._scan_active = False
+        dialog.status_label = FakeControl()
+        dialog.scan_button = FakeControl()
+        dialog.trash_button = FakeControl()
+        dialog._show_candidates = Mock()
+        dialog._set_scan_idle = Mock()
+        return dialog
+
+    def test_second_instance_waits_instead_of_duplicate_scan(self) -> None:
+        owner = self._dialog()
+        waiter = self._dialog()
+        owner.coordinator = waiter.coordinator = AppCoordinator()
+
+        _generation, started = owner.coordinator.begin("storage")
+        self.assertTrue(started)
+
+        waiter.scan()
+
+        self.assertTrue(waiter._waiting_for_shared)
+        self.assertFalse(waiter._scan_active)
+        self.assertEqual(
+            waiter.status_label.text,
+            "Waiting for the active Downloads scan...",
+        )
+        self.assertTrue(owner.coordinator.in_flight("storage"))
+        owner.coordinator.cancel("storage")
+
+    def test_waiter_renders_shared_result_when_owner_finishes(self) -> None:
+        operations = AppCoordinator()
+        owner = self._dialog()
+        waiter = self._dialog()
+        owner.coordinator = waiter.coordinator = operations
+
+        generation, _started = operations.begin("storage")
+        waiter.scan()
+        self.assertTrue(waiter._waiting_for_shared)
+
+        operations.finish("storage", generation, ["shared"])
+
+        waiter._show_candidates.assert_called_once_with(["shared"])
+        self.assertFalse(waiter._waiting_for_shared)
+
+    def test_waiter_retries_when_shared_scan_is_cancelled(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        dialog = self._dialog()
+        dialog.coordinator = coordinator
+
+        generation = coordinator.run("storage", lambda _event, _progress: ["shared"])
+        self.assertIsNotNone(generation)
+        dialog._wait_for_shared_scan()
+        self.assertTrue(dialog._waiting_for_shared)
+
+        coordinator.cancel("storage")
+        self.assertTrue(coordinator.in_flight("storage"))
+
+        runner.run_next()  # the cancelled worker releases the lease + replays
+        runner.run_next()  # the replay delivers the result to the waiter
+
+        self.assertFalse(dialog._waiting_for_shared)
+        dialog._show_candidates.assert_called_once_with(["shared"])
+        self.assertFalse(coordinator.in_flight("storage"))
+
+    def test_cached_result_is_rendered_on_reopen(self) -> None:
+        dialog = self._dialog()
+        dialog.coordinator.store("storage", ["cached"])
+        dialog._show_candidates.reset_mock()
+
+        cached = dialog.coordinator.last_result("storage")
+
+        self.assertEqual(cached, ["cached"])
+
+    def test_cancelling_owner_releases_coordinator(self) -> None:
+        runner = DeferredRunner()
+        dialog = self._dialog()
+        dialog.coordinator = AppCoordinator(
+            runner=runner, deliver=lambda callback: callback()
+        )
+        dialog._scan_active = True
+        dialog.destroy = Mock()
+        dialog.coordinator.run("storage", lambda _event, _progress: ["x"])
+        self.assertTrue(dialog.coordinator.in_flight("storage"))
+
+        dialog._close()
+
+        self.assertTrue(dialog.coordinator.in_flight("storage"))
+        runner.run_next()
+        self.assertFalse(dialog.coordinator.in_flight("storage"))
+        dialog.destroy.assert_called_once_with()
 
 
 if __name__ == "__main__":
