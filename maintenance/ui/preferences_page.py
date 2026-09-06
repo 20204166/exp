@@ -40,6 +40,7 @@ class PreferencesPageCallbacks:
     on_scan: Callable[[], None]
     on_cancel_scan: Callable[[], None]
     on_reset: Callable[[], None]
+    on_appearance_change: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +80,8 @@ class PreferencesPage:
         intervals: list[IntervalControlSpec],
         cards: list[CardControlSpec],
         hide_unavailable_cards: bool,
+        appearance: str = ui_styles.DEFAULT_APPEARANCE,
+        appearance_options: tuple[str, ...] | None = None,
         frame_cls: Callable[..., Any] = tk.Frame,
         label_cls: Callable[..., Any] = tk.Label,
         style_frame_cls: Callable[..., Any] = ttk.Frame,
@@ -88,6 +91,7 @@ class PreferencesPage:
         scrollbar_cls: Callable[..., Any] = ttk.Scrollbar,
         spinbox_cls: Callable[..., Any] = ttk.Spinbox,
         checkbutton_cls: Callable[..., Any] = ttk.Checkbutton,
+        combobox_cls: Callable[..., Any] = ttk.Combobox,
         progressbar_cls: Callable[..., Any] = ttk.Progressbar,
         var_factory: Callable[[], Any] | None = None,
         boolean_var_factory: Callable[[], Any] | None = None,
@@ -102,6 +106,10 @@ class PreferencesPage:
         self._var_factory = var_factory or (lambda: tk.StringVar())
         self._boolean_var_factory = boolean_var_factory or (lambda: tk.BooleanVar())
         self._updating = False
+        self._appearance = appearance
+        self._appearance_options = appearance_options or tuple(
+            sorted(ui_styles.ACCENT_THEMES)
+        )
 
         self.frame_cls = frame_cls
         self.label_cls = label_cls
@@ -112,6 +120,7 @@ class PreferencesPage:
         self.scrollbar_cls = scrollbar_cls
         self.spinbox_cls = spinbox_cls
         self.checkbutton_cls = checkbutton_cls
+        self.combobox_cls = combobox_cls
         self.progressbar_cls = progressbar_cls
 
         self._interval_vars: dict[str, Any] = {}
@@ -374,6 +383,52 @@ class PreferencesPage:
             ),
         )
 
+        appearance_var = self._var_factory()
+        appearance_var.set(self._appearance)
+        self._appearance_var = appearance_var
+
+        def appearance_factory(row: Any) -> Any:
+            holder = self.frame_cls(row, bg=self.colors["card"])
+            holder.pack(side="right")
+            combo = self.combobox_cls(
+                holder,
+                textvariable=appearance_var,
+                state="readonly",
+                values=list(self._appearance_options),
+                width=12,
+                style="App.TSpinbox",
+            )
+            combo.pack(side="left")
+            return holder
+
+        ui_layout.setting_row(
+            body,
+            "Accent theme",
+            appearance_factory,
+            frame_cls=self.frame_cls,
+            label_cls=self.label_cls,
+            colors=self.colors,
+            fonts=self.fonts,
+            help_text=(
+                "Changes the accent colour used for buttons, progress bars "
+                "and the dashboard cards."
+            ),
+        )
+        appearance_var.trace_add(
+            "write",
+            lambda *_args: self._on_appearance_change(),
+        )
+
+    def _on_appearance_change(self) -> None:
+        if self._updating:
+            return
+        callback = self.callbacks.on_appearance_change
+        if callback is None:
+            return
+        var = getattr(self, "_appearance_var", None)
+        if var is not None:
+            callback(var.get())
+
     def _build_reset(self) -> None:
         reset_row = self.frame_cls(self.content, bg=self.colors["background"])
         reset_row.pack(fill="x", pady=(4, 0))
@@ -412,6 +467,10 @@ class PreferencesPage:
             for key, var in self._card_vars.items():
                 var.set(key in preferences.visible_cards)
             self._auto_hide_var.set(preferences.hide_unavailable_cards)
+            appearance = getattr(preferences, "appearance", self._appearance)
+            var = getattr(self, "_appearance_var", None)
+            if var is not None:
+                var.set(appearance)
         finally:
             self._updating = False
 

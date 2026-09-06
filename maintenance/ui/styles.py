@@ -75,6 +75,69 @@ STYLE_BAR_ANALYSIS = "Analysis.Horizontal.TProgressbar"
 STYLE_BAR_COMPLETE = "Complete.Horizontal.TProgressbar"
 STYLE_BAR_CARD = "Card.Horizontal.TProgressbar"
 
+DEFAULT_APPEARANCE = "indigo"
+
+NODE_COLORS: dict[str, str] = {
+    "indigo": "#4F46E5",
+    "emerald": "#047857",
+    "rose": "#E11D48",
+    "amber": "#B45309",
+    "sky": "#0369A1",
+    "violet": "#7C3AED",
+    "teal": "#0F766E",
+    "slate": "#475569",
+}
+
+ACCENT_THEMES: dict[str, dict[str, str]] = {
+    "indigo": {
+        "accent": "#4F46E5",
+        "accent_active": "#4338CA",
+        "primary_disabled": "#A5B4FC",
+        "primary_disabled_text": "#EEF2FF",
+    },
+    "emerald": {
+        "accent": "#047857",
+        "accent_active": "#065F46",
+        "primary_disabled": "#A7F3D0",
+        "primary_disabled_text": "#ECFDF5",
+    },
+    "rose": {
+        "accent": "#E11D48",
+        "accent_active": "#BE123C",
+        "primary_disabled": "#FDA4AF",
+        "primary_disabled_text": "#FFF1F2",
+    },
+    "amber": {
+        "accent": "#B45309",
+        "accent_active": "#92400E",
+        "primary_disabled": "#FCD34D",
+        "primary_disabled_text": "#FFFBEB",
+    },
+    "sky": {
+        "accent": "#0369A1",
+        "accent_active": "#075985",
+        "primary_disabled": "#7DD3FC",
+        "primary_disabled_text": "#F0F9FF",
+    },
+}
+
+
+def accent_theme_colors(
+    theme: str,
+    *,
+    base: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Return a full colour token map with one accent theme applied.
+
+    Unknown themes fall back to the default appearance, so a stale persisted
+    choice can never break style registration.
+    """
+
+    tokens = ACCENT_THEMES.get(theme, ACCENT_THEMES[DEFAULT_APPEARANCE])
+    colors = dict(COLORS if base is None else base)
+    colors.update(tokens)
+    return colors
+
 
 def configure_app_styles(
     style: Any,

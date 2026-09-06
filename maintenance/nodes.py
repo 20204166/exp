@@ -18,15 +18,30 @@ Invariants that every caller must preserve:
   action; capability is never inferred from a hostname or from ``is_local``.
 """
 
+import secrets
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol
 
+from maintenance.models import DashboardSnapshot
+
 LOCAL_NODE_ID = "local"
 LOCAL_NODE_HOSTNAME = "localhost"
 LOCAL_DISPLAY_NAME = "This System"
+NODE_SNAPSHOT_SCHEMA_VERSION = 1
+
+
+def generate_node_secret() -> str:
+    """Return a fresh 256-bit node credential as hex text.
+
+    The secret authenticates every request this machine sends for one remote
+    node; it is generated at pairing time and never travels on the wire.
+    """
+
+    return secrets.token_hex(32)
 
 
 class NodeStatus(str, Enum):
@@ -96,9 +111,53 @@ class NodeDescriptor:
     status: NodeStatus
     capabilities: frozenset[NodeCapability]
     platform: str | None = None
+    color: str | None = None
 
     def has(self, capability: NodeCapability) -> bool:
         return capability in self.capabilities
+
+
+@dataclass(frozen=True, slots=True)
+class NodeSnapshot:
+    """Versioned, node-bound read snapshot for one machine.
+
+    Carries the node identity and trust/capability state alongside the
+    dashboard payload so consumers never have to guess which node produced a
+    result. ``is_stale`` expresses freshness against a caller-supplied age
+    bound so offline/stale presentation stays in one place.
+    """
+
+    node_id: NodeId
+    display_name: str
+    hostname: str
+    platform: str | None
+    status: NodeStatus
+    capabilities: frozenset[NodeCapability]
+    scanned_at: datetime
+    dashboard: DashboardSnapshot | None = None
+    schema_version: int = NODE_SNAPSHOT_SCHEMA_VERSION
+
+    def is_stale(
+        self,
+        *,
+        now: datetime | None = None,
+        max_age: timedelta,
+    ) -> bool:
+        current = datetime.now(timezone.utc).astimezone() if now is None else now
+        return current - self.scanned_at > max_age
+
+
+@dataclass(frozen=True, slots=True)
+class NodeCredentials:
+    """The shared secret authenticating one remote node's requests.
+
+    ``secret`` is 256-bit hex text generated at pairing time; the replay and
+    freshness protections live in the authenticated transport, not here.
+    """
+
+    node_id: NodeId
+    secret: str
+    created_at: float
 
 
 def local_capabilities() -> frozenset[NodeCapability]:
@@ -504,3 +563,37 @@ class NodeRegistry:
         self._discovered.pop(node_id, None)
         self._contexts[node_id] = context
         return descriptor
+
+    def revoke_trusted(self, node_id: NodeId) -> None:
+        """Remove one trusted/authorised node from the registry.
+
+        The local node can never be revoked; discovered candidates and
+        placeholders that were never trusted are rejected. When the revoked
+        node was selected, selection returns to the local node.
+        """
+
+        context = self.context(node_id)
+        if context.descriptor.is_local:
+            raise ValueError("The local node cannot be revoked")
+        if context.descriptor.trust not in (
+            NodeTrustState.TRUSTED,
+            NodeTrustState.AUTHORISED,
+        ):
+            raise ValueError(f"Node is not trusted: {node_id}")
+        del self._contexts[node_id]
+        if self._selected_id == node_id:
+            self._selected_id = self._local_id
+
+    def set_display_name(self, node_id: NodeId, display_name: str) -> NodeDescriptor:
+        """Rename one registered node, returning its updated descriptor."""
+
+        context = self.context(node_id)
+        context.descriptor = replace(context.descriptor, display_name=display_name)
+        return context.descriptor
+
+    def set_color(self, node_id: NodeId, color: str | None) -> NodeDescriptor:
+        """Set one registered node's display colour, returning its descriptor."""
+
+        context = self.context(node_id)
+        context.descriptor = replace(context.descriptor, color=color)
+        return context.descriptor

@@ -24,6 +24,7 @@ from typing import Any, cast
 
 from maintenance.components.catalog import ResourceFeatureCatalog
 from maintenance.components.coordinator import RefreshIntervals
+from maintenance.ui.styles import ACCENT_THEMES, DEFAULT_APPEARANCE
 
 LOGGER = logging.getLogger(__name__)
 
@@ -92,6 +93,7 @@ class AppPreferences:
     refresh_intervals: RefreshIntervals
     visible_cards: frozenset[str]
     hide_unavailable_cards: bool
+    appearance: str = DEFAULT_APPEARANCE
 
     @classmethod
     def defaults(cls) -> "AppPreferences":
@@ -100,7 +102,18 @@ class AppPreferences:
             refresh_intervals=intervals,
             visible_cards=frozenset(intervals.as_dict()),
             hide_unavailable_cards=False,
+            appearance=DEFAULT_APPEARANCE,
         )
+
+    def with_appearance(self, theme: str) -> "AppPreferences":
+        """Return a copy with the accent theme changed and validated."""
+
+        if not isinstance(theme, str) or theme not in ACCENT_THEMES:
+            raise ValueError(
+                f"Unknown appearance: {theme}. "
+                f"Choose from {', '.join(sorted(ACCENT_THEMES))}"
+            )
+        return replace(self, appearance=theme)
 
     def with_interval(self, key: str, milliseconds: int) -> "AppPreferences":
         """Return a copy with one component interval changed and validated."""
@@ -310,10 +323,16 @@ class PreferencesStore:
             LOGGER.warning("Preferences hide flag is malformed; using defaults")
             return AppPreferences.defaults()
 
+        appearance = data.get("appearance", DEFAULT_APPEARANCE)
+        if not isinstance(appearance, str) or appearance not in ACCENT_THEMES:
+            LOGGER.warning("Preferences appearance is invalid; using default theme")
+            appearance = DEFAULT_APPEARANCE
+
         return AppPreferences(
             refresh_intervals=RefreshIntervals(**parsed_intervals),
             visible_cards=frozenset(visible_data),
             hide_unavailable_cards=hide_data,
+            appearance=appearance,
         )
 
     @staticmethod
@@ -323,6 +342,7 @@ class PreferencesStore:
             "refresh_intervals_ms": preferences.refresh_intervals.as_dict(),
             "visible_cards": sorted(preferences.visible_cards),
             "hide_unavailable_cards": preferences.hide_unavailable_cards,
+            "appearance": preferences.appearance,
         }
         return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 

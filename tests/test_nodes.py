@@ -276,6 +276,48 @@ class DiscoveredBoundaryTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             registry.promote_to_trusted(NodeId("never-seen"))
 
+    def test_revoke_trusted_removes_node_and_deselects_to_local(self) -> None:
+        registry = NodeRegistry(_local_context())
+        registry.update_discovered(_candidate("peer-a"))
+        registry.promote_to_trusted(NodeId("peer-a"))
+        registry.register_context(
+            _peer_context("peer-a", "Peer A", NodeTrustState.TRUSTED)
+        )
+        registry.select(NodeId("peer-a"))
+        registry.revoke_trusted(NodeId("peer-a"))
+        self.assertEqual(registry.selected_id(), NodeId(LOCAL_NODE_ID))
+        with self.assertRaises(KeyError):
+            registry.context(NodeId("peer-a"))
+
+    def test_revoke_local_node_is_rejected(self) -> None:
+        registry = NodeRegistry(_local_context())
+        with self.assertRaises(ValueError):
+            registry.revoke_trusted(NodeId(LOCAL_NODE_ID))
+
+    def test_revoke_untrusted_node_is_rejected(self) -> None:
+        registry = NodeRegistry(_local_context())
+        registry.register_context(
+            _peer_context("peer", "Peer", NodeTrustState.DISCOVERED)
+        )
+        with self.assertRaises(ValueError):
+            registry.revoke_trusted(NodeId("peer"))
+
+    def test_set_display_name_renames_and_returns_descriptor(self) -> None:
+        registry = NodeRegistry(_local_context())
+        registry.register_context(_peer_context("peer", "Old", NodeTrustState.TRUSTED))
+        descriptor = registry.set_display_name(NodeId("peer"), "New Name")
+        self.assertEqual(descriptor.display_name, "New Name")
+        self.assertEqual(
+            registry.context(NodeId("peer")).descriptor.display_name, "New Name"
+        )
+
+    def test_set_color_updates_descriptor(self) -> None:
+        registry = NodeRegistry(_local_context())
+        registry.register_context(_peer_context("peer", "Peer", NodeTrustState.TRUSTED))
+        descriptor = registry.set_color(NodeId("peer"), "emerald")
+        self.assertEqual(descriptor.color, "emerald")
+        self.assertEqual(registry.context(NodeId("peer")).descriptor.color, "emerald")
+
 
 class NodeRefTests(unittest.TestCase):
     def test_process_ref_is_node_bound(self) -> None:

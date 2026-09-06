@@ -211,7 +211,10 @@ class LiveResizeTests(unittest.TestCase):
                 ),
                 0,
             )
-            self.assertEqual(home.category_keys, ("preferences",))
+            self.assertEqual(
+                home.category_keys,
+                ("preferences", "nodes", "cluster"),
+            )
 
             # Settings Home -> Preferences page (real navigation via the card button)
             home.category_button("preferences").invoke()
@@ -252,7 +255,7 @@ class LiveResizeTests(unittest.TestCase):
             self.assertIs(window.settings_home, first_home)
             self.assertEqual(
                 window._page_router.registered_keys,
-                ("dashboard", "settings", "preferences"),
+                ("dashboard", "settings", "preferences", "nodes", "cluster"),
             )
 
             # Navigation alone schedules no timers and starts no scans

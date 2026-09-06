@@ -221,6 +221,26 @@ class ProcessDialogCoordinatorTests(unittest.TestCase):
         self.assertFalse(dialog.coordinator.in_flight("process"))
         dialog._show_processes.assert_called_once()
 
+    def test_owner_error_clears_active_state(self) -> None:
+        runner = DeferredRunner()
+        dialog = self._dialog()
+        dialog.coordinator = AppCoordinator(
+            runner=runner, deliver=lambda callback: callback()
+        )
+        dialog.analyzer.process_candidates.side_effect = RuntimeError("boom")
+        dialog._show_error = Mock()
+
+        dialog.refresh()
+
+        self.assertTrue(dialog._refresh_active)
+        self.assertTrue(dialog.coordinator.in_flight("process"))
+
+        runner.run_next()
+
+        self.assertFalse(dialog._refresh_active)
+        self.assertFalse(dialog.coordinator.in_flight("process"))
+        dialog._show_error.assert_called_once_with("boom")
+
 
 class ActivityClassificationTests(unittest.TestCase):
     def test_activity_label_uses_delta_threshold(self) -> None:

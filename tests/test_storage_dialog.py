@@ -8,7 +8,14 @@ from typing import Any
 from unittest.mock import ANY, Mock, patch
 
 from maintenance.components.coordinator import AppCoordinator
-from maintenance.dialogs import StorageDialog, run_in_thread, show_action_result
+from maintenance.dialogs import (
+    StorageDialog,
+    _dispatch_coordinated_shared_result,
+    _register_coordinated_waiter,
+    _start_coordinated_dialog_scan,
+    run_in_thread,
+    show_action_result,
+)
 from maintenance.models import FileCandidate
 from tests.support.scheduling import DeferredRunner
 
@@ -57,6 +64,37 @@ class FailingAfterWidget:
 
     def after(self, _delay: int, _callback: object, *_args: object) -> None:
         raise RuntimeError("event loop is stopping")
+
+
+class _FakeCoordinatedDialog:
+    def __init__(
+        self,
+        coordinator: AppCoordinator,
+        *,
+        operation_key: str = "storage",
+    ) -> None:
+        self.coordinator = coordinator
+        self._operation_key = operation_key
+        self._scan_active = False
+        self._waiting_for_shared = False
+        self.status_label = Mock()
+        self.owner_results: list[Any] = []
+        self.shared_results: list[Any] = []
+        self.retries: list[bool] = []
+        self.owner_started = 0
+
+    def record_owner(self, result: Any) -> None:
+        self.owner_results.append(result)
+
+    def record_shared(self, _key: str, result: Any | None) -> None:
+        self._waiting_for_shared = False
+        self.shared_results.append(result)
+
+    def retry(self) -> None:
+        self.retries.append(True)
+
+    def started(self) -> None:
+        self.owner_started += 1
 
 
 class FakeManager:
@@ -341,6 +379,156 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         runner.run_next()
         self.assertFalse(dialog.coordinator.in_flight("storage"))
         dialog.destroy.assert_called_once_with()
+
+    def test_owner_error_clears_active_state(self) -> None:
+        runner = DeferredRunner()
+        dialog: Any = object.__new__(StorageDialog)
+        dialog.coordinator = AppCoordinator(
+            runner=runner, deliver=lambda callback: callback()
+        )
+        dialog.analyzer = Mock()
+        dialog.analyzer.storage_candidates.side_effect = RuntimeError("boom")
+        dialog._waiting_for_shared = False
+        dialog._scan_active = False
+        dialog.status_label = FakeControl()
+        dialog.scan_button = FakeControl()
+        dialog.trash_button = FakeControl()
+        dialog._show_candidates = Mock()
+        dialog._show_error = Mock()
+
+        dialog.scan()
+
+        self.assertTrue(dialog._scan_active)
+        self.assertTrue(dialog.coordinator.in_flight("storage"))
+
+        runner.run_next()
+
+        self.assertFalse(dialog._scan_active)
+        self.assertFalse(dialog.coordinator.in_flight("storage"))
+        dialog._show_error.assert_called_once_with("boom")
+
+
+class CoordinatedDialogScanLifecycleTests(unittest.TestCase):
+    def _start(self, dialog: Any, coordinator: AppCoordinator) -> bool:
+        return _start_coordinated_dialog_scan(
+            dialog,
+            task_factory=lambda _event, _progress: ["ok"],
+            active_attr="_scan_active",
+            on_result=dialog.record_owner,
+            on_error=lambda message: None,
+            on_progress=None,
+            waiting_text="Waiting...",
+            subscribe_callback=dialog.record_shared,
+            on_owner_started=dialog.started,
+        )
+
+    def test_owner_start_sets_active_and_runs_once_without_subscribing(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        dialog = _FakeCoordinatedDialog(coordinator)
+
+        started = self._start(dialog, coordinator)
+
+        self.assertTrue(started)
+        self.assertTrue(dialog._scan_active)
+        self.assertFalse(dialog._waiting_for_shared)
+        self.assertEqual(dialog.owner_started, 1)
+        self.assertEqual(len(runner.workers), 1)
+
+        runner.run_next()
+
+        self.assertEqual(dialog.owner_results, [["ok"]])
+        self.assertEqual(dialog.shared_results, [])
+        self.assertFalse(coordinator.in_flight("storage"))
+
+    def test_coalesced_trigger_subscribes_once_as_waiter(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        generation = coordinator.run("storage", lambda _event, _progress: ["owner"])
+        self.assertIsNotNone(generation)
+
+        waiter = _FakeCoordinatedDialog(coordinator)
+        started = self._start(waiter, coordinator)
+
+        self.assertFalse(started)
+        self.assertTrue(waiter._waiting_for_shared)
+        self.assertFalse(waiter._scan_active)
+
+        runner.run_next()
+
+        self.assertEqual(waiter.shared_results, [["owner"]])
+        self.assertFalse(waiter._waiting_for_shared)
+
+    def test_repeated_wait_does_not_double_subscribe(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        coordinator.run("storage", lambda _event, _progress: ["owner"])
+        waiter = _FakeCoordinatedDialog(coordinator)
+        self._start(waiter, coordinator)
+        _register_coordinated_waiter(
+            waiter,
+            waiting_text="Waiting...",
+            subscribe_callback=waiter.record_shared,
+        )
+
+        runner.run_next()
+
+        self.assertEqual(waiter.shared_results, [["owner"]])
+
+    def test_existing_active_run_is_a_noop(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        dialog = _FakeCoordinatedDialog(coordinator)
+        dialog._scan_active = True
+
+        started = self._start(dialog, coordinator)
+
+        self.assertFalse(started)
+        self.assertEqual(len(runner.workers), 0)
+        self.assertFalse(coordinator.in_flight("storage"))
+
+    def test_shared_result_present_is_dispatched(self) -> None:
+        dialog = _FakeCoordinatedDialog(AppCoordinator())
+        dialog._waiting_for_shared = True
+
+        _dispatch_coordinated_shared_result(
+            dialog,
+            result=["shared"],
+            retry=dialog.retry,
+            on_shared_result=dialog.record_owner,
+        )
+
+        self.assertFalse(dialog._waiting_for_shared)
+        self.assertEqual(dialog.owner_results, [["shared"]])
+        self.assertEqual(dialog.retries, [])
+
+    def test_shared_result_none_retries(self) -> None:
+        dialog = _FakeCoordinatedDialog(AppCoordinator())
+        dialog._waiting_for_shared = True
+
+        _dispatch_coordinated_shared_result(
+            dialog,
+            result=None,
+            retry=dialog.retry,
+            on_shared_result=dialog.record_owner,
+        )
+
+        self.assertFalse(dialog._waiting_for_shared)
+        self.assertEqual(dialog.retries, [True])
+        self.assertEqual(dialog.owner_results, [])
+
+    def test_process_and_storage_keys_stay_isolated_on_one_coordinator(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        coordinator.run("process", lambda _event, _progress: ["process-result"])
+        storage = _FakeCoordinatedDialog(coordinator, operation_key="storage")
+
+        started = self._start(storage, coordinator)
+
+        self.assertTrue(started)
+        self.assertFalse(storage._waiting_for_shared)
+        self.assertTrue(coordinator.in_flight("process"))
+        self.assertTrue(coordinator.in_flight("storage"))
 
 
 if __name__ == "__main__":

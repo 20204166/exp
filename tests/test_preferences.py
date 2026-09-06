@@ -316,5 +316,36 @@ class DefaultPreferencesPathTests(unittest.TestCase):
         )
 
 
+class AppearancePreferenceTests(unittest.TestCase):
+    def test_defaults_use_the_default_appearance(self) -> None:
+        self.assertEqual(AppPreferences.defaults().appearance, "indigo")
+
+    def test_with_appearance_validates_theme(self) -> None:
+        preferences = AppPreferences.defaults()
+        changed = preferences.with_appearance("emerald")
+        self.assertEqual(changed.appearance, "emerald")
+        self.assertEqual(preferences.appearance, "indigo")
+        with self.assertRaises(ValueError):
+            preferences.with_appearance("not-a-theme")
+
+    def test_appearance_persists_through_store(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences.json"
+            store = PreferencesStore(path)
+            saved = store.load().with_appearance("rose")
+            store.save(saved)
+            self.assertEqual(PreferencesStore(path).load().appearance, "rose")
+
+    def test_invalid_appearance_falls_back_to_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences.json"
+            store = PreferencesStore(path)
+            store.save(AppPreferences.defaults())
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["appearance"] = "bogus"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            self.assertEqual(store.load().appearance, "indigo")
+
+
 if __name__ == "__main__":
     unittest.main()

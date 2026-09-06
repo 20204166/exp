@@ -237,6 +237,84 @@ def close_coordinated_dialog(
     dialog.destroy()
 
 
+def _register_coordinated_waiter(
+    dialog: Any,
+    *,
+    waiting_text: str,
+    subscribe_callback: Callable[[str, Any | None], None],
+) -> None:
+    """Subscribe one dialog to an in-flight shared scan exactly once."""
+
+    if dialog._waiting_for_shared:
+        return
+    dialog._waiting_for_shared = True
+    dialog.status_label.config(text=waiting_text)
+    dialog.coordinator.subscribe(dialog._operation_key, subscribe_callback)
+
+
+def _start_coordinated_dialog_scan(
+    dialog: Any,
+    *,
+    task_factory: Callable[[threading.Event, Callable[[str], None]], Any],
+    active_attr: str,
+    on_result: Callable[[Any], None],
+    on_error: Callable[[str], None],
+    on_progress: Callable[[str], None] | None,
+    waiting_text: str,
+    subscribe_callback: Callable[[str, Any | None], None],
+    on_owner_started: Callable[[], None],
+) -> bool:
+    """Start or join one keyed coordinator scan for a dialog.
+
+    Returns whether the dialog owns a fresh run. When another caller already
+    owns the operation (``coordinator.run`` coalesces), the dialog subscribes
+    once as a waiter and receives the shared result later. The specialised
+    dialog keeps task construction, result rendering, button state, and error
+    wording; this helper owns only the owner/waiter mechanics shared by the
+    process and storage dialogs.
+    """
+
+    if getattr(dialog, active_attr):
+        return False
+    generation = dialog.coordinator.run(
+        dialog._operation_key,
+        task_factory,
+        on_result=lambda _key, result: on_result(result),
+        on_error=lambda _key, message: on_error(message),
+        on_progress=(
+            (lambda _key, message: on_progress(message))
+            if on_progress is not None
+            else None
+        ),
+    )
+    if generation is None:
+        _register_coordinated_waiter(
+            dialog,
+            waiting_text=waiting_text,
+            subscribe_callback=subscribe_callback,
+        )
+        return False
+    setattr(dialog, active_attr, True)
+    on_owner_started()
+    return True
+
+
+def _dispatch_coordinated_shared_result(
+    dialog: Any,
+    *,
+    result: Any | None,
+    retry: Callable[[], None],
+    on_shared_result: Callable[[Any], None],
+) -> None:
+    """Deliver one shared coordinator result to a waiting dialog."""
+
+    dialog._waiting_for_shared = False
+    if result is None:
+        retry()
+        return
+    on_shared_result(result)
+
+
 class ResourceCard(tk.Frame):
     """Clickable summary card for one system resource."""
 
@@ -381,6 +459,21 @@ class ResourceCard(tk.Frame):
         self.progress.config(value=summary.percent or 0)
         self.details_label.config(text=action_label_text(summary.actionable))
         self._render_metrics(summary)
+
+    def apply_colors(self, colors: dict[str, str]) -> None:
+        """Re-colour an already-built card after an appearance change."""
+
+        self.colors = colors
+        self.configure(bg=colors["card"], highlightbackground=colors["border"])
+        self.title_label.config(bg=colors["card"], fg=colors["secondary"])
+        self.value_label.config(bg=colors["card"], fg=colors["text"])
+        self.subtitle_label.config(bg=colors["card"], fg=colors["secondary"])
+        self.metrics_frame.configure(bg=colors["card"])
+        for row, name_label, value_label in getattr(self, "metric_rows", []):
+            row.configure(bg=colors["card"])
+            name_label.config(bg=colors["card"])
+            value_label.config(bg=colors["card"])
+        self.details_label.config(bg=colors["card"], fg=colors["accent"])
 
     def reset_summary(self) -> None:
         """Restore the intentionally empty state before this node is scanned."""
@@ -741,17 +834,19 @@ class ProcessDialog(tk.Toplevel):
                 lambda: self.analyzer.process_candidates(),
             )
 
-        generation = self.coordinator.run(
-            self._operation_key,
-            process_task,
-            on_result=lambda _key, processes: self._on_refresh_result(processes),
-            on_error=lambda _key, message: self._on_refresh_error(message),
+        _start_coordinated_dialog_scan(
+            self,
+            task_factory=process_task,
+            active_attr="_refresh_active",
+            on_result=self._on_refresh_result,
+            on_error=self._on_refresh_error,
+            on_progress=None,
+            waiting_text="Waiting for the active process scan...",
+            subscribe_callback=self._on_shared_process_result,
+            on_owner_started=self._begin_owner_refresh,
         )
-        if generation is None:
-            self._wait_for_shared_scan()
-            return
 
-        self._refresh_active = True
+    def _begin_owner_refresh(self) -> None:
         self.quit_button.config(state=tk.DISABLED)
         self.refresh_button.config(state=tk.DISABLED)
         self.status_label.config(text="Analyzing processes...")
@@ -765,22 +860,26 @@ class ProcessDialog(tk.Toplevel):
         self._show_error(message)
 
     def _wait_for_shared_scan(self) -> None:
-        if self._waiting_for_shared:
-            return
-        self._waiting_for_shared = True
-        self.status_label.config(text="Waiting for the active process scan...")
-        self.coordinator.subscribe(self._operation_key, self._on_shared_process_result)
+        _register_coordinated_waiter(
+            self,
+            waiting_text="Waiting for the active process scan...",
+            subscribe_callback=self._on_shared_process_result,
+        )
 
     def _on_shared_process_result(
         self,
         _key: str,
         result: Any | None,
     ) -> None:
-        self._waiting_for_shared = False
-        if result is None:
-            self.refresh()
-            return
-        self._show_processes(result)
+        _dispatch_coordinated_shared_result(
+            self,
+            result=result,
+            retry=self.refresh,
+            on_shared_result=self._show_shared_processes,
+        )
+
+    def _show_shared_processes(self, processes: list[ProcessCandidate]) -> None:
+        self._show_processes(processes)
         self.refresh_button.config(state=tk.NORMAL)
 
     def _finish_refresh(self) -> None:
@@ -1170,18 +1269,19 @@ class StorageDialog(tk.Toplevel):
                 lambda: self.analyzer.storage_candidates(),
             )
 
-        generation = self.coordinator.run(
-            self._operation_key,
-            scan_task,
-            on_result=lambda _key, candidates: self._on_scan_result(candidates),
-            on_error=lambda _key, message: self._on_scan_error(message),
-            on_progress=lambda _key, message: self._show_scan_progress(message),
+        _start_coordinated_dialog_scan(
+            self,
+            task_factory=scan_task,
+            active_attr="_scan_active",
+            on_result=self._on_scan_result,
+            on_error=self._on_scan_error,
+            on_progress=self._show_scan_progress,
+            waiting_text="Waiting for the active Downloads scan...",
+            subscribe_callback=self._on_shared_scan_result,
+            on_owner_started=self._begin_owner_scan,
         )
-        if generation is None:
-            self._wait_for_shared_scan()
-            return
 
-        self._scan_active = True
+    def _begin_owner_scan(self) -> None:
         self.scan_button.config(
             state=tk.NORMAL,
             text="Cancel Scan",
@@ -1202,19 +1302,23 @@ class StorageDialog(tk.Toplevel):
         self._show_error(message)
 
     def _wait_for_shared_scan(self) -> None:
-        if self._waiting_for_shared:
-            return
-        self._waiting_for_shared = True
-        self.status_label.config(text="Waiting for the active Downloads scan...")
-        self.coordinator.subscribe(self._operation_key, self._on_shared_scan_result)
+        _register_coordinated_waiter(
+            self,
+            waiting_text="Waiting for the active Downloads scan...",
+            subscribe_callback=self._on_shared_scan_result,
+        )
 
     def _on_shared_scan_result(self, _key: str, result: Any | None) -> None:
-        self._waiting_for_shared = False
-        if result is None:
-            self.scan()
-            return
+        _dispatch_coordinated_shared_result(
+            self,
+            result=result,
+            retry=self.scan,
+            on_shared_result=self._show_shared_candidates,
+        )
+
+    def _show_shared_candidates(self, candidates: list[FileCandidate]) -> None:
         self._set_scan_idle()
-        self._show_candidates(result)
+        self._show_candidates(candidates)
 
     def cancel_scan(self) -> None:
         if not self._scan_active:

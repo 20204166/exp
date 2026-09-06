@@ -59,6 +59,7 @@ def make_page(
         scrollbar_cls=recorder.scrollbar_cls(),
         spinbox_cls=recorder.spinbox_cls(),
         checkbutton_cls=recorder.checkbutton_cls(),
+        combobox_cls=recorder.combobox_cls(),
         progressbar_cls=recorder.progressbar_cls(),
         var_factory=lambda: FakeVar(""),
         boolean_var_factory=lambda: FakeVar(False),

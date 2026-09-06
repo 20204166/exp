@@ -4,13 +4,21 @@ import threading
 import time
 import tkinter as tk
 from collections.abc import Callable
+from dataclasses import replace
 from queue import Empty, Queue
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 from typing import Any, cast
 
 import algo
 from maintenance import __version__
 from maintenance.actions import FileManager, ProcessManager
+from maintenance.cluster import (
+    ClusterSaveError,
+    ClusterState,
+    ClusterStore,
+    default_cluster_path,
+    trusted_node_record,
+)
 from maintenance.components import (
     DOWNLOADS_SCAN_CANCELLED,
     ResourceFeatureCatalog,
@@ -35,6 +43,7 @@ from maintenance.dialogs import (
     ProcessDialog,
     ResourceCard,
     StorageDialog,
+    run_in_thread,
 )
 from maintenance.health import health_warnings
 from maintenance.models import (
@@ -47,8 +56,11 @@ from maintenance.nodes import (
     LOCAL_NODE_ID,
     NodeCapability,
     NodeContext,
+    NodeDescriptor,
     NodeId,
     NodeRegistry,
+    NodeStatus,
+    NodeTrustState,
     local_node_descriptor,
     node_operation_key,
 )
@@ -59,7 +71,14 @@ from maintenance.preferences import (
     PreferencesStore,
     default_preferences_path,
 )
+from maintenance.remote import (
+    READ_CAPABILITIES,
+    AuthenticatedNodeProvider,
+    SocketRemoteTransport,
+)
+from maintenance.ui import cluster_page as ui_cluster
 from maintenance.ui import layout as ui_layout
+from maintenance.ui import nodes_connections as ui_nodes
 from maintenance.ui import preferences_page as ui_preferences
 from maintenance.ui import scan_status
 from maintenance.ui import settings_home as ui_settings_home
@@ -72,6 +91,8 @@ LOGGER = logging.getLogger(__name__)
 DASHBOARD_PAGE = "dashboard"
 SETTINGS_PAGE = "settings"
 PREFERENCES_PAGE = "preferences"
+NODES_PAGE = "nodes"
+CLUSTER_PAGE = "cluster"
 
 
 class AppWindow:
@@ -106,6 +127,7 @@ class AppWindow:
         master: tk.Tk | None = None,
         *,
         preferences_store: PreferencesStore | None = None,
+        cluster_store: ClusterStore | None = None,
     ) -> None:
         self.analyzer = algo.Analyzer(memory_test_percent=1.0)
         self.process_manager = ProcessManager()
@@ -114,6 +136,8 @@ class AppWindow:
             default_preferences_path()
         )
         self._preferences = self._preferences_store.load()
+        self._cluster_store = cluster_store or ClusterStore(default_cluster_path())
+        self._cluster_state = self._cluster_store.load()
         self.snapshot: DashboardSnapshot | None = None
         self._is_closing = False
         self._pending_after_ids: set[str] = set()
@@ -142,6 +166,7 @@ class AppWindow:
         self._selected_node_id: NodeId | None = None
         self._discovery_tick_id: str | None = None
         self._build_local_node_context()
+        self._restore_trusted_nodes()
 
         self.master = master or tk.Tk()
         self.master.title("System Analyzer")
@@ -185,16 +210,63 @@ class AppWindow:
         self._node_registry.register_context(context)
         self._selected_node_id = self._node_registry.select(context.node_id)
 
+    def _restore_trusted_nodes(self) -> None:
+        """Restore persisted trusted nodes into the registry at startup.
+
+        Each record becomes a trusted placeholder (no provider/scheduler), so
+        it is never selectable until pairing attaches an operational read
+        provider. Display overrides and colours from the store are applied.
+        """
+
+        registry = self.__dict__.get("_node_registry")
+        state = self.__dict__.get("_cluster_state")
+        if registry is None or state is None:
+            return
+        for record in state.trusted_nodes:
+            if record.node_id == LOCAL_NODE_ID:
+                continue
+            node_id = NodeId(record.node_id)
+            try:
+                registry.context(node_id)
+                continue
+            except KeyError:
+                pass
+            descriptor = NodeDescriptor(
+                id=node_id,
+                display_name=record.display_name,
+                hostname=record.hostname,
+                is_local=False,
+                trust=NodeTrustState.TRUSTED,
+                status=NodeStatus.UNKNOWN,
+                capabilities=record.capabilities,
+                platform=record.platform,
+                color=record.color,
+            )
+            context = NodeContext(
+                descriptor=descriptor,
+                provider=None,
+                process_manager=None,
+                file_manager=None,
+                scheduler=None,
+                coordinator=None,
+            )
+            try:
+                registry.register_context(context)
+            except ValueError as error:
+                LOGGER.warning(
+                    "Failed to restore trusted node %s: %s", record.node_id, error
+                )
+
     @property
     def colors(self) -> dict[str, str]:
-        return {
-            "background": self.BACKGROUND,
-            "card": self.CARD_BACKGROUND,
-            "text": self.TEXT_PRIMARY,
-            "secondary": self.TEXT_SECONDARY,
-            "accent": self.ACCENT,
-            "border": self.BORDER,
-        }
+        preferences = self.__dict__.get("_preferences")
+        appearance = (
+            preferences.appearance
+            if preferences is not None
+            and isinstance(getattr(preferences, "appearance", None), str)
+            else ui_styles.DEFAULT_APPEARANCE
+        )
+        return ui_styles.accent_theme_colors(appearance)
 
     def _scan_coordinator_state(self) -> ScanCoordinator:
         coordinator = self.__dict__.get("_scan_coordinator")
@@ -247,6 +319,8 @@ class AppWindow:
         self._page_router.register(
             PageSpec(PREFERENCES_PAGE, self._build_preferences_page)
         )
+        self._page_router.register(PageSpec(NODES_PAGE, self._build_nodes_page))
+        self._page_router.register(PageSpec(CLUSTER_PAGE, self._build_cluster_page))
         self._page_router.show(DASHBOARD_PAGE)
         self._reconcile_cards_and_polling()
 
@@ -294,8 +368,16 @@ class AppWindow:
             style="Neutral.TButton",
             cursor="hand2",
         )
+        self.cluster_button = ttk.Button(
+            self.header_actions,
+            text="All Systems",
+            command=self._show_cluster_page,
+            style="Neutral.TButton",
+            cursor="hand2",
+        )
         self._build_node_selector(self.header_actions)
         self.settings_button.pack(anchor="e")
+        self.cluster_button.pack(anchor="e", padx=(8, 0))
 
         self.status_label = ttk.Label(
             self.header_actions,
@@ -399,7 +481,23 @@ class AppWindow:
                     "Refresh intervals, visible dashboard cards, scan "
                     "behaviour, and interface options."
                 ),
-            )
+            ),
+            ui_settings_home.SettingsCategorySpec(
+                key="nodes",
+                title="Nodes & Connections",
+                description=(
+                    "Discover peers, pair trusted nodes, manage manual hosts, "
+                    "and control local-network discovery."
+                ),
+            ),
+            ui_settings_home.SettingsCategorySpec(
+                key="cluster",
+                title="All Systems",
+                description=(
+                    "Overview of every known machine and its connection, "
+                    "trust, and capability state."
+                ),
+            ),
         ]
 
     def _build_preferences_page(self, parent: Any) -> Any:
@@ -418,10 +516,12 @@ class AppWindow:
                 on_scan=self.handle_analyze,
                 on_cancel_scan=self._cancel_analysis,
                 on_reset=self._on_reset,
+                on_appearance_change=self._on_appearance_change,
             ),
             intervals=self._interval_specs(),
             cards=self._card_specs(),
             hide_unavailable_cards=self._preferences.hide_unavailable_cards,
+            appearance=self._preferences.appearance,
         )
         self.analyze_button = self.preferences_page.analyze_button
         self.cancel_button = self.preferences_page.cancel_button
@@ -479,10 +579,512 @@ class AppWindow:
 
         handlers = {
             "preferences": self._show_preferences_page,
+            "nodes": self._show_nodes_page,
+            "cluster": self._show_cluster_page,
         }
         handler = handlers.get(key)
         if handler is not None:
             handler()
+
+    def _show_nodes_page(self) -> None:
+        self._refresh_nodes_page()
+        self._page_router.show(NODES_PAGE)
+        page = getattr(self, "nodes_page", None)
+        if page is not None:
+            page.focus_back()
+
+    def _build_nodes_page(self, parent: Any) -> Any:
+        self.nodes_frame = ttk.Frame(
+            parent,
+            padding=(30, 26),
+            style="App.TFrame",
+        )
+        self.nodes_page = ui_nodes.NodesConnectionsPage(
+            self.nodes_frame,
+            callbacks=ui_nodes.NodesConnectionsCallbacks(
+                on_back=self._show_settings_page,
+                on_discovery_toggle=self._apply_discovery_enabled,
+                on_pair=self._pair_discovered_node,
+                on_rename=self._rename_node,
+                on_color=self._set_node_color,
+                on_revoke=self._revoke_trusted_node,
+                on_test_connection=self._test_connection,
+                on_open_node=self._open_cluster_node,
+                on_add_manual_host=self._add_manual_host,
+                on_remove_manual=self._remove_manual_host,
+            ),
+            discovery_enabled=self._cluster_state.discovery_enabled,
+            discovered=self._nodes_peer_specs(),
+            trusted=self._nodes_trusted_specs(),
+            manual=self._nodes_manual_specs(),
+        )
+        return self.nodes_frame
+
+    def _nodes_peer_specs(self) -> list[ui_nodes.DiscoveredPeerSpec]:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return []
+        return [
+            ui_nodes.DiscoveredPeerSpec(
+                node_id=candidate.stable_id,
+                hostname=candidate.hostname,
+                app_version=candidate.app_version,
+                compatible=candidate.compatible,
+                connectable=candidate.connectable,
+                port=candidate.port,
+            )
+            for candidate in registry.discovered_candidates()
+        ]
+
+    def _nodes_trusted_specs(self) -> list[ui_nodes.TrustedNodeSpec]:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return []
+        manual: set[str] = getattr(self, "_manual_host_ids", set())
+        selectable = {descriptor.id for descriptor in registry.selectable_descriptors()}
+        specs: list[ui_nodes.TrustedNodeSpec] = []
+        for context in registry.contexts():
+            descriptor = context.descriptor
+            if descriptor.is_local:
+                continue
+            if descriptor.trust not in (
+                NodeTrustState.TRUSTED,
+                NodeTrustState.AUTHORISED,
+            ):
+                continue
+            if descriptor.id.value in manual:
+                continue
+            record = self._cluster_state.record(descriptor.id.value)
+            specs.append(
+                ui_nodes.TrustedNodeSpec(
+                    node_id=descriptor.id.value,
+                    display_name=descriptor.display_name,
+                    hostname=descriptor.hostname,
+                    color=descriptor.color,
+                    status=descriptor.status.value,
+                    host=record.host if record is not None else descriptor.hostname,
+                    port=record.port if record is not None else None,
+                    selectable=descriptor.id in selectable,
+                )
+            )
+        return specs
+
+    def _nodes_manual_specs(self) -> list[ui_nodes.TrustedNodeSpec]:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return []
+        specs: list[ui_nodes.TrustedNodeSpec] = []
+        for node_id in tuple(getattr(self, "_manual_host_ids", set())):
+            try:
+                context = registry.context(NodeId(node_id))
+            except KeyError:
+                continue
+            descriptor = context.descriptor
+            record = self._cluster_state.record(node_id)
+            specs.append(
+                ui_nodes.TrustedNodeSpec(
+                    node_id=node_id,
+                    display_name=descriptor.display_name,
+                    hostname=descriptor.hostname,
+                    color=descriptor.color,
+                    status=descriptor.status.value,
+                    host=record.host if record is not None else descriptor.hostname,
+                    port=record.port if record is not None else None,
+                    selectable=False,
+                    is_manual=True,
+                )
+            )
+        return specs
+
+    def _refresh_nodes_page(self) -> None:
+        page = getattr(self, "nodes_page", None)
+        if page is None:
+            return
+        page.set_discovery_enabled(self._cluster_state.discovery_enabled)
+        page.refresh_discovered(self._nodes_peer_specs())
+        page.refresh_trusted(self._nodes_trusted_specs())
+        page.refresh_manual(self._nodes_manual_specs())
+
+    def _nodes_status(self, message: str) -> None:
+        page = getattr(self, "nodes_page", None)
+        if page is not None:
+            page.show_status(message)
+
+    def _nodes_error(self, message: str) -> None:
+        page = getattr(self, "nodes_page", None)
+        if page is not None:
+            page.show_error(message)
+
+    def _show_cluster_page(self) -> None:
+        self._refresh_cluster_page()
+        self._page_router.show(CLUSTER_PAGE)
+        page = getattr(self, "cluster_page", None)
+        if page is not None:
+            page.focus_back()
+
+    def _build_cluster_page(self, parent: Any) -> Any:
+        self.cluster_frame = ttk.Frame(
+            parent,
+            padding=(30, 26),
+            style="App.TFrame",
+        )
+        self.cluster_page = ui_cluster.ClusterPage(
+            self.cluster_frame,
+            callbacks=ui_cluster.ClusterPageCallbacks(
+                on_back=self._show_dashboard_page,
+                on_open_node=self._open_cluster_node,
+            ),
+            nodes=self._cluster_specs(),
+        )
+        return self.cluster_frame
+
+    def _cluster_specs(self) -> list[ui_cluster.ClusterNodeSpec]:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return []
+        selectable = {descriptor.id for descriptor in registry.selectable_descriptors()}
+        specs: list[ui_cluster.ClusterNodeSpec] = []
+        for context in registry.contexts():
+            descriptor = context.descriptor
+            last_refresh = None
+            snapshot = context.snapshot
+            if snapshot is not None:
+                last_refresh = snapshot.scanned_at.strftime("%H:%M:%S")
+            specs.append(
+                ui_cluster.ClusterNodeSpec(
+                    node_id=descriptor.id.value,
+                    display_name=descriptor.display_name,
+                    hostname=descriptor.hostname,
+                    color=descriptor.color,
+                    trust=descriptor.trust.value,
+                    status=descriptor.status.value,
+                    capabilities=tuple(
+                        sorted(
+                            capability.value for capability in descriptor.capabilities
+                        )
+                    ),
+                    is_local=descriptor.is_local,
+                    selectable=descriptor.id in selectable,
+                    last_refresh=last_refresh,
+                )
+            )
+        for candidate in registry.discovered_candidates():
+            specs.append(
+                ui_cluster.ClusterNodeSpec(
+                    node_id=candidate.stable_id,
+                    display_name=candidate.hostname,
+                    hostname=candidate.hostname,
+                    color=None,
+                    trust="untrusted",
+                    status="online" if candidate.last_seen else "unknown",
+                    capabilities=(),
+                    is_local=False,
+                    selectable=False,
+                )
+            )
+        return specs
+
+    def _refresh_cluster_page(self) -> None:
+        page = getattr(self, "cluster_page", None)
+        if page is not None:
+            page.refresh_nodes(self._cluster_specs())
+
+    def _save_cluster_state(self, state: ClusterState) -> bool:
+        try:
+            self._cluster_store.save(state)
+        except ClusterSaveError as error:
+            LOGGER.warning("Failed to save cluster settings: %s", error)
+            return False
+        return True
+
+    def _apply_discovery_enabled(self, enabled: bool) -> None:
+        candidate = ClusterState(
+            discovery_enabled=enabled,
+            trusted_nodes=self._cluster_state.trusted_nodes,
+        )
+        if not self._save_cluster_state(candidate):
+            page = getattr(self, "nodes_page", None)
+            if page is not None:
+                page.set_discovery_enabled(self._cluster_state.discovery_enabled)
+                page.show_error("Cluster settings could not be saved")
+            return
+        self._cluster_state = candidate
+        if enabled:
+            self._start_discovery()
+        else:
+            self._stop_discovery()
+        self._nodes_status(
+            f"Discovery {'enabled' if enabled else 'disabled'} and saved"
+        )
+
+    def _pair_discovered_node(self, node_id: str) -> None:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        candidates = {
+            candidate.stable_id: candidate
+            for candidate in registry.discovered_candidates()
+        }
+        candidate = candidates.get(node_id)
+        if candidate is None:
+            self._nodes_error("That peer is no longer visible on the network")
+            return
+        node = NodeId(node_id)
+        try:
+            descriptor = registry.promote_to_trusted(
+                node, capabilities=READ_CAPABILITIES
+            )
+        except (KeyError, ValueError) as error:
+            self._nodes_error(str(error))
+            return
+        host = candidate.addresses[0] if candidate.addresses else candidate.hostname
+        record = trusted_node_record(
+            node_id=node_id,
+            display_name=descriptor.display_name,
+            hostname=descriptor.hostname,
+            host=host,
+            platform=descriptor.platform,
+            port=candidate.port,
+            capabilities=READ_CAPABILITIES,
+        )
+        state = ClusterState(
+            discovery_enabled=self._cluster_state.discovery_enabled,
+            trusted_nodes=self._cluster_state.trusted_nodes + (record,),
+        )
+        if not self._save_cluster_state(state):
+            registry.revoke_trusted(node)
+            self._nodes_error("Cluster settings could not be saved")
+            return
+        self._cluster_state = state
+        self._refresh_nodes_page()
+        self._refresh_cluster_page()
+        self._rebuild_node_selector()
+        self._nodes_status(f"Paired {descriptor.display_name} (read-only)")
+
+    def _rename_node(self, node_id: str) -> None:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        current = registry.context(NodeId(node_id)).descriptor.display_name
+        name = simpledialog.askstring(
+            "Rename Node",
+            "Display name:",
+            initialvalue=current,
+            parent=self.master,
+        )
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        try:
+            descriptor = registry.set_display_name(NodeId(node_id), name)
+        except KeyError as error:
+            self._nodes_error(str(error))
+            return
+        records = [
+            replace(record, display_name=name) if record.node_id == node_id else record
+            for record in self._cluster_state.trusted_nodes
+        ]
+        state = ClusterState(
+            discovery_enabled=self._cluster_state.discovery_enabled,
+            trusted_nodes=tuple(records),
+        )
+        if not self._save_cluster_state(state):
+            registry.set_display_name(NodeId(node_id), current)
+            self._nodes_error("Cluster settings could not be saved")
+            return
+        self._cluster_state = state
+        self._refresh_nodes_page()
+        self._refresh_cluster_page()
+        self._rebuild_node_selector()
+        self._nodes_status(f"Renamed node to {descriptor.display_name}")
+
+    def _set_node_color(self, node_id: str, color: str) -> None:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        try:
+            registry.set_color(NodeId(node_id), color)
+        except KeyError as error:
+            self._nodes_error(str(error))
+            return
+        records = [
+            replace(record, color=color) if record.node_id == node_id else record
+            for record in self._cluster_state.trusted_nodes
+        ]
+        state = ClusterState(
+            discovery_enabled=self._cluster_state.discovery_enabled,
+            trusted_nodes=tuple(records),
+        )
+        if not self._save_cluster_state(state):
+            registry.set_color(NodeId(node_id), None)
+            self._nodes_error("Cluster settings could not be saved")
+            return
+        self._cluster_state = state
+        self._refresh_nodes_page()
+        self._refresh_cluster_page()
+
+    def _revoke_trusted_node(self, node_id: str) -> None:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        node = NodeId(node_id)
+        try:
+            registry.revoke_trusted(node)
+        except (KeyError, ValueError) as error:
+            self._nodes_error(str(error))
+            return
+        state = ClusterState(
+            discovery_enabled=self._cluster_state.discovery_enabled,
+            trusted_nodes=tuple(
+                record
+                for record in self._cluster_state.trusted_nodes
+                if record.node_id != node_id
+            ),
+        )
+        if not self._save_cluster_state(state):
+            self._nodes_error("Cluster settings could not be saved")
+            return
+        self._cluster_state = state
+        getattr(self, "_manual_host_ids", set()).discard(node_id)
+        self._refresh_nodes_page()
+        self._refresh_cluster_page()
+        self._rebuild_node_selector()
+        if self.__dict__.get("_selected_node_id") != registry.selected_id():
+            self.__dict__["_selected_node_id"] = registry.selected_id()
+            context = registry.selected_context()
+            self._sync_selected_context_mirrors(context)
+            self._render_selected_node(context)
+        self._nodes_status("Node removed from trusted machines")
+
+    def _add_manual_host(
+        self,
+        display_name: str,
+        host: str,
+        port: int | None,
+    ) -> None:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        node_id = f"manual-{host}:{port}" if port is not None else f"manual-{host}"
+        node = NodeId(node_id)
+        try:
+            registry.context(node)
+            self._nodes_error("That manual host is already configured")
+            return
+        except KeyError:
+            pass
+        descriptor = NodeDescriptor(
+            id=node,
+            display_name=display_name,
+            hostname=host,
+            is_local=False,
+            trust=NodeTrustState.TRUSTED,
+            status=NodeStatus.UNKNOWN,
+            capabilities=READ_CAPABILITIES,
+            platform=None,
+            color=None,
+        )
+        context = NodeContext(
+            descriptor=descriptor,
+            provider=None,
+            process_manager=None,
+            file_manager=None,
+            scheduler=None,
+            coordinator=None,
+        )
+        record = trusted_node_record(
+            node_id=node_id,
+            display_name=display_name,
+            hostname=host,
+            host=host,
+            port=port,
+            capabilities=READ_CAPABILITIES,
+        )
+        state = ClusterState(
+            discovery_enabled=self._cluster_state.discovery_enabled,
+            trusted_nodes=self._cluster_state.trusted_nodes + (record,),
+        )
+        try:
+            registry.register_context(context)
+        except ValueError as error:
+            self._nodes_error(str(error))
+            return
+        if not self._save_cluster_state(state):
+            registry.revoke_trusted(node)
+            self._nodes_error("Cluster settings could not be saved")
+            return
+        self._cluster_state = state
+        manual_ids = getattr(self, "_manual_host_ids", None)
+        if manual_ids is None:
+            manual_ids = set()
+            self._manual_host_ids = manual_ids
+        manual_ids.add(node_id)
+        self._refresh_nodes_page()
+        self._refresh_cluster_page()
+        self._nodes_status(f"Configured manual host {display_name}")
+
+    def _remove_manual_host(self, node_id: str) -> None:
+        self._revoke_trusted_node(node_id)
+
+    def _test_connection(self, node_id: str) -> None:
+        record = self._cluster_state.record(node_id)
+        if record is None:
+            self._nodes_error("No connection details saved for that node")
+            return
+        port = record.port
+        if port is None:
+            self._nodes_error("That node has no authenticated remote port")
+            return
+        node = NodeId(node_id)
+
+        def task() -> dict[str, Any]:
+            provider = AuthenticatedNodeProvider(
+                node_id=node,
+                secret=record.secret,
+                transport=SocketRemoteTransport(record.host, port),
+            )
+            return provider.hello()
+
+        def on_success(result: dict[str, Any]) -> None:
+            version = result.get("app_version") or "peer"
+            messagebox.showinfo(
+                "Connection OK",
+                f"{record.display_name} answered an authenticated hello ({version}).",
+                parent=self.master,
+            )
+
+        def on_error(message: str) -> None:
+            messagebox.showerror(
+                "Connection Failed",
+                f"Could not reach {record.display_name}: {message}",
+                parent=self.master,
+            )
+
+        run_in_thread(self.master, task, on_success, on_error)
+
+    def _open_cluster_node(self, node_id: str) -> None:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        try:
+            registry.context(NodeId(node_id))
+        except KeyError:
+            return
+        self._switch_selected_node(NodeId(node_id))
+        self._show_dashboard_page()
+
+    def _rebuild_node_selector(self) -> None:
+        frame = getattr(self, "_node_selector_frame", None)
+        if frame is not None:
+            try:
+                frame.destroy()
+            except Exception:  # noqa: BLE001 - a dead widget must not fail the page.
+                return
+        actions = getattr(self, "header_actions", None)
+        if actions is not None:
+            self._build_node_selector(actions)
 
     def _build_node_selector(self, actions: Any) -> None:
         """Add a compact readonly node selector to the header, when needed.
@@ -537,6 +1139,7 @@ class AppWindow:
         self._node_selector.pack(anchor="w")
         self._node_selector.bind("<<ComboboxSelected>>", self._on_node_selector_change)
         frame.pack(anchor="e", pady=(0, 9))
+        self._node_selector_frame = frame
 
     def _on_node_selector_change(self, _event: object) -> None:
         registry = self.__dict__.get("_node_registry")
@@ -634,13 +1237,17 @@ class AppWindow:
     def _start_discovery(self) -> None:
         """Advertise this node and browse for peers via the shared coordinator.
 
-        Discovery is optional infrastructure: when the transport is unavailable
-        or startup fails, the app continues as a normal single-node application
-        and the registry simply has no discovered candidates.
+        Discovery is optional infrastructure: when it is disabled in the
+        cluster settings, or the transport is unavailable, or startup fails,
+        the app continues as a normal single-node application and the registry
+        simply has no discovered candidates.
         """
 
         registry = self.__dict__.get("_node_registry")
         if registry is None:
+            return
+        state = self.__dict__.get("_cluster_state")
+        if state is not None and not state.discovery_enabled:
             return
         try:
             local_context = registry.context(NodeId(LOCAL_NODE_ID))
@@ -731,7 +1338,23 @@ class AppWindow:
     def _configure_styles(self) -> None:
         style = ttk.Style(self.master)
         style.theme_use("clam")
-        ui_styles.configure_app_styles(style)
+        ui_styles.configure_app_styles(style, colors=self.colors)
+        self._style_obj = style
+
+    def _apply_appearance(self) -> None:
+        """Re-register styles and re-colour cards after an appearance change."""
+
+        style = getattr(self, "_style_obj", None)
+        if style is None:
+            return
+        colors = ui_styles.accent_theme_colors(self._preferences.appearance)
+        ui_styles.configure_app_styles(style, colors=colors)
+        cards = getattr(self, "cards", None)
+        if cards:
+            for card in cards.values():
+                apply = getattr(card, "apply_colors", None)
+                if apply is not None:
+                    apply(colors)
 
     def _presentation_targets(self) -> list[tuple[Any, Any]]:
         """Return the ``(status_label, progress_bar)`` pairs to render into.
@@ -1630,6 +2253,7 @@ class AppWindow:
         self._preferences = candidate
         self._reconcile_intervals()
         self._reconcile_cards_and_polling()
+        self._apply_appearance()
         self.preferences_page.refresh_from(self._preferences)
         self.preferences_page.show_status("Preferences saved")
 
@@ -1668,6 +2292,15 @@ class AppWindow:
 
     def _on_auto_hide_change(self, enabled: bool) -> None:
         self._apply_preferences(self._preferences.with_hide_unavailable_cards(enabled))
+
+    def _on_appearance_change(self, theme: str) -> None:
+        try:
+            candidate = self._preferences.with_appearance(theme)
+        except ValueError as error:
+            self.preferences_page.refresh_from(self._preferences)
+            self.preferences_page.show_error(str(error))
+            return
+        self._apply_preferences(candidate)
 
     def _on_reset(self) -> None:
         confirmed = messagebox.askyesno(

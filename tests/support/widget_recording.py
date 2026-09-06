@@ -21,6 +21,12 @@ class FakeVar:
     def get(self) -> Any:
         return self._value
 
+    def trace_add(self, *_args: Any) -> None:
+        return None
+
+    def trace_remove(self, *_args: Any) -> None:
+        return None
+
 
 class RecordingWidget:
     """Fake Tk widget that records construction and layout interactions."""
@@ -78,6 +84,12 @@ class RecordingWidget:
 
     def bbox(self, *args: Any) -> tuple[int, int, int, int]:
         return (0, 0, 100, 100)
+
+    def winfo_children(self) -> list[Any]:
+        return []
+
+    def destroy(self) -> None:
+        return None
 
     def yview(self, *args: Any) -> None:
         pass
@@ -138,6 +150,12 @@ class WidgetRecorder:
 
     def checkbutton_cls(self) -> Any:
         return self._make("checkbutton")
+
+    def combobox_cls(self) -> Any:
+        return self._make("combobox")
+
+    def entry_cls(self) -> Any:
+        return self._make("entry")
 
     def progressbar_cls(self) -> Any:
         return self._make("progressbar")
