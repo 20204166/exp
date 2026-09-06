@@ -73,9 +73,14 @@ if [ "$mode" = "system" ]; then
   command -v sudo >/dev/null 2>&1 || { echo "sudo is required for --system" >&2; exit 1; }
   echo "Installing machine-wide (system Python, no venv)..."
   install_pip sudo -H "$py" -m pip install "$wheel"
-  bin_dir="$($py -c 'import sysconfig;print(sysconfig.get_path("scripts", scheme="posix_prefix"))' 2>/dev/null || true)"
-  [ -n "$bin_dir" ] || bin_dir="/usr/local/bin"
-  launcher="$bin_dir/system-analyzer"
+  launcher="$(command -v system-analyzer || true)"
+  if [ -n "$launcher" ]; then
+    bin_dir="$(dirname "$launcher")"
+  else
+    bin_dir="$($py -c 'import sysconfig;print(sysconfig.get_path("scripts", scheme="posix_prefix"))' 2>/dev/null || true)"
+    [ -n "$bin_dir" ] || bin_dir="/usr/local/bin"
+    launcher="$bin_dir/system-analyzer"
+  fi
   [ -x "$launcher" ] || { echo "Install completed but launcher was not found at $launcher" >&2; exit 1; }
   echo "Installed. Console scripts are in: $bin_dir"
   if echo "$PATH" | tr ':' '\n' | grep -qx "$bin_dir"; then

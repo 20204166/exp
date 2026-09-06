@@ -49,8 +49,20 @@ try {
     $pipArgs += @("--break-system-packages", $wheelPath)
     & $py @pipArgs
     if ($LASTEXITCODE -ne 0) { throw "pip install failed (exit $LASTEXITCODE)" }
-    $scheme = if ($System) { if ($env:OS -eq "Windows_NT") { "nt" } else { "posix_prefix" } } else { if ($env:OS -eq "Windows_NT") { "nt_user" } else { "posix_user" } }
-    $bin = & $py -c "import sysconfig;print(sysconfig.get_path('scripts', scheme='$scheme'))"
+    if ($System) {
+        $launcherCmd = Get-Command system-analyzer -ErrorAction SilentlyContinue
+        if ($launcherCmd) {
+            $launcherPath = $launcherCmd.Source
+            if (-not $launcherPath) { $launcherPath = $launcherCmd.Path }
+            $bin = Split-Path $launcherPath -Parent
+        } else {
+            $scheme = if ($env:OS -eq "Windows_NT") { "nt" } else { "posix_prefix" }
+            $bin = & $py -c "import sysconfig;print(sysconfig.get_path('scripts', scheme='$scheme'))"
+        }
+    } else {
+        $scheme = if ($env:OS -eq "Windows_NT") { "nt_user" } else { "posix_user" }
+        $bin = & $py -c "import sysconfig;print(sysconfig.get_path('scripts', scheme='$scheme'))"
+    }
     Write-Host "Installed $wheel. Console scripts: $bin"
     Write-Host "Add this directory to PATH if needed, then run: system-analyzer"
 } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
