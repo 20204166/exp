@@ -10,11 +10,16 @@
 param([string]$Version, [string]$Python)
 . (Join-Path $PSScriptRoot "_common.ps1")
 
-if ($Python) { $py = @($Python) } else { $py = Get-PythonGe310 }
-if (-not $py) {
-    throw "no Python 3.10+ interpreter found. Install one (python.org/Homebrew) or pass -Python <path>."
+if ($Python) { $py = @($Python) } else {
+    $py = Get-SystemPythonGe310
+    if (-not $py) {
+        throw "no system Python 3.10+ interpreter found outside a virtual environment. Deactivate the venv or pass -Python <path>."
+    }
 }
 Require-Python $py
+if (Test-VenvPython $py) {
+    throw "'$($py -join ' ')' is inside a virtual environment; a per-user install is impossible (pip disables '--user' inside venvs). Deactivate the venv or pass -Python <path>."
+}
 
 $wheel = Get-WheelPath $Version
 Write-Host "System interpreter: $($py -join ' ') (Python $(Get-PythonVersion $py))"

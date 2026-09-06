@@ -30,10 +30,17 @@ for arg in "$@"; do
 done
 
 if [ -n "${SA_SYSTEM_PYTHON:-}" ]; then py="$SA_SYSTEM_PYTHON"
-elif found="$(first_python_ge_310)"; then py="$found"
+elif found="$(first_system_python_ge_310)"; then py="$found"
 else py=/usr/bin/python3; fi
 
 require_python "$py" || exit 1
+
+if [ "$mode" = "user" ] && py_in_venv "$py"; then
+  echo "ERROR: '$py' is inside a virtual environment, so a per-user install is" >&2
+  echo "       impossible (pip disables '--user' inside venvs). Deactivate the" >&2
+  echo "       venv, or set SA_SYSTEM_PYTHON to a system interpreter." >&2
+  exit 1
+fi
 
 wheel="$(wheel_path "$version")"
 [ -n "$wheel" ] && [ -f "$wheel" ] || { echo "no wheel found; run install/build.sh first" >&2; exit 1; }

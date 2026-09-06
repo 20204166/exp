@@ -67,6 +67,27 @@ function Get-PythonGe310 {
     return $null
 }
 
+function Test-VenvPython {
+    param([object]$Py)
+    $script = "import sys; raise SystemExit(0 if sys.prefix != sys.base_prefix else 1)"
+    & $Py -c $script 2>$null
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Return the first 3.10+ interpreter that is NOT inside a virtual environment.
+# Used by install-user.ps1 so a per-user install always lands in a real
+# interpreter regardless of whether a venv (e.g. the repo .venv) is active;
+# pip refuses --user inside venvs ("User site-packages are not visible in
+# this virtualenv").
+function Get-SystemPythonGe310 {
+    foreach ($candidate in Get-PythonCandidates) {
+        if ((Test-PythonGe310 $candidate) -and -not (Test-VenvPython $candidate)) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
 function Require-Python {
     param([object]$Py)
     if (-not (Test-PythonGe310 $Py)) {

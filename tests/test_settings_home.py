@@ -22,6 +22,7 @@ def make_callbacks() -> Any:
 def make_home(
     callbacks: SettingsHomeCallbacks | None = None,
     categories: list[SettingsCategorySpec] | None = None,
+    version: str | None = None,
 ) -> tuple[SettingsHome, RecordingWidget, WidgetRecorder]:
     recorder = WidgetRecorder()
     parent = recorder.parent()
@@ -37,6 +38,7 @@ def make_home(
                 "interface options.",
             )
         ],
+        version=version,
         frame_cls=recorder.frame_cls(),
         label_cls=recorder.label_cls(),
         style_frame_cls=recorder.style_frame_cls(),
@@ -114,6 +116,20 @@ class SettingsHomeTests(unittest.TestCase):
         home, _parent, _recorder = make_home()
 
         self.assertFalse(hasattr(home, "toplevel"))
+
+    def test_version_label_renders_when_provided(self) -> None:
+        _home, _parent, recorder = make_home(version="1.2.6.0")
+
+        self.assertIn("System Analyzer 1.2.6.0", recorder.label_texts())
+        version_label = recorder.label_with_text("System Analyzer 1.2.6.0")
+        self.assertEqual(version_label.pack_calls[-1].get("side"), "bottom")
+        self.assertEqual(version_label.pack_calls[-1].get("anchor"), "w")
+
+    def test_version_label_omitted_when_absent(self) -> None:
+        home, _parent, _recorder = make_home()
+
+        self.assertFalse(hasattr(home, "version_label"))
+        self.assertIsNone(home.version)
 
 
 if __name__ == "__main__":

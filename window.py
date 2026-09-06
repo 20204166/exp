@@ -469,6 +469,7 @@ class AppWindow:
                 on_select_category=self._on_select_settings_category,
             ),
             categories=self._settings_categories(),
+            version=__version__,
         )
         return self.settings_frame
 

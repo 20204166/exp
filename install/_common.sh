@@ -41,6 +41,28 @@ first_python_ge_310() {
   return 1
 }
 
+# Return whether the interpreter is inside a virtual environment. A venv
+# interpreter must never be used for a --user install: pip refuses --user
+# inside venvs ("User site-packages are not visible in this virtualenv"),
+# which is exactly what happens when the repo .venv is active on PATH.
+py_in_venv() {
+  "$1" -c 'import sys; raise SystemExit(0 if sys.prefix != sys.base_prefix else 1)' >/dev/null 2>&1
+}
+
+# Return the first 3.10+ interpreter that is NOT inside a virtual environment.
+# Used by install-user.sh so a per-user/system install always lands in a real
+# interpreter regardless of whether a venv (e.g. the repo .venv) is active.
+first_system_python_ge_310() {
+  local candidate
+  while IFS= read -r candidate; do
+    if require_python "$candidate" >/dev/null 2>&1 && ! py_in_venv "$candidate"; then
+      echo "$candidate"
+      return 0
+    fi
+  done < <(python_candidates)
+  return 1
+}
+
 resolve_python() {
   if [ -n "${SA_PYTHON:-}" ]; then echo "$SA_PYTHON"; return; fi
   local r found; r="$(pkg_dir)"

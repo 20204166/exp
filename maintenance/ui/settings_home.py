@@ -57,6 +57,7 @@ class SettingsHome:
         *,
         callbacks: SettingsHomeCallbacks,
         categories: list[SettingsCategorySpec],
+        version: str | None = None,
         frame_cls: Callable[..., Any] = tk.Frame,
         label_cls: Callable[..., Any] = tk.Label,
         style_frame_cls: Callable[..., Any] = ttk.Frame,
@@ -71,6 +72,7 @@ class SettingsHome:
         self.colors = ui_styles.COLORS if colors is None else colors
         self.fonts = ui_styles.FONTS if fonts is None else fonts
         self.categories = list(categories)
+        self.version = version
         self._category_buttons: dict[str, Any] = {}
 
         self.frame_cls = frame_cls
@@ -88,6 +90,16 @@ class SettingsHome:
         return tuple(spec.key for spec in self.categories)
 
     def _build(self, parent: Any) -> None:
+        if self.version:
+            self.version_label = self.label_cls(
+                parent,
+                text=f"System Analyzer {self.version}",
+                bg=self.colors["background"],
+                fg=self.colors["muted_text"],
+                font=self.fonts["body"],
+            )
+            self.version_label.pack(side="bottom", anchor="w", pady=(6, 0))
+
         (
             self.back_button,
             self.canvas,
