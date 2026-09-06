@@ -397,12 +397,18 @@ def dashboard_header(
         wraplength=wrap,
         style="Description.TLabel",
     ).pack(anchor="w", pady=(6, 0))
+    discovery_label = label_cls(
+        heading_frame,
+        text="",
+        style="Description.TLabel",
+    )
 
     actions = frame_cls(header_frame, style="App.TFrame")
     actions.pack(side="right", padx=(20, 0))
     # Preserve the existing return contract while exposing the optional node
-    # label for the dashboard controller to update after a target switch.
+    # and discovery labels for the dashboard controller to update.
     actions._dashboard_node_label = node_label
+    actions._dashboard_discovery_label = discovery_label
     return actions
 
 

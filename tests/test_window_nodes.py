@@ -405,6 +405,20 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         window._on_discovered_lost("peer-a")
         self.assertEqual(window._node_registry.discovered_candidates(), ())
 
+    def test_discovery_status_lists_untrusted_peers_and_hides_when_lost(self) -> None:
+        window = _make_window()
+        window.discovery_status_label = Mock()
+
+        window._on_discovered_candidate(_candidate("peer-b"))
+        window._on_discovered_candidate(_candidate("peer-a"))
+
+        window.discovery_status_label.config.assert_called_with(
+            text="Discovered 2 untrusted peers: peer-a-host, peer-b-host"
+        )
+        window._on_discovered_lost("peer-a")
+        window._on_discovered_lost("peer-b")
+        window.discovery_status_label.pack_forget.assert_called_once()
+
     def test_shutdown_stops_discovery(self) -> None:
         window = _make_window()
         window._stop_discovery = Mock()

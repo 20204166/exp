@@ -514,6 +514,15 @@ class DashboardHeaderTests(unittest.TestCase):
         self.assertIs(actions, factory.frames[-1])
         actions.pack.assert_called_once_with(side="right", padx=(20, 0))
 
+    def test_header_exposes_an_unpacked_discovery_status_label(self) -> None:
+        actions, factory = self._render(None)
+
+        discovery = actions._dashboard_discovery_label
+        self.assertIn(discovery, factory.labels)
+        self.assertEqual(discovery.kwargs["text"], "")
+        self.assertEqual(discovery.kwargs["style"], "Description.TLabel")
+        discovery.pack.assert_not_called()
+
     def test_any_node_title_renders_through_same_primitive(self) -> None:
         for node_title in ("This Node", "Node 1", "Node 2", "Gaming Node"):
             with self.subTest(node_title=node_title):

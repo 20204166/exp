@@ -280,6 +280,12 @@ class AppWindow:
             "_dashboard_node_label",
             None,
         )
+        self.discovery_status_label = getattr(
+            self.header_actions,
+            "_dashboard_discovery_label",
+            None,
+        )
+        self._refresh_discovery_status()
 
         self.settings_button = ttk.Button(
             self.header_actions,
@@ -682,6 +688,7 @@ class AppWindow:
         registry = self.__dict__.get("_node_registry")
         if registry is not None:
             registry.update_discovered(candidate)
+        self._refresh_discovery_status()
 
     def _on_discovered_lost(self, stable_id: str) -> None:
         if self._is_closing:
@@ -689,6 +696,30 @@ class AppWindow:
         registry = self.__dict__.get("_node_registry")
         if registry is not None:
             registry.remove_discovered(NodeId(stable_id))
+        self._refresh_discovery_status()
+
+    def _refresh_discovery_status(self) -> None:
+        """Render untrusted peer presence without offering any interaction."""
+
+        label = getattr(self, "discovery_status_label", None)
+        registry = self.__dict__.get("_node_registry")
+        if label is None or registry is None:
+            return
+        candidates = registry.discovered_candidates()
+        if not candidates:
+            label.pack_forget()
+            return
+        names = sorted(candidate.hostname for candidate in candidates)
+        preview = ", ".join(names[:3])
+        remaining = len(names) - len(names[:3])
+        suffix = f" +{remaining} more" if remaining else ""
+        label.config(
+            text=(
+                f"Discovered {len(candidates)} untrusted peer"
+                f"{'s' if len(candidates) != 1 else ''}: {preview}{suffix}"
+            )
+        )
+        label.pack(anchor="w", pady=(2, 0))
 
     def _stop_discovery(self) -> None:
         self._cancel_timer(self.__dict__.get("_discovery_tick_id"))
