@@ -398,6 +398,19 @@ class AppWindow:
             targets.append((settings_label, settings_bar))
         return targets
 
+    def _for_each_presentation_target(
+        self,
+        action: Callable[[Any, Any], Any],
+    ) -> None:
+        """Apply ``action`` to every ``(status_label, progress_bar)`` target.
+
+        All callers render the same shared scan state into both the dashboard
+        pair and the optional Preferences pair so the two can never drift.
+        """
+
+        for label, bar in self._presentation_targets():
+            action(label, bar)
+
     def _set_busy(self, is_busy: bool) -> None:
         self.analyze_button.config(state=tk.DISABLED if is_busy else tk.NORMAL)
         self.cancel_button.config(state=tk.NORMAL if is_busy else tk.DISABLED)
@@ -405,13 +418,19 @@ class AppWindow:
         if is_busy:
             self.__dict__["_scan_progress_count"] = 0
             self._completion_transition().cancel()
-            for label, bar in self._presentation_targets():
+
+            def apply_scanning_state(label: Any, bar: Any) -> None:
                 scan_status.apply_reset(bar)
                 scan_status.apply_scanning(label)
+
+            self._for_each_presentation_target(apply_scanning_state)
         else:
-            for label, bar in self._presentation_targets():
+
+            def apply_ready_state(label: Any, bar: Any) -> None:
                 scan_status.apply_ready(label)
                 bar.stop()
+
+            self._for_each_presentation_target(apply_ready_state)
 
     def _completion_transition(self) -> ui_transition.PendingTransition:
         """The latest-wins timer behind the completion-hold status transition."""
@@ -426,22 +445,24 @@ class AppWindow:
             return
         self._analysis_cancel_event.set()
         self.cancel_button.config(state=tk.DISABLED)
-        for label, _bar in self._presentation_targets():
-            scan_status.apply_cancelling(label)
+        self._for_each_presentation_target(
+            lambda label, _bar: scan_status.apply_cancelling(label)
+        )
 
     def _show_progress(self, message: str) -> None:
         if self._is_closing:
             return
         count = self.__dict__.get("_scan_progress_count", 0) + 1
         self.__dict__["_scan_progress_count"] = count
-        for label, bar in self._presentation_targets():
-            scan_status.apply_step(
+        self._for_each_presentation_target(
+            lambda label, bar: scan_status.apply_step(
                 label,
                 bar,
                 message,
                 count,
                 self._progress_total(),
             )
+        )
 
     def _progress_total(self) -> int:
         return len(self._feature_catalog.all())
@@ -772,12 +793,13 @@ class AppWindow:
         )
         self.refreshed_label.config(text=f"Last refreshed: {scanned_time}")
         self._set_busy(False)
-        for label, bar in self._presentation_targets():
-            scan_status.apply_complete(
+        self._for_each_presentation_target(
+            lambda label, bar: scan_status.apply_complete(
                 label,
                 bar,
                 self._progress_total(),
             )
+        )
         self._completion_transition().start(
             self.COMPLETION_HOLD_MILLISECONDS,
             self._show_ready_after_completion_hold,
@@ -797,8 +819,9 @@ class AppWindow:
             return
         if self._scan_coordinator_state().active:
             return
-        for label, _bar in self._presentation_targets():
-            scan_status.apply_ready(label)
+        self._for_each_presentation_target(
+            lambda label, _bar: scan_status.apply_ready(label)
+        )
 
     def _refresh_health(self) -> None:
         if not isinstance(self.snapshot, DashboardSnapshot):
@@ -1193,24 +1216,37 @@ class AppWindow:
         self.preferences_page.refresh_from(self._preferences)
         self.preferences_page.show_status("Preferences saved")
 
-    def _on_interval_commit(self, key: str, seconds: int) -> None:
+    def _try_apply_preference(
+        self,
+        builder: Callable[[], AppPreferences],
+    ) -> bool:
+        """Build and apply one validated preferences candidate.
+
+        A ``ValueError`` from the candidate builder (an invalid interval or
+        card key) restores the controls and shows the error without persisting.
+        Persistence failures are not absorbed here; they are handled by
+        ``_apply_preferences``. Returns whether the candidate was applied.
+        """
+
         try:
-            candidate = self._preferences.with_interval(key, seconds * 1000)
+            candidate = builder()
         except ValueError as error:
             self.preferences_page.refresh_from(self._preferences)
             self.preferences_page.show_error(str(error))
-            return
+            return False
         self._apply_preferences(candidate)
+        return True
+
+    def _on_interval_commit(self, key: str, seconds: int) -> None:
+        self._try_apply_preference(
+            lambda: self._preferences.with_interval(key, seconds * 1000)
+        )
 
     def _on_card_visibility_change(self, key: str, visible: bool) -> None:
-        try:
-            candidate = self._preferences.with_card_visibility(key, visible)
-        except ValueError as error:
-            self.preferences_page.refresh_from(self._preferences)
-            self.preferences_page.show_error(str(error))
-            return
-        self._apply_preferences(candidate)
-        if visible:
+        applied = self._try_apply_preference(
+            lambda: self._preferences.with_card_visibility(key, visible)
+        )
+        if applied and visible:
             self._request_component_refresh(key)
 
     def _on_auto_hide_change(self, enabled: bool) -> None:
@@ -1335,8 +1371,9 @@ class AppWindow:
         """
 
         self._completion_transition().cancel()
-        for _label, bar in self._presentation_targets():
-            scan_status.apply_reset(bar)
+        self._for_each_presentation_target(
+            lambda _label, bar: scan_status.apply_reset(bar)
+        )
 
     def run(self) -> None:
         try:

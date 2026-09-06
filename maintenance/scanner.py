@@ -11,6 +11,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, TypeGuard, TypeVar, cast
@@ -18,6 +19,21 @@ from typing import Any, ClassVar, TypeGuard, TypeVar, cast
 LOGGER = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+
+
+@dataclass(frozen=True)
+class _NetworkObservation:
+    """One best-effort read of the global/per-interface counters and interface stats.
+
+    ``None`` means the corresponding query failed; an empty mapping means the
+    query succeeded but produced no entries. Callers keep those two cases
+    distinct (e.g. a disconnected host still reports up/down state).
+    """
+
+    global_counters: Any
+    per_interface_counters: Any
+    interface_stats: Any
+
 
 from maintenance.components import (
     GPU_INFORMATION_UNAVAILABLE,
@@ -102,13 +118,8 @@ class SystemScanner:
     GPU_QUERY_ABANDON_SECONDS: float = 60.0
     GPU_QUERY_TIMEOUT_MESSAGE = f"{GPU_INFORMATION_UNAVAILABLE}: query timed out"
 
-    COMPONENT_KEYS: tuple[str, ...] = (
-        "cpu",
-        "memory",
-        "storage",
-        "gpu",
-        "network",
-        "battery",
+    COMPONENT_KEYS: tuple[str, ...] = tuple(
+        feature.key for feature in ResourceFeatureCatalog().all()
     )
 
     COMPONENT_TITLES: ClassVar[dict[str, str]] = {
@@ -341,12 +352,11 @@ class SystemScanner:
             )
 
         if key == "network":
-            network = self._component_value(lambda: psutil_module.net_io_counters())
-            capability = self._network_capability(network, psutil_module)
+            observation = self._read_network_observation(psutil_module)
+            capability = self._network_capability(observation)
             return self._resource_with_fallback(
                 lambda: self._network_resource(
-                    network,
-                    psutil_module,
+                    observation,
                     capability=capability,
                 ),
                 "network",
@@ -993,24 +1003,42 @@ class SystemScanner:
         candidate = candidate.strip().lstrip(",; ")
         return candidate or None
 
+    def _read_network_observation(self, psutil_module: Any) -> _NetworkObservation:
+        """Read every network sensor once and carry it through one component scan.
+
+        Global counters use ``_component_value`` (missing-psutil aware), while
+        the per-interface counters and interface stats use the best-effort
+        ``_psutil_value`` boundary. A ``None`` field means its query failed; an
+        empty mapping means the query succeeded with no entries.
+        """
+
+        return _NetworkObservation(
+            global_counters=self._component_value(
+                lambda: psutil_module.net_io_counters()
+            ),
+            per_interface_counters=SystemScanner._psutil_value(
+                lambda: psutil_module.net_io_counters(pernic=True)
+            ),
+            interface_stats=SystemScanner._psutil_value(
+                lambda: psutil_module.net_if_stats()
+            ),
+        )
+
     def _network_resource(
         self,
-        network: Any,
-        psutil_module: Any,
+        observation: _NetworkObservation,
         capability: CapabilityState = CapabilityState.UNKNOWN,
     ) -> ResourceSummary:
+        network = observation.global_counters
         received = network.bytes_recv
         sent = network.bytes_sent
         down_rate, up_rate = self._sample_network_rates(network)
-        up_interfaces = self._up_interfaces(psutil_module)
-        interface = self._active_interface(
-            psutil_module,
-            up_interfaces=up_interfaces,
+        up_interfaces = self._up_interface_names(observation.interface_stats)
+        interface = self._active_interface_from_counters(
+            observation.per_interface_counters,
+            up_interfaces,
         )
-        vpn_interface = self._vpn_interface(
-            psutil_module,
-            up_interfaces=up_interfaces,
-        )
+        vpn_interface = self._vpn_interface_from_names(up_interfaces)
 
         if down_rate is not None and up_rate is not None:
             down_text, up_text = self._rate_pair_text(down_rate, up_rate)
@@ -1048,8 +1076,7 @@ class SystemScanner:
 
     def _network_capability(
         self,
-        network: Any,
-        psutil_module: Any,
+        observation: _NetworkObservation,
     ) -> CapabilityState:
         """Classify network capability from authoritative probe outcomes.
 
@@ -1061,12 +1088,10 @@ class SystemScanner:
         ``SUPPORTED`` (it exists) rather than absent.
         """
 
-        if network is None:
+        if observation.global_counters is None:
             return CapabilityState.UNKNOWN
-        pernic = SystemScanner._psutil_value(
-            lambda: psutil_module.net_io_counters(pernic=True)
-        )
-        stats = SystemScanner._psutil_value(lambda: psutil_module.net_if_stats())
+        pernic = observation.per_interface_counters
+        stats = observation.interface_stats
 
         if pernic and any(
             not SystemScanner._is_loopback_interface(name) for name in pernic
@@ -1143,16 +1168,15 @@ class SystemScanner:
         return name.casefold().startswith("lo")
 
     @staticmethod
-    def _up_interfaces(psutil_module: Any) -> set[str] | None:
+    def _up_interface_names(
+        interface_stats: Any,
+    ) -> set[str] | None:
         """Return the names of interfaces reported up, or None when unknown.
 
         ``None`` means the up/down table could not be read; an empty set means
         the table was read and no interface is up.
         """
 
-        interface_stats = SystemScanner._psutil_value(
-            lambda: psutil_module.net_if_stats()
-        )
         if interface_stats is None:
             return None
         return {
@@ -1160,6 +1184,47 @@ class SystemScanner:
             for name, stats in interface_stats.items()
             if getattr(stats, "isup", False)
         }
+
+    @staticmethod
+    def _up_interfaces(psutil_module: Any) -> set[str] | None:
+        """Return the names of interfaces reported up, or None when unknown.
+
+        Reads the up/down table once via the best-effort boundary, then defers
+        to ``_up_interface_names`` so the one-read behaviour is shared with the
+        observation-based network card path.
+        """
+
+        interface_stats = SystemScanner._psutil_value(
+            lambda: psutil_module.net_if_stats()
+        )
+        return SystemScanner._up_interface_names(interface_stats)
+
+    @staticmethod
+    def _active_interface_from_counters(
+        per_interface_counters: Any,
+        up_interfaces: set[str] | None = None,
+    ) -> str | None:
+        """Return the busiest up, non-loopback interface, or None.
+
+        Operates purely on already-read per-interface counters and the up/down
+        name set so the network card reads each sensor exactly once. ``None``
+        ``up_interfaces`` means the up/down table was not read, matching the
+        best-effort default of not failing when the table is unavailable.
+        """
+
+        if not per_interface_counters:
+            return None
+
+        candidates = {
+            name: getattr(counters, "bytes_recv", 0)
+            + getattr(counters, "bytes_sent", 0)
+            for name, counters in per_interface_counters.items()
+            if not SystemScanner._is_loopback_interface(name)
+            and (up_interfaces is None or name in up_interfaces)
+        }
+        return (
+            max(candidates, key=lambda name: candidates[name]) if candidates else None
+        )
 
     @staticmethod
     def _active_interface(
@@ -1179,22 +1244,35 @@ class SystemScanner:
         per_nic = SystemScanner._psutil_value(
             lambda: psutil_module.net_io_counters(pernic=True)
         )
-        if not per_nic:
-            return None
 
         if up_interfaces is None:
             up_interfaces = SystemScanner._up_interfaces(psutil_module)
 
-        candidates = {
-            name: getattr(counters, "bytes_recv", 0)
-            + getattr(counters, "bytes_sent", 0)
-            for name, counters in per_nic.items()
-            if not SystemScanner._is_loopback_interface(name)
-            and (up_interfaces is None or name in up_interfaces)
-        }
-        return (
-            max(candidates, key=lambda name: candidates[name]) if candidates else None
-        )
+        return SystemScanner._active_interface_from_counters(per_nic, up_interfaces)
+
+    @staticmethod
+    def _vpn_interface_from_names(
+        up_interfaces: set[str] | None,
+    ) -> str | None:
+        """Return an up tunnel/VPN interface name from an up-interface name set.
+
+        Detection is a conservative, generic device-type heuristic (tun, tap,
+        utun, ppp, ipsec, wg) over the interface up/down name set; it carries
+        no provider-specific assumptions. Shared by the standalone probe and
+        the observation-based network card path.
+        """
+
+        if not up_interfaces:
+            return None
+
+        prefixes = tuple(SystemScanner.TUNNEL_INTERFACE_PREFIXES)
+        for name in up_interfaces:
+            folded = name.casefold()
+            if any(
+                folded == prefix or folded.startswith(prefix) for prefix in prefixes
+            ):
+                return name
+        return None
 
     @classmethod
     def _vpn_interface(
@@ -1205,26 +1283,14 @@ class SystemScanner:
     ) -> str | None:
         """Return an up tunnel/VPN interface name, or None.
 
-        Detection is a conservative, generic device-type heuristic (tun, tap,
-        utun, ppp, ipsec, wg) over the interface up/down table; it carries no
-        provider-specific assumptions. ``up_interfaces`` may be passed in by
-        the caller (already read once) to avoid re-reading the table; ``None``
-        means the table was not read here, matching the default behaviour.
+        ``up_interfaces`` may be passed in by the caller (already read once)
+        to avoid re-reading the table; ``None`` means the table was not read
+        here, so it is read once from ``psutil_module``.
         """
 
         if up_interfaces is None:
             up_interfaces = cls._up_interfaces(psutil_module)
-        if not up_interfaces:
-            return None
-
-        prefixes = tuple(cls.TUNNEL_INTERFACE_PREFIXES)
-        for name in up_interfaces:
-            folded = name.casefold()
-            if any(
-                folded == prefix or folded.startswith(prefix) for prefix in prefixes
-            ):
-                return name
-        return None
+        return cls._vpn_interface_from_names(up_interfaces)
 
     def _battery_resource(
         self,

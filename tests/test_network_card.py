@@ -202,6 +202,95 @@ class VpnDetectionTests(unittest.TestCase):
         self.assertIsNone(SystemScanner._vpn_interface(fake))
 
 
+class NetworkObservationConsolidationTests(unittest.TestCase):
+    def test_network_scan_reads_each_sensor_exactly_once(self) -> None:
+        scanner = SystemScanner(Path("Downloads"))
+        calls = {"global": 0, "pernic": 0, "stats": 0}
+
+        def net_io_counters(pernic: bool = False) -> Any:
+            if pernic:
+                calls["pernic"] += 1
+                return {"eth0": _counters(1000, 2000)}
+            calls["global"] += 1
+            return _counters(1000, 2000)
+
+        def net_if_stats() -> Any:
+            calls["stats"] += 1
+            return {"eth0": SimpleNamespace(isup=True)}
+
+        fake = _sensor_psutil(net_io_counters)
+        fake.net_if_stats = net_if_stats
+
+        with scanner_environment(scanner, fake, trash_size=0):
+            snapshot = scanner.scan_dashboard()
+
+        self.assertEqual(calls, {"global": 1, "pernic": 1, "stats": 1})
+        network = snapshot.get("network")
+        self.assertEqual(network.subtitle, "Active: eth0")
+        self.assertIn("Active interface: eth0", network.details)
+
+    def test_network_observation_reuses_one_read_for_capability_and_rendering(
+        self,
+    ) -> None:
+        scanner = SystemScanner(Path("Downloads"))
+        pernic_reads: list[bool] = []
+        stats_reads: list[bool] = []
+
+        def net_io_counters(pernic: bool = False) -> Any:
+            pernic_reads.append(pernic)
+            if pernic:
+                return {
+                    "lo": _counters(0, 0),
+                    "eth0": _counters(512 * 1024, 1024 * 1024),
+                }
+            return _counters(512 * 1024, 1024 * 1024)
+
+        def net_if_stats() -> Any:
+            stats_reads.append(True)
+            return {
+                "lo": SimpleNamespace(isup=True),
+                "eth0": SimpleNamespace(isup=True),
+            }
+
+        fake = _sensor_psutil(net_io_counters)
+        fake.net_if_stats = net_if_stats
+
+        with scanner_environment(scanner, fake, trash_size=0):
+            snapshot = scanner.scan_component("network")
+
+        self.assertEqual(pernic_reads, [False, True])
+        self.assertEqual(stats_reads, [True])
+        self.assertEqual(snapshot.capability, CapabilityState.SUPPORTED)
+        self.assertEqual(snapshot.subtitle, "Active: eth0")
+
+    def test_observation_path_distinguishes_failed_read_from_empty_state(self) -> None:
+        scanner = SystemScanner(Path("Downloads"))
+
+        def net_io_counters(pernic: bool = False) -> Any:
+            if pernic:
+                raise PermissionError("denied")
+            return _counters(100, 200)
+
+        fake = _sensor_psutil(net_io_counters)
+
+        with scanner_environment(scanner, fake, trash_size=0):
+            snapshot = scanner.scan_component("network")
+
+        self.assertEqual(snapshot.subtitle, "No active interface")
+        self.assertIn("Active interface: Unknown", snapshot.details)
+
+        def net_if_stats() -> Any:
+            return {"eth0": SimpleNamespace(isup=False)}
+
+        fake.net_if_stats = net_if_stats
+
+        with scanner_environment(scanner, fake, trash_size=0):
+            snapshot = scanner.scan_component("network")
+
+        self.assertEqual(snapshot.subtitle, "Disconnected")
+        self.assertIn("Active interface: none", snapshot.details)
+
+
 class NetworkCardTests(unittest.TestCase):
     def test_network_card_value_shows_rate_from_previous_sample(self) -> None:
         scanner = SystemScanner(Path("Downloads"))

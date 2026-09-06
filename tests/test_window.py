@@ -676,6 +676,30 @@ class AppWindowTests(unittest.TestCase):
 
         window.status_label.config.assert_called_with(text="●  Scanning CPU... (1/6)")
 
+    def test_presentation_targets_include_optional_preferences_pair(self) -> None:
+        window = self.make_window()
+        window.preferences_status_label = Mock()
+        window.preferences_progress_bar = Mock()
+
+        window._for_each_presentation_target(
+            lambda label, bar: (label.config(text="x"), bar.stop())
+        )
+
+        window.status_label.config.assert_called_with(text="x")
+        window.progress_bar.stop.assert_called_once()
+        window.preferences_status_label.config.assert_called_with(text="x")
+        window.preferences_progress_bar.stop.assert_called_once()
+
+    def test_presentation_targets_work_without_preferences_pair(self) -> None:
+        window = self.make_window()
+
+        window._for_each_presentation_target(
+            lambda label, bar: (label.config(text="x"), bar.stop())
+        )
+
+        window.status_label.config.assert_called_with(text="x")
+        window.progress_bar.stop.assert_called_once()
+
     def test_cancelled_scan_keeps_previous_results_without_error_dialog(self) -> None:
         window = self.make_window()
         window._scan_coordinator.generation = 1
