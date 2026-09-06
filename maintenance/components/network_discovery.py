@@ -114,7 +114,6 @@ class ZeroconfDiscoveryBackend:
         if _zeroconf_module is None:
             raise RuntimeError("python-zeroconf is not installed")
         zc = _zeroconf_module.Zeroconf()
-        addresses = [addr for addr in zc.addresses if not _is_loopback(addr)]
         properties = {
             "id": advertisement.stable_id,
             "name": advertisement.display_name,
@@ -128,7 +127,6 @@ class ZeroconfDiscoveryBackend:
         service_info = _zeroconf_module.ServiceInfo(
             SERVICE_TYPE,
             f"{advertisement.stable_id}.{SERVICE_TYPE}",
-            addresses=addresses,
             port=port,
             properties=properties,
             server=f"{advertisement.hostname}.local.",
@@ -155,14 +153,6 @@ class ZeroconfDiscoveryBackend:
             except Exception:
                 LOGGER.debug("Failed to close zeroconf", exc_info=True)
             self._zeroconf = None
-
-
-def _is_loopback(address: Any) -> bool:
-    try:
-        text = str(address)
-    except Exception:  # noqa: BLE001 - best-effort address check.
-        return False
-    return text == "127.0.0.1" or text.startswith("::1")
 
 
 class _ZeroconfListener:

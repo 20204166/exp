@@ -1,11 +1,14 @@
 """NetworkDiscovery component tests (no real LAN required)."""
 
 import unittest
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from maintenance.components.network_discovery import (
     DiscoveryAdvertisement,
     NetworkDiscovery,
+    ZeroconfDiscoveryBackend,
 )
 from maintenance.nodes import NodeId
 
@@ -122,6 +125,44 @@ def _discovery(
 
 
 class NetworkDiscoveryTests(unittest.TestCase):
+    def test_zeroconf_backend_starts_without_a_zeroconf_addresses_attribute(
+        self,
+    ) -> None:
+        registered: list[Any] = []
+
+        class FakeZeroconf:
+            def register_service(self, service_info: Any) -> None:
+                registered.append(service_info)
+
+            def close(self) -> None:
+                pass
+
+        class FakeServiceInfo:
+            def __init__(self, *_args: Any, **kwargs: Any) -> None:
+                self.kwargs = kwargs
+
+        class FakeServiceBrowser:
+            def __init__(self, *_args: Any) -> None:
+                pass
+
+            def cancel(self) -> None:
+                pass
+
+        fake_module = SimpleNamespace(
+            Zeroconf=FakeZeroconf,
+            ServiceInfo=FakeServiceInfo,
+            ServiceBrowser=FakeServiceBrowser,
+        )
+        with patch(
+            "maintenance.components.network_discovery._zeroconf_module", fake_module
+        ):
+            backend = ZeroconfDiscoveryBackend(lambda *_args: None)
+            backend.start(_advertisement())
+            backend.stop()
+
+        self.assertEqual(len(registered), 1)
+        self.assertNotIn("addresses", registered[0].kwargs)
+
     def test_start_and_stop_lifecycle(self) -> None:
         discovery, backend, _events, _clock = _discovery()
         self.assertTrue(discovery.start())
