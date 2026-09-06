@@ -52,14 +52,26 @@ py_in_venv() {
 # Return the first 3.10+ interpreter that is NOT inside a virtual environment.
 # Used by install-user.sh so a per-user/system install always lands in a real
 # interpreter regardless of whether a venv (e.g. the repo .venv) is active.
+# When every 3.10+ candidate is a venv, falls back to that venv's base
+# interpreter (sys._base_executable), which is the real system Python the venv
+# was created from.
 first_system_python_ge_310() {
-  local candidate
+  local candidate base
+  base=""
   while IFS= read -r candidate; do
-    if require_python "$candidate" >/dev/null 2>&1 && ! py_in_venv "$candidate"; then
-      echo "$candidate"
+    if ! require_python "$candidate" >/dev/null 2>&1; then continue; fi
+    if ! py_in_venv "$candidate"; then echo "$candidate"; return 0; fi
+    if [ -z "$base" ]; then base="$candidate"; fi
+  done < <(python_candidates)
+  if [ -n "$base" ]; then
+    local base_py
+    base_py="$("$base" -c 'import sys; print(sys._base_executable)' 2>/dev/null || true)"
+    if [ -n "$base_py" ] && [ -x "$base_py" ] \
+       && require_python "$base_py" >/dev/null 2>&1 && ! py_in_venv "$base_py"; then
+      echo "$base_py"
       return 0
     fi
-  done < <(python_candidates)
+  fi
   return 1
 }
 

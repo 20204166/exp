@@ -15,11 +15,35 @@ try {
     $actual = (Get-FileHash $wheelPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -ne $expected) { throw "Wheel checksum mismatch" }
 
-    $py = $null
-    foreach ($candidate in @(@("py", "-3.13"), @("py", "-3.12"), @("py", "-3.11"), @("py", "-3.10"), @("python3"), @("python"))) {
-        try { & $candidate -c "import sys; assert sys.version_info >= (3,10)" 2>$null; if ($LASTEXITCODE -eq 0) { $py = $candidate; break } } catch {}
+    function Test-VenvPython {
+        param([object]$Py)
+        $script = "import sys; raise SystemExit(0 if sys.prefix != sys.base_prefix else 1)"
+        & $Py -c $script 2>$null
+        return ($LASTEXITCODE -eq 0)
     }
-    if (-not $py) { throw "System Analyzer requires Python 3.10 or newer." }
+
+    $py = $null
+    $base = $null
+    foreach ($candidate in @(@("py", "-3.13"), @("py", "-3.12"), @("py", "-3.11"), @("py", "-3.10"), @("python3"), @("python"))) {
+        try {
+            & $candidate -c "import sys; assert sys.version_info >= (3,10)" 2>$null
+            if ($LASTEXITCODE -ne 0) { continue }
+            if (-not (Test-VenvPython $candidate)) { $py = $candidate; break }
+            if (-not $base) { $base = $candidate }
+        } catch {}
+    }
+    # Every candidate was a venv: fall back to its base interpreter so a
+    # per-user install works even while a venv is active.
+    if (-not $py -and $base) {
+        $basePy = & $base -c "import sys; print(sys._base_executable)" 2>$null
+        if ($basePy -and (Test-Path $basePy) -and -not (Test-VenvPython $basePy)) {
+            $py = @($basePy)
+        }
+    }
+    if (-not $py) {
+        throw "System Analyzer requires Python 3.10 or newer. Deactivate any active virtual environment (or run outside it) and retry."
+    }
+    if (Test-VenvPython $py) { throw "Cannot install: '$($py -join ' ')' is inside a virtual environment (pip disables '--user' inside venvs). Deactivate the venv and retry." }
     $pipArgs = @("-m", "pip", "install")
     if (-not $System) { $pipArgs += "--user" }
     $pipArgs += @("--break-system-packages", $wheelPath)

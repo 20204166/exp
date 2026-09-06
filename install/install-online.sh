@@ -13,18 +13,42 @@ download() {
   else echo "curl or wget is required" >&2; exit 1; fi
 }
 
+# Return whether the interpreter is inside a virtual environment. A venv
+# interpreter must never be used for a --user install: pip refuses --user
+# inside venvs ("User site-packages are not visible in this virtualenv"),
+# which is exactly what happens when a venv (e.g. the repo .venv) is active.
+py_in_venv() {
+  "$1" -c 'import sys; raise SystemExit(0 if sys.prefix != sys.base_prefix else 1)' >/dev/null 2>&1
+}
+
 choose_python() {
-  local candidate version major minor
+  local candidate version major minor base
+  base=""
   for candidate in python3.13 python3.12 python3.11 python3.10 python3 python; do
     command -v "$candidate" >/dev/null 2>&1 || continue
     version="$($candidate -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
     [ -n "$version" ] || continue
     major="${version%%.*}"; minor="${version#*.}"
     if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 10 ]; }; then
-      echo "$candidate"; return 0
+      if ! py_in_venv "$candidate"; then
+        echo "$candidate"; return 0
+      fi
+      if [ -z "$base" ]; then base="$candidate"; fi
     fi
   done
-  echo "System Analyzer requires Python 3.10 or newer." >&2
+  # Every 3.10+ candidate was a venv: fall back to its base interpreter (the
+  # real system Python the venv was created from), so a per-user install works
+  # even while a venv is active (the common macOS case where /usr/bin/python3
+  # is still 3.9).
+  if [ -n "$base" ]; then
+    local base_py
+    base_py="$("$base" -c 'import sys; print(sys._base_executable)' 2>/dev/null || true)"
+    if [ -n "$base_py" ] && [ -x "$base_py" ] && ! py_in_venv "$base_py"; then
+      echo "$base_py"; return 0
+    fi
+  fi
+  echo "System Analyzer requires Python 3.10 or newer. Deactivate any active" >&2
+  echo "virtual environment (or run outside it) and retry." >&2
   exit 1
 }
 
