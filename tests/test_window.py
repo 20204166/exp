@@ -446,12 +446,12 @@ class AppWindowTests(unittest.TestCase):
             self.assertEqual(kwargs["analyzer"], window.analyzer)
             self.assertEqual(kwargs["manager"], window.process_manager)
             self.assertEqual(kwargs["colors"], window.colors)
-            self.assertEqual(kwargs["on_changed"], window._rescan_after_change)
+            self.assertTrue(callable(kwargs["on_changed"]))
 
         storage_kwargs = storage_dialog.call_args.kwargs
         self.assertEqual(storage_kwargs["manager"], window.file_manager)
         self.assertEqual(storage_kwargs["colors"], window.colors)
-        self.assertEqual(storage_kwargs["on_changed"], window._rescan_after_change)
+        self.assertTrue(callable(storage_kwargs["on_changed"]))
 
         for call in info_dialog.call_args_list:
             self.assertEqual(call.args[0], window.master)

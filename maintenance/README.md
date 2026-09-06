@@ -10,7 +10,32 @@ subsystem is documented in `components/README.md`.
 ### `__init__.py` — top-level public API
 Re-exports: `DashboardSnapshot`, `FileActionResult`, `FileCandidate`,
 `FileManager`, `ProcessActionResult`, `ProcessCandidate`, `ProcessManager`,
-`ResourceSummary`, `SystemScanner`.
+`ResourceSummary`, `SystemScanner`, plus the node/target model from
+`nodes.py` (`NodeId`, `NodeDescriptor`, `NodeRegistry`, `NodeContext`,
+`NodeCapability`, trust/status enums, `DiscoveredNodeCandidate`, `ProcessRef`,
+`FileRef`, `local_node_descriptor`, `node_operation_key`).
+
+### `nodes.py` — node/target model and registry (cluster boundary)
+- `NodeId` — stable opaque node identity (never derived from a display name,
+  hostname, address, or selector position).
+- `NodeDescriptor` — immutable node metadata (`display_name`, `hostname`,
+  `is_local`, `trust`, `status`, `capabilities`, `platform`).
+- `NodeCapability` / `NodeStatus` / `NodeTrustState` — typed capability,
+  connectivity, and discovered/trusted/authorised state. Invariant:
+  `DISCOVERED != TRUSTED != AUTHORISED`.
+- `DiscoveredNodeCandidate` — normalized presence observation from the
+  discovery component; never an authorisation.
+- `NodeContext` — per-node runtime state (provider, process/file managers,
+  snapshot, capabilities, failure counts, scheduler).
+- `NodeRegistry` — central owner of known nodes, discovered candidates, and
+  the selected node. Only local and operational trusted/authorised contexts
+  are selectable; discovered candidates never gain capabilities automatically,
+  and a trusted placeholder remains non-selectable until pairing supplies its
+  provider and scheduler.
+- `ProcessRef` / `FileRef` — node-bound references for future target-aware
+  actions.
+- `node_operation_key(node_id, operation)` — node-qualified coordinator/cache
+  key so two nodes can never coalesce or overwrite each other's work.
 
 ### `scanner.py` — system scan orchestration
 - `class SystemScanner` — reads system state and discovers reviewable cleanup
@@ -93,7 +118,12 @@ Re-exports: `DashboardSnapshot`, `FileActionResult`, `FileCandidate`,
   detail dialogs; process/storage scans run in background threads with
   generation guards, cancellation, and button disabling. InfoDialog groups
   detail lines into sections (`detail_sections(...)`), shows the headline
-  value, and scrolls with the Close button always visible.
+  value, and scrolls with the Close button always visible. `ProcessDialog` and
+  `StorageDialog` accept optional `node_id`/`node_title`/`read_only`
+  parameters: with a node ID their coordinator keys are node-qualified
+  (`node:{id}:process` / `node:{id}:storage`), the title names the target
+  node, and a read-only target keeps destructive buttons disabled and refuses
+  the action defensively.
 
 ### `models.py` — data models
 `ResourceSummary`, `DashboardSnapshot`, `ProcessCandidate`, `FileCandidate`,

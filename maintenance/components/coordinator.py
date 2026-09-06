@@ -186,8 +186,12 @@ class ScanCoordinator:
         return True, self._reset_state_and_return_rerun()
 
     def cancel(self) -> None:
-        """Clear the active state without scheduling another scan."""
+        """Invalidate the active generation without scheduling another scan."""
 
+        if self.active:
+            # A queued completion from the cancelled worker must never satisfy
+            # a later target selection before its replacement scan begins.
+            self.generation += 1
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -263,6 +267,8 @@ class AppCoordinator:
         self._deliver = deliver or (lambda callback: callback())
         self._on_activity = on_activity
         self._states: dict[str, AppRunState] = {}
+        self._discovery: Any = None
+        self._discovery_handlers: dict[str, Any] = {}
 
     def state(self, key: str) -> AppRunState:
         return self._states.setdefault(key, AppRunState())
@@ -545,3 +551,91 @@ class AppCoordinator:
 
     def clear(self, key: str) -> None:
         self._states.pop(key, None)
+
+    def post(self, callback: Callable[[], None]) -> None:
+        """Deliver one callback onto the UI thread and keep the poll alive.
+
+        The shared delivery path used by discovery events and other long-lived
+        event sources: ``deliver`` (thread-safe, schedules on the UI thread) is
+        used exactly like every other coordinated completion, and
+        ``on_activity`` keeps the application drain poll scheduled while a
+        discovery event is in flight.
+        """
+
+        self._note_activity()
+        self._deliver(callback)
+
+    def start_discovery(
+        self,
+        discovery: Any,
+        *,
+        on_candidate: Callable[[Any], None],
+        on_lost: Callable[[str], None],
+    ) -> bool:
+        """Own the discovery lifecycle: start it once and bridge its events.
+
+        Idempotent: a second ``start_discovery`` with a different component is
+        ignored while one is active. All candidate/lost events are delivered
+        through ``post`` so registry updates always happen on the UI thread and
+        never touch widgets from a transport thread. Returns whether discovery
+        became active; a transport that reports unavailable simply stays
+        inactive and the app continues as a single-node app.
+        """
+
+        if self._discovery is not None:
+            LOGGER.warning("Discovery already started; ignoring duplicate start")
+            return False
+
+        def bridge(kind: str, payload: Any) -> None:
+            if self._discovery is not discovery:
+                return  # late transport event after stop is ignored
+            if kind == "candidate":
+                self.post(lambda: on_candidate(payload))
+            else:
+                self.post(lambda: on_lost(str(payload)))
+
+        discovery.on_event = bridge
+        self._discovery = discovery
+        self._discovery_handlers = {"candidate": on_candidate, "lost": on_lost}
+        if not discovery.start():
+            LOGGER.warning(
+                "Discovery unavailable: %s", discovery.unavailable_reason or "unknown"
+            )
+            # A failed transport must not reserve lifecycle ownership forever:
+            # callers may retry later after the network or optional dependency
+            # becomes available.
+            if self._discovery is discovery:
+                self._discovery = None
+                self._discovery_handlers = {}
+                discovery.on_event = None
+            return False
+        return True
+
+    def discovery_tick(self) -> None:
+        """Advance discovery TTL expiry from the application timer.
+
+        Called on the UI thread by the window's periodic timer; any peer that
+        expired is dropped and its ``lost`` event is posted through ``post``.
+        """
+
+        discovery = self._discovery
+        if discovery is None:
+            return
+        discovery.expire_stale()
+
+    def stop_discovery(self) -> None:
+        """Stop advertising/browsing and drop all lifecycle state.
+
+        Idempotent and safe to call during shutdown; late transport callbacks
+        are ignored because the bridge is cleared first.
+        """
+
+        discovery = self._discovery
+        self._discovery = None
+        self._discovery_handlers = {}
+        if discovery is not None:
+            discovery.stop()
+
+    @property
+    def discovery(self) -> Any:
+        return self._discovery

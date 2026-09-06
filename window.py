@@ -1,4 +1,5 @@
 import logging
+import platform
 import threading
 import time
 import tkinter as tk
@@ -8,6 +9,7 @@ from tkinter import messagebox, ttk
 from typing import Any, cast
 
 import algo
+from maintenance import __version__
 from maintenance.actions import FileManager, ProcessManager
 from maintenance.components import (
     DOWNLOADS_SCAN_CANCELLED,
@@ -17,6 +19,12 @@ from maintenance.components import (
 from maintenance.components.coordinator import (
     AppCoordinator,
     ComponentRefreshScheduler,
+)
+from maintenance.components.network_discovery import (
+    PROTOCOL_VERSION,
+    REAP_TICK_SECONDS,
+    DiscoveryAdvertisement,
+    NetworkDiscovery,
 )
 from maintenance.components.scan_support import (
     SCAN_CANCELLED_NOTICE,
@@ -34,6 +42,15 @@ from maintenance.models import (
     DashboardSnapshot,
     ResourceSummary,
     unavailable_summary,
+)
+from maintenance.nodes import (
+    LOCAL_NODE_ID,
+    NodeCapability,
+    NodeContext,
+    NodeId,
+    NodeRegistry,
+    local_node_descriptor,
+    node_operation_key,
 )
 from maintenance.preferences import (
     INTERVAL_POLICIES,
@@ -121,6 +138,10 @@ class AppWindow:
         self._feature_catalog = ResourceFeatureCatalog()
         self._component_poll_id: str | None = None
         self._capabilities: dict[str, CapabilityState] = {}
+        self._node_registry = NodeRegistry()
+        self._selected_node_id: NodeId | None = None
+        self._discovery_tick_id: str | None = None
+        self._build_local_node_context()
 
         self.master = master or tk.Tk()
         self.master.title("System Analyzer")
@@ -131,7 +152,38 @@ class AppWindow:
 
         self._configure_styles()
         self._build_window()
+        self._start_discovery()
         self._schedule_timer(350, self.handle_analyze)
+
+    def _build_local_node_context(self) -> None:
+        """Register the local machine as the first node and select it.
+
+        The local node is the one real target today. The window's historical
+        attributes (``analyzer``, ``snapshot``, ``_capabilities``,
+        ``_component_scheduler``) are kept as mirrors of the selected context
+        so existing callers and test seams keep working; switching nodes
+        re-syncs the mirrors from the newly selected context.
+        """
+
+        descriptor = local_node_descriptor(
+            hostname=platform.node(),
+            display_name="This System",
+            platform_name=platform.system(),
+        )
+        context = NodeContext(
+            descriptor=descriptor,
+            provider=self.analyzer,
+            process_manager=self.process_manager,
+            file_manager=self.file_manager,
+            scheduler=self._component_scheduler,
+            coordinator=self._coordinator,
+            snapshot=self.snapshot,
+            capabilities=self._capabilities,
+        )
+        self.__dict__["_capability_counts"] = context.capability_counts
+        self.__dict__["_failed_card_counts"] = context.failed_card_counts
+        self._node_registry.register_context(context)
+        self._selected_node_id = self._node_registry.select(context.node_id)
 
     @property
     def colors(self) -> dict[str, str]:
@@ -150,6 +202,41 @@ class AppWindow:
             coordinator = ScanCoordinator()
             self.__dict__["_scan_coordinator"] = coordinator
         return coordinator
+
+    def _selected_context(self) -> NodeContext | None:
+        """Return the selected node's runtime context, or None outside the app.
+
+        Tests construct ``AppWindow`` with ``object.__new__`` and no registry,
+        so callers must treat ``None`` as the legacy single-node behaviour.
+        """
+
+        registry = self.__dict__.get("_node_registry")
+        selected = self.__dict__.get("_selected_node_id")
+        if registry is None or selected is None:
+            return None
+        try:
+            return registry.context(selected)
+        except KeyError:
+            return None
+
+    def _operation_key(self, operation: str) -> str:
+        """Return a node-qualified coordinator key for the selected node.
+
+        Outside the registry (tests) the legacy unqualified key is returned so
+        existing coordinator-key assertions keep passing; inside the app every
+        shared operation key is namespaced so two nodes can never coalesce or
+        overwrite each other's work.
+        """
+
+        registry = self.__dict__.get("_node_registry")
+        selected = self.__dict__.get("_selected_node_id")
+        if registry is None or selected is None:
+            return operation
+        return node_operation_key(selected, operation)
+
+    def _multi_node_selectable(self) -> bool:
+        registry = self.__dict__.get("_node_registry")
+        return registry is not None and len(registry.selectable_descriptors()) > 1
 
     def _build_window(self) -> None:
         self._page_router = PageRouter(self.master)
@@ -170,6 +257,12 @@ class AppWindow:
             style="App.TFrame",
         )
 
+        node_title = None
+        if self._multi_node_selectable():
+            context = self._selected_context()
+            if context is not None:
+                node_title = context.descriptor.display_name
+
         self.header_actions = ui_layout.dashboard_header(
             self.main_frame,
             title="System Analyzer",
@@ -180,6 +273,12 @@ class AppWindow:
             frame_cls=ttk.Frame,
             label_cls=ttk.Label,
             wrap=680,
+            node_title=node_title,
+        )
+        self.node_title_label = getattr(
+            self.header_actions,
+            "_dashboard_node_label",
+            None,
         )
 
         self.settings_button = ttk.Button(
@@ -189,6 +288,7 @@ class AppWindow:
             style="Neutral.TButton",
             cursor="hand2",
         )
+        self._build_node_selector(self.header_actions)
         self.settings_button.pack(anchor="e")
 
         self.status_label = ttk.Label(
@@ -377,6 +477,225 @@ class AppWindow:
         handler = handlers.get(key)
         if handler is not None:
             handler()
+
+    def _build_node_selector(self, actions: Any) -> None:
+        """Add a compact readonly node selector to the header, when needed.
+
+        With only the local node (or none registered) no selector is built, so
+        the one-node experience stays exactly as it is today. With multiple
+        selectable (local/trusted) nodes a labelled combobox appears above the
+        Settings button; discovered/untrusted candidates are never offered.
+        """
+
+        self._node_selector = None
+        self._node_selector_var: tk.StringVar | None = None
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        selectable = registry.selectable_descriptors()
+        if len(selectable) <= 1:
+            return
+
+        name_counts: dict[str, int] = {}
+        for descriptor in selectable:
+            name_counts[descriptor.display_name] = (
+                name_counts.get(descriptor.display_name, 0) + 1
+            )
+        labels = {
+            descriptor.id: (
+                descriptor.display_name
+                if name_counts[descriptor.display_name] == 1
+                else (
+                    f"{descriptor.display_name} "
+                    f"({descriptor.hostname} · {descriptor.id.value})"
+                )
+            )
+            for descriptor in selectable
+        }
+        self._node_selector_values = {
+            label: node_id for node_id, label in labels.items()
+        }
+        selected_id = self.__dict__.get("_selected_node_id")
+        selected_value = labels.get(selected_id, labels[selectable[0].id])
+
+        frame = ttk.Frame(actions, style="App.TFrame")
+        ttk.Label(frame, text="Node", style="Description.TLabel").pack(anchor="w")
+        self._node_selector_var = tk.StringVar(value=selected_value)
+        self._node_selector = ttk.Combobox(
+            frame,
+            textvariable=self._node_selector_var,
+            state="readonly",
+            values=list(self._node_selector_values),
+            width=18,
+        )
+        self._node_selector.pack(anchor="w")
+        self._node_selector.bind("<<ComboboxSelected>>", self._on_node_selector_change)
+        frame.pack(anchor="e", pady=(0, 9))
+
+    def _on_node_selector_change(self, _event: object) -> None:
+        registry = self.__dict__.get("_node_registry")
+        selector = self.__dict__.get("_node_selector")
+        selector_var = self.__dict__.get("_node_selector_var")
+        if registry is None or selector is None or selector_var is None:
+            return
+        label = selector_var.get()
+        node_id = self.__dict__.get("_node_selector_values", {}).get(label)
+        if node_id is not None:
+            self._switch_selected_node(node_id)
+
+    def _switch_selected_node(self, node_id: NodeId) -> None:
+        """Switch the dashboard to another selectable node.
+
+        Cancels the current node's active scan first, then re-syncs the
+        window's state mirrors from the new context, renders the new node's
+        last-known-good snapshot, and starts a fresh scan for it. Node contexts
+        keep their own snapshots, caches, capabilities, and scheduler so no
+        value leaks across nodes. Unknown/non-selectable IDs are ignored
+        defensively.
+        """
+
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        if node_id == self.__dict__.get("_selected_node_id"):
+            return
+        try:
+            registry.select(node_id)
+        except (KeyError, ValueError):
+            LOGGER.warning("Ignoring selection of unavailable node: %s", node_id)
+            return
+        self.__dict__["_selected_node_id"] = node_id
+        context = registry.selected_context()
+        self._cancel_active_scan()
+        self._sync_selected_context_mirrors(context)
+        self._render_selected_node(context)
+        self._schedule_timer(0, self.handle_analyze)
+
+    def _cancel_active_scan(self) -> None:
+        """Cancel the in-flight full scan so its result cannot land on another node."""
+
+        cancel_event = self.__dict__.get("_analysis_cancel_event")
+        if cancel_event is not None:
+            cancel_event.set()
+        self._analysis_cancel_event = None
+        self._scan_coordinator_state().cancel()
+        self._cancel_scan_timeout()
+        self.__dict__["_timed_out_generation"] = None
+        self._cancel_timer(self.__dict__.get("_lease_grace_id"))
+        self.__dict__["_lease_grace_id"] = None
+
+    def _sync_selected_context_mirrors(self, context: NodeContext) -> None:
+        """Point the window's historical attributes at the selected context's state."""
+
+        self.analyzer = context.provider
+        self.process_manager = context.process_manager
+        self.file_manager = context.file_manager
+        self.snapshot = context.snapshot
+        self._capabilities = context.capabilities
+        self.__dict__["_capability_counts"] = context.capability_counts
+        self.__dict__["_failed_card_counts"] = context.failed_card_counts
+        self.__dict__["_full_snapshot_applied_at"] = context.full_snapshot_applied_at
+        self._component_scheduler = context.scheduler
+        self._reconcile_intervals()
+        self._reconcile_cards_and_polling()
+
+    def _render_selected_node(self, context: NodeContext) -> None:
+        """Render one node's cached snapshot without starting a new scan."""
+
+        snapshot = context.snapshot
+        node_title_label = getattr(self, "node_title_label", None)
+        if node_title_label is not None:
+            node_title_label.config(text=context.descriptor.display_name.upper())
+        if snapshot is None:
+            self.refreshed_label.config(text="Not refreshed yet")
+            self.scan_time_label.config(text="Not scanned yet")
+            self.health_label.config(
+                text="Health: No issues detected", style="Healthy.TLabel"
+            )
+            for card in self.cards.values():
+                card.reset_summary()
+            return
+        for resource in snapshot.resources:
+            if resource.key in self.cards:
+                self.cards[resource.key].update_summary(resource)
+        scanned_time = snapshot.scanned_at.strftime("%H:%M:%S")
+        self.scan_time_label.config(
+            text=f"{snapshot.system_label} • scanned {scanned_time}"
+        )
+        self.refreshed_label.config(text=f"Last refreshed: {scanned_time}")
+        self._refresh_health()
+
+    def _start_discovery(self) -> None:
+        """Advertise this node and browse for peers via the shared coordinator.
+
+        Discovery is optional infrastructure: when the transport is unavailable
+        or startup fails, the app continues as a normal single-node application
+        and the registry simply has no discovered candidates.
+        """
+
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        try:
+            local_context = registry.context(NodeId(LOCAL_NODE_ID))
+        except KeyError:
+            return
+        descriptor = local_context.descriptor
+        advertisement = DiscoveryAdvertisement(
+            stable_id=descriptor.id.value,
+            display_name=descriptor.display_name,
+            hostname=descriptor.hostname,
+            app_version=__version__,
+            protocol_version=PROTOCOL_VERSION,
+            platform=descriptor.platform,
+            connectable=False,
+            port=None,
+        )
+        discovery = NetworkDiscovery(
+            descriptor.id,
+            advertisement=advertisement,
+        )
+        started = self._coordinator.start_discovery(
+            discovery,
+            on_candidate=self._on_discovered_candidate,
+            on_lost=self._on_discovered_lost,
+        )
+        if started:
+            self._discovery_tick_id = self._schedule_timer(
+                int(REAP_TICK_SECONDS * 1000),
+                self._tick_discovery,
+            )
+
+    def _tick_discovery(self) -> None:
+        self._discovery_tick_id = None
+        if self._is_closing:
+            return
+        self._coordinator.discovery_tick()
+        self._discovery_tick_id = self._schedule_timer(
+            int(REAP_TICK_SECONDS * 1000),
+            self._tick_discovery,
+        )
+
+    def _on_discovered_candidate(self, candidate: Any) -> None:
+        if self._is_closing:
+            return
+        registry = self.__dict__.get("_node_registry")
+        if registry is not None:
+            registry.update_discovered(candidate)
+
+    def _on_discovered_lost(self, stable_id: str) -> None:
+        if self._is_closing:
+            return
+        registry = self.__dict__.get("_node_registry")
+        if registry is not None:
+            registry.remove_discovered(NodeId(stable_id))
+
+    def _stop_discovery(self) -> None:
+        self._cancel_timer(self.__dict__.get("_discovery_tick_id"))
+        self._discovery_tick_id = None
+        coordinator = self.__dict__.get("_coordinator")
+        if coordinator is not None:
+            coordinator.stop_discovery()
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self.master)
@@ -574,6 +893,11 @@ class AppWindow:
 
         cancel_event = threading.Event()
         self._analysis_cancel_event = cancel_event
+        source_node_id = self.__dict__.get("_selected_node_id")
+        source_context = self._selected_context()
+        source_provider = (
+            source_context.provider if source_context is not None else self.analyzer
+        )
         self._scan_timeout_id = self._schedule_timer(
             self.SCAN_TIMEOUT_MILLISECONDS,
             self._handle_scan_timeout,
@@ -585,11 +909,11 @@ class AppWindow:
 
         def dashboard_task() -> DashboardSnapshot:
             return call_legacy_compatible(
-                lambda: self.analyzer.dashboard_snapshot(
+                lambda: source_provider.dashboard_snapshot(
                     cancel_event=cancel_event,
                     progress_callback=report_progress,
                 ),
-                lambda: self.analyzer.dashboard_snapshot(),
+                lambda: source_provider.dashboard_snapshot(),
             )
 
         self._run_in_background(
@@ -597,10 +921,12 @@ class AppWindow:
             on_success=lambda snapshot: self._show_snapshot_for_generation(
                 generation,
                 snapshot,
+                node_id=source_node_id,
             ),
             on_error=lambda message: self._show_error_for_generation(
                 generation,
                 message,
+                node_id=source_node_id,
             ),
         )
 
@@ -622,6 +948,8 @@ class AppWindow:
 
     def _handle_scan_timeout(self, generation: int) -> None:
         if self._is_closing:
+            return
+        if generation != self._scan_coordinator_state().generation:
             return
         if generation <= self._resolved_scan_generation:
             return
@@ -752,16 +1080,28 @@ class AppWindow:
         self,
         generation: int,
         snapshot: DashboardSnapshot,
+        *,
+        node_id: NodeId | None = None,
     ) -> None:
         rerun_requested = self._resolution_for_generation(generation)
         if rerun_requested is None:
             return
-        self._show_snapshot(snapshot)
+        if node_id is None or node_id == self.__dict__.get("_selected_node_id"):
+            self._show_snapshot(snapshot)
         self._schedule_rerun_if_requested(rerun_requested)
 
-    def _show_error_for_generation(self, generation: int, message: str) -> None:
+    def _show_error_for_generation(
+        self,
+        generation: int,
+        message: str,
+        *,
+        node_id: NodeId | None = None,
+    ) -> None:
         rerun_requested = self._resolution_for_generation(generation)
         if rerun_requested is None:
+            return
+        if node_id is not None and node_id != self.__dict__.get("_selected_node_id"):
+            self._schedule_rerun_if_requested(rerun_requested)
             return
         if message == DOWNLOADS_SCAN_CANCELLED:
             self._set_busy(False)
@@ -778,9 +1118,13 @@ class AppWindow:
 
         merged = self._merge_snapshot(snapshot)
         self.snapshot = merged
+        context = self._selected_context()
+        if context is not None:
+            context.snapshot = merged
+            context.full_snapshot_applied_at = time.monotonic()
         coordinator = self.__dict__.get("_coordinator")
         if coordinator is not None:
-            coordinator.store("snapshot:dashboard", merged)
+            coordinator.store(self._operation_key("snapshot:dashboard"), merged)
         for resource in snapshot.resources:
             self._observe_capability(resource.key, resource)
         for resource in merged.resources:
@@ -899,30 +1243,55 @@ class AppWindow:
 
         summary = self.snapshot.get(resource_key)
         feature = self._feature_catalog.get(resource_key)
+        context = self._selected_context()
+        node_id = context.node_id if context is not None else None
+        node_title = (
+            context.descriptor.display_name
+            if context is not None and self._multi_node_selectable()
+            else None
+        )
         if feature.action_kind == "process":
+            read_only = context is not None and not context.descriptor.has(
+                NodeCapability.PROCESS_TERMINATION
+            )
             ProcessDialog(
                 self.master,
                 analyzer=self.analyzer,
                 manager=self.process_manager,
                 resource_key=resource_key,
                 colors=self.colors,
-                on_changed=self._rescan_after_change,
+                on_changed=lambda: self._rescan_node_after_change(node_id),
                 coordinator=self._coordinator,
+                node_id=node_id,
+                node_title=node_title,
+                read_only=read_only,
             )
         elif feature.action_kind == "storage":
+            read_only = context is not None and not context.descriptor.has(
+                NodeCapability.CLEANUP
+            )
             StorageDialog(
                 self.master,
                 analyzer=self.analyzer,
                 manager=self.file_manager,
                 colors=self.colors,
-                on_changed=self._rescan_after_change,
+                on_changed=lambda: self._rescan_node_after_change(node_id),
                 coordinator=self._coordinator,
+                node_id=node_id,
+                node_title=node_title,
+                read_only=read_only,
             )
         else:
             InfoDialog(self.master, summary=summary, colors=self.colors)
 
     def _rescan_after_change(self) -> None:
         self._schedule_timer(500, self.handle_analyze)
+
+    def _rescan_node_after_change(self, node_id: NodeId | None) -> None:
+        """Rescan only when an action's original target remains selected."""
+
+        if node_id is None or node_id == self.__dict__.get("_selected_node_id"):
+            self._rescan_after_change()
 
     def _schedule_component_poll(self) -> None:
         if self._component_poll_id is None and not self._is_closing:
@@ -940,7 +1309,14 @@ class AppWindow:
         self._schedule_component_poll()
 
     def _launch_component_scan(self, key: str) -> None:
-        if not self._component_scheduler.begin(key, time.monotonic()):
+        source_context = self._selected_context()
+        source_node_id = self.__dict__.get("_selected_node_id")
+        source_scheduler = self._component_scheduler
+        source_provider = self.analyzer
+        if source_context is not None:
+            source_scheduler = source_context.scheduler
+            source_provider = source_context.provider
+        if not source_scheduler.begin(key, time.monotonic()):
             return
 
         started_at = time.monotonic()
@@ -949,20 +1325,24 @@ class AppWindow:
             _cancel_event: threading.Event,
             _progress: Callable[[str], None],
         ) -> ResourceSummary:
-            return self.analyzer.component_summary(key)
+            return source_provider.component_summary(key)
 
         self._coordinator.run(
-            f"component:{key}",
+            self._operation_key(f"component:{key}"),
             task_factory,
             on_result=lambda _operation, resource: self._queue_component_result(
                 key,
                 started_at,
                 resource,
+                node_id=source_node_id,
+                scheduler=source_scheduler,
             ),
             on_error=lambda _operation, message: self._queue_component_result(
                 key,
                 started_at,
                 RuntimeError(message),
+                node_id=source_node_id,
+                scheduler=source_scheduler,
             ),
         )
 
@@ -971,10 +1351,16 @@ class AppWindow:
         key: str,
         started_at: float,
         value: ResourceSummary | Exception,
+        *,
+        node_id: NodeId | None = None,
+        scheduler: ComponentRefreshScheduler | None = None,
     ) -> None:
         """Apply one component scan result delivered on the Tkinter thread."""
 
-        self._component_scheduler.finish(key)
+        source_scheduler = scheduler or self._component_scheduler
+        source_scheduler.finish(key)
+        if node_id is not None and node_id != self.__dict__.get("_selected_node_id"):
+            return
         applied_at = self.__dict__.get("_full_snapshot_applied_at")
         if applied_at is not None and started_at < applied_at:
             return
@@ -1000,7 +1386,7 @@ class AppWindow:
         displayed = self._merge_resource(key, resource)
         coordinator = self.__dict__.get("_coordinator")
         if coordinator is not None:
-            coordinator.store(f"component:{key}", displayed)
+            coordinator.store(self._operation_key(f"component:{key}"), displayed)
         if key in self.cards:
             self.cards[key].update_summary(displayed)
         self._update_snapshot_resource(key, displayed)
@@ -1277,6 +1663,9 @@ class AppWindow:
                 for current in self.snapshot.resources
             ),
         )
+        context = self._selected_context()
+        if context is not None:
+            context.snapshot = self.snapshot
 
     def _schedule_timer(
         self,
@@ -1332,9 +1721,11 @@ class AppWindow:
         two termination paths can never drift apart. Statement order is
         deliberate and preserved: the coordinator lease and per-path state are
         cleared, then all pending Tk timers are cancelled before the master is
-        torn down.
+        torn down. Discovery is stopped first so no late network event can
+        reach a dying UI.
         """
 
+        self._stop_discovery()
         self._scan_coordinator_state().cancel()
         self.__dict__["_timed_out_generation"] = None
         self.__dict__["_lease_grace_id"] = None
@@ -1343,16 +1734,35 @@ class AppWindow:
         self._background_poll_id = None
         self._scan_timeout_id = None
 
+    def _stop_all_node_workers(self) -> None:
+        """Stop every registered node's persistent scanner workers.
+
+        The selected provider is stopped for backward compatibility with tests
+        that only ever build the local analyzer; any other registered context
+        providers are stopped too so no scanner thread survives the window.
+        """
+
+        analyzer = getattr(self, "analyzer", None)
+        stop_workers = getattr(analyzer, "stop_background_workers", None)
+        if stop_workers is not None:
+            stop_workers()
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        for context in registry.contexts():
+            if context.provider is analyzer:
+                continue
+            stop = getattr(context.provider, "stop_background_workers", None)
+            if stop is not None:
+                stop()
+
     def _close(self) -> None:
         self._is_closing = True
         self._finalize_shutdown()
         if self._analysis_cancel_event is not None:
             self._analysis_cancel_event.set()
         self._analysis_cancel_event = None
-        analyzer = getattr(self, "analyzer", None)
-        stop_workers = getattr(analyzer, "stop_background_workers", None)
-        if stop_workers is not None:
-            stop_workers()
+        self._stop_all_node_workers()
         self.master.destroy()
 
     def _show_error(self, message: str) -> None:

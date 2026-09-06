@@ -18,6 +18,13 @@ from .downloads import (
     HashFingerprint,
 )
 from .gpu import GPU_INFORMATION_UNAVAILABLE, GpuDetector, gpu_unavailable_message
+from .network_discovery import (
+    DEFAULT_TTL_SECONDS,
+    SERVICE_TYPE,
+    DiscoveryAdvertisement,
+    DiscoveryEndpoint,
+    NetworkDiscovery,
+)
 from .process_safety import (
     PROTECTED_PROCESS_NAMES,
     ProcessSafetyPolicy,
@@ -36,14 +43,19 @@ from .scan_support import (
 )
 
 __all__ = [
+    "DEFAULT_TTL_SECONDS",
     "DOWNLOADS_SCAN_CANCELLED",
     "GPU_INFORMATION_UNAVAILABLE",
     "PROTECTED_PROCESS_NAMES",
+    "SERVICE_TYPE",
     "BackgroundTaskRunner",
+    "DiscoveryAdvertisement",
+    "DiscoveryEndpoint",
     "DownloadScanner",
     "DownloadsPathResolver",
     "GpuDetector",
     "HashFingerprint",
+    "NetworkDiscovery",
     "ProcessSafetyPolicy",
     "ProgressCallback",
     "ProgressTask",

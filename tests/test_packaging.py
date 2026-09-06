@@ -120,5 +120,48 @@ class SnapshotCliTests(unittest.TestCase):
         json.dumps(payload)  # must be JSON-serializable without error
 
 
+class BuildScriptReliabilityTests(unittest.TestCase):
+    def test_pyproject_declares_setuptools_build_backend(self) -> None:
+        build_system = _pyproject()["build-system"]
+        self.assertEqual(build_system["build-backend"], "setuptools.build_meta")
+        self.assertIn("setuptools", build_system["requires"][0])
+
+    def test_common_sh_defines_build_backend_preflight(self) -> None:
+        source = (REPO / "install" / "_common.sh").read_text()
+        self.assertIn("require_build_backend", source)
+
+    def test_build_sh_has_isolation_policy_and_version_restore(self) -> None:
+        source = (REPO / "install" / "build.sh").read_text()
+        self.assertIn("SA_BUILD_ISOLATION", source)
+        self.assertIn("--no-build-isolation", source)
+        self.assertIn("restore_on_failure", source)
+        self.assertIn("prepare-build", source)
+
+    def test_build_sh_preflights_backend_before_version_preparation(self) -> None:
+        source = (REPO / "install" / "build.sh").read_text()
+        self.assertLess(
+            source.index("require_build_backend"),
+            source.index("prepare-build"),
+        )
+
+    def test_upgrade_sh_verifies_before_installing(self) -> None:
+        source = (REPO / "install" / "upgrade.sh").read_text()
+        self.assertIn("verify.sh", source)
+        self.assertIn("pip install", source)
+        self.assertLess(source.index("verify.sh"), source.index("pip install"))
+
+    def test_common_sh_build_backend_version_gate_requires_68(self) -> None:
+        import re
+
+        def gate(version: str) -> bool:
+            m = re.match(r"^(\d+)\.(\d+)", version)
+            return bool(m and (int(m.group(1)), int(m.group(2))) >= (68, 0))
+
+        self.assertTrue(gate("68.0.0"))
+        self.assertTrue(gate("75.6.0"))
+        self.assertFalse(gate("67.2.0"))
+        self.assertFalse(gate("59.0"))
+
+
 if __name__ == "__main__":
     unittest.main()

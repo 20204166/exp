@@ -23,6 +23,7 @@ from maintenance.models import (
     ProcessCandidate,
     ResourceSummary,
 )
+from maintenance.nodes import NodeId, node_operation_key
 from maintenance.scanner import ProgressCallback, SystemScanner
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
@@ -381,6 +382,17 @@ class ResourceCard(tk.Frame):
         self.details_label.config(text=action_label_text(summary.actionable))
         self._render_metrics(summary)
 
+    def reset_summary(self) -> None:
+        """Restore the intentionally empty state before this node is scanned."""
+
+        self.value_label.config(text="—")
+        self.subtitle_label.config(text="Run a scan to load details")
+        self.progress.config(value=0)
+        self.details_label.config(text="View details  →")
+        for row, _name_label, _value_label in self.metric_rows:
+            row.destroy()
+        self.metric_rows.clear()
+
     def _render_metrics(self, summary: ResourceSummary) -> None:
         """Update one labelled secondary value per detail line in place.
 
@@ -551,6 +563,9 @@ class InfoDialog(tk.Toplevel):
 
 
 class ProcessDialog(tk.Toplevel):
+    _operation_key = "process"
+    _read_only = False
+
     def __init__(
         self,
         master: tk.Misc,
@@ -560,6 +575,9 @@ class ProcessDialog(tk.Toplevel):
         colors: dict[str, str],
         on_changed: Callable[[], None],
         coordinator: AppCoordinator | None = None,
+        node_id: NodeId | None = None,
+        node_title: str | None = None,
+        read_only: bool = False,
     ) -> None:
         super().__init__(master)
         self.analyzer = analyzer
@@ -568,6 +586,11 @@ class ProcessDialog(tk.Toplevel):
         self.colors = colors
         self.on_changed = on_changed
         self.coordinator = coordinator or _standalone_coordinator(self)
+        self.node_id = node_id
+        self._operation_key = (
+            node_operation_key(node_id, "process") if node_id is not None else "process"
+        )
+        self._read_only = read_only
         self.processes: dict[int, ProcessCandidate] = {}
         self._displayed: list[ProcessCandidate] = []
         self._sort_column = "memory" if resource_key == "memory" else "cpu"
@@ -577,6 +600,8 @@ class ProcessDialog(tk.Toplevel):
         self._waiting_for_shared = False
 
         title = "Memory Processes" if resource_key == "memory" else "CPU Processes"
+        if node_title is not None:
+            title = f"{title} — {node_title}"
         container = ui_layout.dialog_shell(
             self,
             master=master,
@@ -589,13 +614,19 @@ class ProcessDialog(tk.Toplevel):
             frame_cls=tk.Frame,
             on_close=self._close,
         )
+        description = (
+            "Select user processes to request a normal quit. "
+            "Protected processes cannot be selected for cleanup."
+        )
+        if read_only:
+            description = (
+                "This node is read-only: processes can be reviewed but not "
+                "terminated from here."
+            )
         description_label = ui_layout.dialog_heading(
             container,
             title,
-            (
-                "Select user processes to request a normal quit. "
-                "Protected processes cannot be selected for cleanup."
-            ),
+            description,
             label_cls=tk.Label,
             colors=colors,
             heading_font=ui_styles.FONTS["dialog_heading"],
@@ -687,8 +718,10 @@ class ProcessDialog(tk.Toplevel):
             ],
             button_cls=ttk.Button,
         )
+        if self._read_only:
+            self.quit_button.config(state=tk.DISABLED)
 
-        cached = self.coordinator.last_result("process")
+        cached = self.coordinator.last_result(self._operation_key)
         if cached is not None:
             self._show_processes(cached)
         self.refresh()
@@ -709,7 +742,7 @@ class ProcessDialog(tk.Toplevel):
             )
 
         generation = self.coordinator.run(
-            "process",
+            self._operation_key,
             process_task,
             on_result=lambda _key, processes: self._on_refresh_result(processes),
             on_error=lambda _key, message: self._on_refresh_error(message),
@@ -736,7 +769,7 @@ class ProcessDialog(tk.Toplevel):
             return
         self._waiting_for_shared = True
         self.status_label.config(text="Waiting for the active process scan...")
-        self.coordinator.subscribe("process", self._on_shared_process_result)
+        self.coordinator.subscribe(self._operation_key, self._on_shared_process_result)
 
     def _on_shared_process_result(
         self,
@@ -826,11 +859,18 @@ class ProcessDialog(tk.Toplevel):
                 text=f"{len(self._displayed)} shown • {allowed_count} available for review"
             )
             self.quit_button.config(
-                state=tk.NORMAL if allowed_count > 0 else tk.DISABLED
+                state=(
+                    tk.NORMAL
+                    if allowed_count > 0 and not self._read_only
+                    else tk.DISABLED
+                )
             )
         self.refresh_button.config(state=tk.NORMAL)
 
     def quit_selected(self) -> None:
+        if self._read_only:
+            self._show_error("This node is read-only; processes cannot be terminated.")
+            return
         selected = [int(item) for item in self.tree.selection()]
         allowed = [
             pid
@@ -923,7 +963,7 @@ class ProcessDialog(tk.Toplevel):
     def _close(self) -> None:
         close_coordinated_dialog(
             self,
-            key="process",
+            key=self._operation_key,
             unsubscribe_callback=self._on_shared_process_result,
             active=self._refresh_active,
         )
@@ -937,6 +977,9 @@ class ProcessDialog(tk.Toplevel):
 
 
 class StorageDialog(tk.Toplevel):
+    _operation_key = "storage"
+    _read_only = False
+
     def __init__(
         self,
         master: tk.Misc,
@@ -945,6 +988,9 @@ class StorageDialog(tk.Toplevel):
         colors: dict[str, str],
         on_changed: Callable[[], None],
         coordinator: AppCoordinator | None = None,
+        node_id: NodeId | None = None,
+        node_title: str | None = None,
+        read_only: bool = False,
     ) -> None:
         super().__init__(master)
         self.analyzer = analyzer
@@ -952,15 +998,23 @@ class StorageDialog(tk.Toplevel):
         self.colors = colors
         self.on_changed = on_changed
         self.coordinator = coordinator or _standalone_coordinator(self)
+        self.node_id = node_id
+        self._operation_key = (
+            node_operation_key(node_id, "storage") if node_id is not None else "storage"
+        )
+        self._read_only = read_only
         self.candidates: dict[str, FileCandidate] = {}
         self._scan_active = False
         self._waiting_for_shared = False
 
-        self.title("Storage Cleanup")
+        title = "Storage Cleanup"
+        if node_title is not None:
+            title = f"{title} — {node_title}"
+        self.title(title)
         container = ui_layout.dialog_shell(
             self,
             master=master,
-            title="Storage Cleanup",
+            title=title,
             geometry="980x580",
             minsize=(820, 500),
             colors=colors,
@@ -969,14 +1023,20 @@ class StorageDialog(tk.Toplevel):
             frame_cls=tk.Frame,
             on_close=self._close,
         )
+        description = (
+            "Find large files and verified duplicates in Downloads. "
+            "Only selected files are moved to Trash. "
+            "Ctrl-click (Cmd-click on macOS) to select multiple files."
+        )
+        if read_only:
+            description = (
+                "This node is read-only: files can be reviewed but not moved "
+                "to Trash from here."
+            )
         description_label = ui_layout.dialog_heading(
             container,
-            "Storage Cleanup",
-            (
-                "Find large files and verified duplicates in Downloads. "
-                "Only selected files are moved to Trash. "
-                "Ctrl-click (Cmd-click on macOS) to select multiple files."
-            ),
+            title,
+            description,
             label_cls=tk.Label,
             colors=colors,
             heading_font=ui_styles.FONTS["dialog_heading"],
@@ -1065,8 +1125,10 @@ class StorageDialog(tk.Toplevel):
             ],
             button_cls=ttk.Button,
         )
+        if self._read_only:
+            self.trash_button.config(state=tk.DISABLED)
 
-        cached = self.coordinator.last_result("storage")
+        cached = self.coordinator.last_result(self._operation_key)
         if cached is not None:
             self._show_candidates(cached)
         self.scan()
@@ -1109,7 +1171,7 @@ class StorageDialog(tk.Toplevel):
             )
 
         generation = self.coordinator.run(
-            "storage",
+            self._operation_key,
             scan_task,
             on_result=lambda _key, candidates: self._on_scan_result(candidates),
             on_error=lambda _key, message: self._on_scan_error(message),
@@ -1144,7 +1206,7 @@ class StorageDialog(tk.Toplevel):
             return
         self._waiting_for_shared = True
         self.status_label.config(text="Waiting for the active Downloads scan...")
-        self.coordinator.subscribe("storage", self._on_shared_scan_result)
+        self.coordinator.subscribe(self._operation_key, self._on_shared_scan_result)
 
     def _on_shared_scan_result(self, _key: str, result: Any | None) -> None:
         self._waiting_for_shared = False
@@ -1160,14 +1222,14 @@ class StorageDialog(tk.Toplevel):
         self.scan_button.config(state=tk.DISABLED)
         self.status_label.config(text="Cancelling Downloads scan...")
         self.coordinator.cancel(
-            "storage",
+            self._operation_key,
             cancellation_message=DOWNLOADS_SCAN_CANCELLED,
         )
 
     def _close(self) -> None:
         close_coordinated_dialog(
             self,
-            key="storage",
+            key=self._operation_key,
             unsubscribe_callback=self._on_shared_scan_result,
             active=self._scan_active,
         )
@@ -1183,7 +1245,9 @@ class StorageDialog(tk.Toplevel):
             text="Scan Downloads",
             command=self.scan,
         )
-        self.trash_button.config(state=tk.NORMAL)
+        self.trash_button.config(
+            state=tk.NORMAL if not self._read_only else tk.DISABLED
+        )
 
     def _show_candidates(self, candidates: list[FileCandidate]) -> None:
         self.candidates = {}
@@ -1219,9 +1283,14 @@ class StorageDialog(tk.Toplevel):
             )
         )
         self.scan_button.config(state=tk.NORMAL)
-        self.trash_button.config(state=tk.NORMAL)
+        self.trash_button.config(
+            state=tk.NORMAL if not self._read_only else tk.DISABLED
+        )
 
     def move_selected(self) -> None:
+        if self._read_only:
+            self._show_error("This node is read-only; files cannot be moved to Trash.")
+            return
         selected = [
             self.candidates[item]
             for item in self.tree.selection()

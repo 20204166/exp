@@ -225,6 +225,41 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         dialog._set_scan_idle = Mock()
         return dialog
 
+    def test_node_qualified_operation_key_is_used(self) -> None:
+        dialog = self._dialog()
+        dialog.coordinator = AppCoordinator(deliver=lambda cb: None)
+        dialog._operation_key = "node:dev:storage"
+        dialog._read_only = False
+
+        dialog.scan()
+
+        self.assertTrue(dialog.coordinator.in_flight("node:dev:storage"))
+
+    def test_default_operation_key_is_local_storage(self) -> None:
+        dialog: Any = object.__new__(StorageDialog)
+        self.assertEqual(dialog._operation_key, "storage")
+        self.assertFalse(dialog._read_only)
+
+    def test_read_only_dialog_keeps_trash_disabled(self) -> None:
+        candidate = FileCandidate(
+            Path("first.zip"),
+            10,
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            "Large file",
+        )
+        dialog: Any = object.__new__(StorageDialog)
+        dialog.tree = FakeTree()
+        dialog.candidates = {}
+        dialog.status_label = FakeControl()
+        dialog.scan_button = FakeControl()
+        dialog.trash_button = FakeControl()
+        dialog._read_only = True
+
+        dialog._show_candidates([candidate])
+
+        self.assertEqual(dialog.trash_button.state, tk.DISABLED)
+        self.assertEqual(dialog.scan_button.state, tk.NORMAL)
+
     def test_second_instance_waits_instead_of_duplicate_scan(self) -> None:
         owner = self._dialog()
         waiter = self._dialog()

@@ -377,6 +377,41 @@ def _dialog_with(processes: dict[int, ProcessCandidate]) -> Any:
     return dialog
 
 
+class ProcessDialogNodeTests(unittest.TestCase):
+    def test_node_qualified_operation_key_is_used(self) -> None:
+        from maintenance.components.coordinator import AppCoordinator
+
+        dialog: Any = object.__new__(ProcessDialog)
+        dialog.coordinator = AppCoordinator(deliver=lambda cb: None)
+        dialog.analyzer = Mock()
+        dialog._operation_key = "node:dev:process"
+        dialog._read_only = False
+        dialog._waiting_for_shared = False
+        dialog._refresh_active = False
+        dialog.status_label = FakeControl()
+        dialog.refresh_button = FakeControl()
+        dialog.quit_button = FakeControl()
+        dialog._show_processes = Mock()
+        dialog._on_refresh_result = Mock()
+
+        dialog.refresh()
+
+        self.assertTrue(dialog.coordinator.in_flight("node:dev:process"))
+
+    def test_default_operation_key_is_local_process(self) -> None:
+        dialog: Any = object.__new__(ProcessDialog)
+        self.assertEqual(dialog._operation_key, "process")
+        self.assertFalse(dialog._read_only)
+
+    def test_read_only_dialog_keeps_quit_disabled_even_when_actionable(self) -> None:
+        dialog = _dialog_with({100: _process(100, "Firefox")})
+        dialog._read_only = True
+        dialog._apply_filter("")
+        dialog._render_rows()
+
+        self.assertEqual(dialog.quit_button.state, tk.DISABLED)
+
+
 class ProcessDialogEmptyStateTests(unittest.TestCase):
     def test_no_processes_shows_empty_state_and_disables_quit(self) -> None:
         dialog = _dialog_with({})

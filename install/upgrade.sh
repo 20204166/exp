@@ -9,5 +9,11 @@ else
   wheel="$(wheel_path)"
 fi
 echo "Upgrading to: $(basename "$wheel")"
+# Verify the wheel before installing so a corrupt or partial artifact is never
+# force-installed over a working copy.
+name="$(basename "$wheel")"
+version="${name#system_analyzer-}"
+version="${version%-py3-none-any.whl}"
+bash "$(dirname "${BASH_SOURCE[0]}")/verify.sh" "$version"
 "$py" -m pip install --no-index --no-deps --force-reinstall "$wheel"
 echo "After:"; show_version "$py"; echo "Rollback: rollback.sh <previous>"

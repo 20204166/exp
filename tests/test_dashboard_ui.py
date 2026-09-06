@@ -143,6 +143,26 @@ class ResourceCardContractTests(unittest.TestCase):
             card.update_summary(summary("cpu", "CPU", details=("A: 1",)))
             self.assertEqual(len(card.metric_rows), 1)
 
+    def test_reset_summary_restores_unscanned_card_state(self) -> None:
+        card: Any = object.__new__(ResourceCard)
+        card.value_label = FakeControl()
+        card.subtitle_label = FakeControl()
+        card.progress = FakeControl()
+        card.details_label = FakeControl()
+        row = Mock()
+        card.metric_rows = [(row, Mock(), Mock())]
+
+        card.reset_summary()
+
+        self.assertEqual(card.value_label.options["text"], "—")
+        self.assertEqual(
+            card.subtitle_label.options["text"], "Run a scan to load details"
+        )
+        self.assertEqual(card.progress.options["value"], 0)
+        self.assertEqual(card.details_label.options["text"], "View details  →")
+        row.destroy.assert_called_once()
+        self.assertEqual(card.metric_rows, [])
+
     def test_unavailable_summary_keeps_review_label_for_actionable_keys(self) -> None:
         self.assertEqual(
             action_label_text(unavailable_summary("cpu", "CPU").actionable),

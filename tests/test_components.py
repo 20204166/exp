@@ -695,7 +695,7 @@ class ScanCoordinatorTests(unittest.TestCase):
         self.assertTrue(next_started)
         self.assertEqual(next_generation, 2)
 
-    def test_scan_coordinator_cancel_clears_pending_scan_state(self) -> None:
+    def test_scan_coordinator_cancel_invalidates_pending_generation(self) -> None:
         coordinator = ScanCoordinator()
 
         generation, started = coordinator.begin()
@@ -707,7 +707,8 @@ class ScanCoordinatorTests(unittest.TestCase):
 
         self.assertFalse(coordinator.active)
         self.assertFalse(coordinator.rerun_requested)
-        self.assertEqual(coordinator.generation, 1)
+        self.assertEqual(coordinator.generation, 2)
+        self.assertEqual(coordinator.finish(generation), (False, False))
 
 
 class ComponentRefreshSchedulerTests(unittest.TestCase):

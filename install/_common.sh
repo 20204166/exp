@@ -79,3 +79,14 @@ require_python() {
   fi
   return 0
 }
+
+# Return 0 when the interpreter has the declared setuptools build backend
+# (>= 68). Used by build.sh to decide between the offline no-isolation path
+# and pip build isolation, and to fail fast with a clear message instead of a
+# pip traceback when the backend is genuinely missing.
+require_build_backend() {
+  local py="$1"
+  "$py" -c 'import re, setuptools
+m = re.match(r"^(\d+)\.(\d+)", setuptools.__version__)
+raise SystemExit(0 if m and (int(m.group(1)), int(m.group(2))) >= (68, 0) else 1)'
+}

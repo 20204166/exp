@@ -95,10 +95,26 @@ name requires updating `__all__` (enforced by `tests/test_package_structure.py`)
 - `class ResourceFeatureCatalog` — isolated, deterministic registry of
   `ResourceFeature` entries with duplicate-key rejection.
 
+### `network_discovery.py` — local-network presence discovery
+- `SERVICE_TYPE` — the mDNS service type (`_system-analyzer._tcp.local.`).
+- `DiscoveryEndpoint` — the (possibly absent) remote endpoint this instance may
+  advertise; `port=None`/`connectable=False` means no transport is listening.
+- `DiscoveryAdvertisement` — the minimal, non-sensitive presence metadata this
+  instance advertises (stable id, name, versions, platform; never processes,
+  usernames, paths, health, or credentials).
+- `class NetworkDiscovery` — advertises and browses for System Analyzer peers,
+  normalizes records, deduplicates by stable id, ignores the local instance,
+  tracks TTL/expiry, and emits `candidate`/`lost` events. It never trusts,
+  authorises, or manages peers and never owns the registry or UI. The
+  `python-zeroconf` dependency is optional: when absent the component reports
+  itself unavailable and the app continues as a normal single-node application.
+
 ### `coordinator.py` — dashboard scan coordination
 - `class ScanCoordinator` — tracks the live dashboard scan: `begin()` returns
   `(generation, started)` and queues a single rerun while active; `finish()`
-  resolves the active generation; `cancel()` clears state without rerunning.
+  resolves the active generation; `cancel()` invalidates the active generation
+  and clears state without rerunning, so a queued old-node completion cannot
+  satisfy a later selected target.
 - `class RefreshIntervals` — shared per-component refresh intervals
   (milliseconds): CPU/Network 1000, Memory 5000, GPU 3000, Storage/Battery
   30000 (chosen from measured scan cost and how quickly each metric changes).
@@ -120,10 +136,27 @@ name requires updating `__all__` (enforced by `tests/test_package_structure.py`)
   every completion/error/progress onto the UI thread through the injected
   `deliver` — worker threads never touch widgets. `begin/finish/subscribe/
   unsubscribe/store/clear/in_flight/generation` expose the pure per-key state
-  for non-run consumers. The single app instance lives on `window.AppWindow`
-  and is shared by the pages (via `PageRouter` loaders), the Storage/Process
-  dialogs, and the component scans, while the window's `_background_queue`
-  drain is the one Tkinter-thread delivery path they all cross.
+  for non-run consumers. `start_discovery/stop_discovery/discovery_tick/post`
+  additionally own the network-discovery lifecycle: they start/stop a
+   `NetworkDiscovery` component exactly once and bridge every candidate/lost
+   event through the same `deliver` path, so registry updates always happen on
+   the UI thread and late transport events after `stop_discovery` are dropped.
+   A failed discovery start releases that lifecycle ownership so a later retry
+   is possible.
+  The single app instance lives on `window.AppWindow` and is shared by the
+  pages (via `PageRouter` loaders), the Storage/Process dialogs, and the
+  component scans, while the window's `_background_queue` drain is the one
+  Tkinter-thread delivery path they all cross.
+
+## Node/target model (`maintenance/nodes.py`)
+The cluster boundary lives in `maintenance/nodes.py` (not inside the component
+package): `NodeId`, `NodeDescriptor`, `NodeCapability`, trust/status state,
+`DiscoveredNodeCandidate`, `NodeContext` (per-node provider, managers,
+snapshot, capabilities, scheduler), `NodeRegistry`, and the node-qualified
+coordinator-key helper `node_operation_key`. Invariants: `DISCOVERED !=
+TRUSTED != AUTHORISED`; the local node is always registered and selectable;
+discovered candidates are never selectable; a capability is never inferred
+from a hostname or from `is_local`.
 
 ## Tests
 `tests/test_components.py`, `tests/test_maintenance.py`,

@@ -11,6 +11,7 @@ from maintenance.components import (
     coordinator,
     downloads,
     gpu,
+    network_discovery,
     process_safety,
     scan_support,
 )
@@ -28,6 +29,7 @@ class ComponentPackageLayoutTests(unittest.TestCase):
             "coordinator.py",
             "downloads.py",
             "gpu.py",
+            "network_discovery.py",
             "process_safety.py",
             "scan_support.py",
         }
@@ -67,6 +69,11 @@ class ComponentFacadeReexportTests(unittest.TestCase):
             "ResourceFeature": catalog,
             "ResourceFeatureCatalog": catalog,
             "ScanCoordinator": coordinator,
+            "NetworkDiscovery": network_discovery,
+            "DiscoveryAdvertisement": network_discovery,
+            "DiscoveryEndpoint": network_discovery,
+            "DEFAULT_TTL_SECONDS": network_discovery,
+            "SERVICE_TYPE": network_discovery,
         }
         for name, home in moved.items():
             with self.subTest(name=name):
@@ -75,6 +82,8 @@ class ComponentFacadeReexportTests(unittest.TestCase):
     def test_package_declares_full_public_interface(self) -> None:
         declared = set(components.__all__)
         expected = {
+            "DEFAULT_TTL_SECONDS",
+            "SERVICE_TYPE",
             "DownloadScanner",
             "DownloadsPathResolver",
             "HashFingerprint",
@@ -96,6 +105,9 @@ class ComponentFacadeReexportTests(unittest.TestCase):
             "ResourceFeature",
             "ResourceFeatureCatalog",
             "ScanCoordinator",
+            "NetworkDiscovery",
+            "DiscoveryAdvertisement",
+            "DiscoveryEndpoint",
             "windows_windll",
         }
         self.assertEqual(declared, expected)
