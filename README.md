@@ -51,30 +51,49 @@ needing the source folder or a virtual environment.
 ### One-command install — no venv, system/user Python
 
 Install into the current user's Python (no virtual environment, deps pulled in
-automatically, PEP 668 handled):
+automatically, PEP 668 handled). **You do not need to be inside the repo** —
+use the full path from anywhere:
 
 ```sh
-./install/install-user.sh
+/path/to/exp/install/install-user.sh
 ```
 
 That verifies the committed wheel, installs it together with all its
 dependencies, and prints where the `system-analyzer` scripts landed
-(`~/.local/bin` by default). Add that directory to `PATH` once, then:
+(`~/.local/bin` by default). Add that directory to `PATH` once, then run from
+**any** directory:
 
 ```sh
 system-analyzer          # launch the GUI
 system-analyzer-snapshot # read-only JSON snapshot
 ```
 
-Equivalent manual command (after `./install/build.sh`):
+Install a specific wheel version (kept in `dist/` for rollback):
 
 ```sh
-pip install --user --break-system-packages dist/system_analyzer-*.whl
+/path/to/exp/install/install-user.sh 1.2.2.0
 ```
 
-On PEP 668 Linux systems (e.g. Ubuntu 24.04+) pip refuses user installs unless
-`--break-system-packages` is given — the script adds it automatically. For a
-machine-wide install instead, use `sudo pip install --break-system-packages .`.
+### Machine-wide install (system Python, no venv)
+
+Same script with `--system` installs into the system Python (uses `sudo`,
+scripts land in `/usr/local/bin`, no `PATH` change needed):
+
+```sh
+/path/to/exp/install/install-user.sh --system
+```
+
+Equivalent manual commands:
+
+```sh
+pip install --user --break-system-packages dist/system_analyzer-*.whl   # per-user
+sudo pip install --break-system-packages dist/system_analyzer-*.whl     # machine-wide
+```
+
+On PEP 668 Linux systems (e.g. Ubuntu 24.04+) pip refuses installs unless
+`--break-system-packages` is given — the script adds it automatically. After
+either install the app is independent of the repo folder (a real install, not
+editable): you can delete the clone and `system-analyzer` keeps working.
 
 ### Dev/venv install
 
