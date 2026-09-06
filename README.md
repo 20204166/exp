@@ -58,7 +58,10 @@ work on native Windows (and any OS with PowerShell).
 | Linux     | `./install/install-user.sh` | `./install/install-user.sh --system` |
 | macOS     | `./install/install-user.sh` | `./install/install-user.sh --system` |
 | WSL       | `./install/install-user.sh` | `./install/install-user.sh --system` |
-| Windows   | `.\install\install-user.ps1` | `.\install\install.ps1` (into a venv) |
+| Windows   | `./install/install-user.ps1` | `./install/install.ps1` (targets a venv) |
+
+On Windows, the second column is a target-venv installer, not a machine-wide
+system install.
 
 All scripts auto-find a Python 3.10+, verify the committed wheel, install the
 app with its dependencies, and print the exact PATH step for your shell/OS.
@@ -85,7 +88,8 @@ from any folder. The repository-local scripts remain available for offline
 wheel installs and release management.
 
 If a shell still reports `command not found`, use the exact `Direct launcher`
-path printed by the installer, or open a new terminal after updating PATH.
+path printed by the installer, run `hash -r`, or open a new terminal after
+updating PATH.
 
 ### Requirements
 
@@ -99,7 +103,32 @@ path printed by the installer, or open a new terminal after updating PATH.
 - **tkinter** — the only non-pip prerequisite (system package `python3-tk` on
   Linux; included with python.org/Homebrew builds on macOS).
 
-### One-command install — no venv, system/user Python
+### Common install commands
+
+Use the command that matches your situation:
+
+| Situation | Command |
+| --------- | ------- |
+| Linux/macOS/WSL, per-user install | `./install/install-user.sh` |
+| Linux/macOS/WSL, machine-wide install | `./install/install-user.sh --system` |
+| Linux/macOS/WSL, reinstall the same wheel version | add `--force-reinstall` |
+| Linux/macOS/WSL, install a specific wheel from `dist/` | `./install/install-user.sh 1.2.2.0` |
+| Linux/macOS/WSL, online install from anywhere | `curl -fsSL https://raw.githubusercontent.com/20204166/exp/main/install/install-online.sh | bash` |
+| Linux/macOS/WSL, online reinstall of the same wheel version | `curl -fsSL https://raw.githubusercontent.com/20204166/exp/main/install/install-online.sh | bash -s -- --force-reinstall` |
+| Windows, per-user install | `./install/install-user.ps1` |
+| Windows, install into a specific venv | `./install/install.ps1 -Python C:\Path\To\Python312\python.exe` |
+| Windows, reinstall the same wheel into that venv | `./install/upgrade.ps1 -Python C:\Path\To\Python312\python.exe` |
+
+Notes:
+- `install-user.sh` auto-finds a Python 3.10+, verifies the committed wheel,
+  installs it together with its dependencies, and prints where the
+  `system-analyzer` scripts landed (`~/.local/bin` by default).
+- `--force-reinstall` is the fix for stale same-version installs: use it when
+  pip says the same version is already installed but you want the wheel
+  contents copied again.
+- On Windows, `install.ps1` already uses `--force-reinstall` internally for the
+  target venv; use `upgrade.ps1` when you want a built-and-reinstalled update
+  in one step.
 
 Install into the current user's Python (no virtual environment, deps pulled in
 automatically, PEP 668 handled). Run it **from inside the repo**, or give the
@@ -127,6 +156,13 @@ Install a specific wheel version (kept in `dist/` for rollback):
 ./install/install-user.sh 1.2.2.0
 ```
 
+Reinstall the current wheel contents even if the version is already present:
+
+```sh
+./install/install-user.sh --force-reinstall
+./install/install-user.sh --system --force-reinstall
+```
+
 ### Machine-wide install (system Python, no venv)
 
 Same script with `--system` installs into the system Python (uses `sudo`,
@@ -135,6 +171,9 @@ scripts land in `/usr/local/bin`, no `PATH` change needed):
 ```sh
 ./install/install-user.sh --system
 ```
+
+If you need to force the same wheel version onto the system Python, add
+`--force-reinstall`.
 
 Equivalent manual commands:
 
