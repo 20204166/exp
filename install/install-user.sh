@@ -25,6 +25,7 @@ version=""
 for arg in "$@"; do
   case "$arg" in
     --system) mode="system" ;;
+    -*) echo "Unknown option: $arg" >&2; exit 1 ;;
     *) version="$arg" ;;
   esac
 done
@@ -72,7 +73,8 @@ if [ "$mode" = "system" ]; then
   command -v sudo >/dev/null 2>&1 || { echo "sudo is required for --system" >&2; exit 1; }
   echo "Installing machine-wide (system Python, no venv)..."
   install_pip sudo -H "$py" -m pip install "$wheel"
-  bin_dir="/usr/local/bin"
+  bin_dir="$($py -c 'import sysconfig;print(sysconfig.get_path("scripts", scheme="posix_prefix"))' 2>/dev/null || true)"
+  [ -n "$bin_dir" ] || bin_dir="/usr/local/bin"
   launcher="$bin_dir/system-analyzer"
   [ -x "$launcher" ] || { echo "Install completed but launcher was not found at $launcher" >&2; exit 1; }
   echo "Installed. Console scripts are in: $bin_dir"
