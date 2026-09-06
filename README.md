@@ -48,14 +48,28 @@ The distribution builds a wheel into `dist/` (with `dist/SHA256SUMS`) and
 installs it non-editable, so `system-analyzer` runs from anywhere without
 needing the source folder or a virtual environment.
 
+### Requirements
+
+- **Python 3.10 or newer** (the app uses modern type syntax). The install
+  scripts automatically find a 3.10+ interpreter (`python3.10`…`python3.13`,
+  Homebrew/python.org locations, then the system Python); if only an older
+  one exists they print a clear message and stop. macOS ships Python 3.9 as
+  `/usr/bin/python3` — use your installed newer Python (e.g. `brew install
+  python@3.12`, then `python3.12 -m venv .venv`), or point the script at it:
+  `SA_SYSTEM_PYTHON=/path/to/python3.12 ./install/install-user.sh`.
+- **tkinter** — the only non-pip prerequisite (system package `python3-tk` on
+  Linux; included with python.org/Homebrew builds on macOS).
+
 ### One-command install — no venv, system/user Python
 
 Install into the current user's Python (no virtual environment, deps pulled in
-automatically, PEP 668 handled). **You do not need to be inside the repo** —
-use the full path from anywhere:
+automatically, PEP 668 handled). Run it **from inside the repo**, or give the
+**real absolute path** from anywhere:
 
 ```sh
-/path/to/exp/install/install-user.sh
+./install/install-user.sh
+# or, from anywhere:
+/path/to/your/clone/install/install-user.sh   # use your actual clone path
 ```
 
 That verifies the committed wheel, installs it together with all its
@@ -71,7 +85,7 @@ system-analyzer-snapshot # read-only JSON snapshot
 Install a specific wheel version (kept in `dist/` for rollback):
 
 ```sh
-/path/to/exp/install/install-user.sh 1.2.2.0
+./install/install-user.sh 1.2.2.0
 ```
 
 ### Machine-wide install (system Python, no venv)
@@ -80,7 +94,7 @@ Same script with `--system` installs into the system Python (uses `sudo`,
 scripts land in `/usr/local/bin`, no `PATH` change needed):
 
 ```sh
-/path/to/exp/install/install-user.sh --system
+./install/install-user.sh --system
 ```
 
 Equivalent manual commands:
@@ -95,15 +109,29 @@ unless `--break-system-packages` is given — the script adds it automatically.
 After either install the app is independent of the repo folder (a real install,
 not editable): you can delete the clone and `system-analyzer` keeps working.
 
-### Troubleshooting: `externally-managed-environment`
+### Troubleshooting
 
-If you see pip's *externally-managed-environment* error on a device, pip is
-blocking installs into system/user Python (Ubuntu 24.04+ / Debian 12+). The
-fix is `--break-system-packages`, which `install-user.sh` already applies:
+**`TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'` (or the
+script says "requires Python 3.10")** — the interpreter is older than 3.10
+(macOS ships Python 3.9 as `/usr/bin/python3`). Use a 3.10+ Python:
 
 ```sh
-/path/to/exp/install/install-user.sh        # per-user (handles PEP 668)
-/path/to/exp/install/install-user.sh --system   # machine-wide (sudo)
+# macOS: install a newer Python, then a venv from it
+brew install python@3.12
+python3.12 -m venv .venv
+. .venv/bin/activate
+pip install .
+# or point the install script at your newer Python:
+SA_SYSTEM_PYTHON=/path/to/python3.12 ./install/install-user.sh
+```
+
+**`externally-managed-environment`** — pip is blocking installs into
+system/user Python (Ubuntu 24.04+ / Debian 12+). The fix is
+`--break-system-packages`, which `install-user.sh` already applies:
+
+```sh
+./install/install-user.sh            # per-user (handles PEP 668)
+./install/install-user.sh --system   # machine-wide (sudo)
 ```
 
 Manual fallbacks:
@@ -121,9 +149,13 @@ python -m venv .venv
 pip install .
 ```
 
-On very old pip (< 23.0) the `--break-system-packages` flag does not exist; the
-script detects that and retries without it (those pip versions predate the PEP
-668 restriction anyway).
+**`no such option: --break-system-packages`** — pip is older than 23.0. The
+script detects this and retries without the flag (those pip versions predate
+PEP 668 anyway); if you are typing the manual commands, upgrade pip or use a
+venv.
+
+**`pip install -e` says "option requires 1 argument"** — the `.` is required:
+run `pip install -e .` (and be inside the repo).
 
 ### Dev/venv install
 

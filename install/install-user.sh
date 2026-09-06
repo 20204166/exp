@@ -30,8 +30,10 @@ for arg in "$@"; do
 done
 
 if [ -n "${SA_SYSTEM_PYTHON:-}" ]; then py="$SA_SYSTEM_PYTHON"
-elif [ -x /usr/bin/python3 ]; then py=/usr/bin/python3
-else py=python3; fi
+elif found="$(first_python_ge_310)"; then py="$found"
+else py=/usr/bin/python3; fi
+
+require_python "$py" || exit 1
 
 wheel="$(wheel_path "$version")"
 [ -n "$wheel" ] && [ -f "$wheel" ] || { echo "no wheel found; run install/build.sh first" >&2; exit 1; }

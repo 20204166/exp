@@ -11,6 +11,8 @@ source "$here/install/_common.sh"
 py="$(resolve_python)"
 bump="${SA_VERSION_BUMP:-auto}"
 
+require_python "$py" || exit 1
+
 cleanup() { rm -rf "$here/build" "$here"/*.egg-info; }
 trap cleanup EXIT
 
