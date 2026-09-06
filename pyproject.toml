@@ -13,6 +13,7 @@ dependencies = [
     "psutil>=5.9",
     "send2trash>=1.8",
     'nvidia-ml-py>=12.0; platform_system != "Darwin"',
+    "zeroconf>=0.131",
 ]
 
 [project.scripts]

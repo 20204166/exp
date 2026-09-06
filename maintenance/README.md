@@ -193,8 +193,9 @@ See `components/README.md`.
 
 ## Dependencies and seams
 - `psutil` (required for most scans), `send2trash` (file cleanup),
-  `nvidia-ml-py` (optional NVIDIA details on non-Darwin). Each module keeps its
-  own optional-import fallback so tests can patch per-module globals.
+  `nvidia-ml-py` (optional NVIDIA details on non-Darwin), and `zeroconf`
+  (local-network discovery). Each module keeps its own optional-import fallback
+  so tests can patch per-module globals.
 - Test monkeypatch seams: `patch("maintenance.scanner.subprocess.run")`,
   `patch("maintenance.scanner.platform.system")` (shared platform module also
   reaches `components.downloads` lambdas), and the `_check_cancelled`

@@ -106,8 +106,8 @@ name requires updating `__all__` (enforced by `tests/test_package_structure.py`)
   normalizes records, deduplicates by stable id, ignores the local instance,
   tracks TTL/expiry, and emits `candidate`/`lost` events. It never trusts,
   authorises, or manages peers and never owns the registry or UI. The
-  `python-zeroconf` dependency is optional: when absent the component reports
-  itself unavailable and the app continues as a normal single-node application.
+  `zeroconf` is installed with the application. Its missing-module fallback
+  keeps incomplete source environments running as a single-node application.
 
 ### `coordinator.py` — dashboard scan coordination
 - `class ScanCoordinator` — tracks the live dashboard scan: `begin()` returns

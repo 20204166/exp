@@ -56,7 +56,7 @@ class PyprojectConfigurationTests(unittest.TestCase):
 
     def test_dependencies_are_declared(self) -> None:
         dependencies = "\n".join(_pyproject()["project"]["dependencies"])
-        for requirement in ("psutil", "send2trash", "nvidia-ml-py"):
+        for requirement in ("psutil", "send2trash", "nvidia-ml-py", "zeroconf"):
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, dependencies)
 

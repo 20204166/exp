@@ -27,6 +27,9 @@ pyproject.toml           local packaging configuration
 - `nvidia-ml-py>=12.0` — optional NVIDIA GPU detail on non-Darwin platforms
   (`pip install -e .` installs it by default; the app runs without it, showing
   "GPU information unavailable").
+- `zeroconf>=0.131` — local-network mDNS discovery of other running System
+  Analyzer instances. It advertises only presence metadata; remote metrics and
+  actions are not implemented.
 
 The GUI additionally requires a Python build with `tkinter` available.
 

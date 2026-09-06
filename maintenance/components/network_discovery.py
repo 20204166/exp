@@ -14,8 +14,9 @@ It deliberately does NOT:
 - own the node registry or UI;
 - require Linux Avahi (python-zeroconf handles mDNS directly, when installed).
 
-The ``zeroconf`` package is optional: when it is missing the component reports
-itself unavailable and the application continues as a normal single-node app.
+The wheel installs ``zeroconf``. When it is missing from an incomplete source
+environment, the component reports itself unavailable and the application
+continues as a normal single-node app.
 
 Testability: the ``backend`` is injected. Tests never need a real LAN; they
 drive a fake backend that calls the listener with synthetic service records.
