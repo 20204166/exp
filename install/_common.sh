@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Shared helpers for the System Analyzer install/release scripts (Linux).
-# Safety: no sudo; explicit venv target (repo .venv by default, override
-# SA_PYTHON); no network for the committed-wheel path; clear version display.
+# Shared helpers for the System Analyzer install/release scripts (Unix-like:
+# Linux, macOS, and WSL). Windows users use the equivalent *.ps1 scripts.
+# Safety: no sudo by default; explicit venv target (repo .venv by default,
+# override SA_PYTHON); no network for the committed-wheel path; clear version
+# display.
 set -euo pipefail
 
 # The repo root IS the package root (single project layout).

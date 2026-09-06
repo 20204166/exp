@@ -1,0 +1,137 @@
+# Shared helpers for the System Analyzer install/release scripts (PowerShell:
+# native Windows, also works on macOS/Linux under pwsh).
+#
+# Safety contract (applies to every script that dot-sources this one):
+#   * no Administrator requirement; no permanent execution-policy change;
+#   * explicit Python target (repo .venv first, then an auto-found 3.10+
+#     interpreter; override via -Python);
+#   * clear version display; idempotent where practical.
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+function Get-PackageDir {
+    return (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+}
+
+# Ordered candidate interpreters: the Windows `py` launcher first (modern
+# reliable way to pick a specific Python on Windows), then named python3.x
+# commands, then common python.org install locations, then bare python.
+function Get-PythonCandidates {
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    foreach ($m in @("3.13", "3.12", "3.11", "3.10")) {
+        if (Get-Command "py" -ErrorAction SilentlyContinue) {
+            $candidates.Add(@("py", "-$m"))
+        }
+    }
+    if (Get-Command "py" -ErrorAction SilentlyContinue) {
+        $candidates.Add(@("py", "-3"))
+    }
+    foreach ($name in @("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python")) {
+        if (Get-Command $name -ErrorAction SilentlyContinue) { $candidates.Add(@($name)) }
+    }
+    foreach ($path in @(
+        "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
+    )) {
+        if (Test-Path $path) { $candidates.Add(@($path)) }
+    }
+    return $candidates
+}
+
+function Get-PythonVersion {
+    param([object]$Py)
+    $out = & $Py -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
+    return ($out | Select-Object -First 1)
+}
+
+# System Analyzer uses PEP 604 union types (e.g. `threading.Event | None`) so
+# it requires Python 3.10+. Fail fast with a clear message instead of an
+# import-time TypeError on older interpreters (e.g. macOS 3.9 / older Windows).
+function Test-PythonGe310 {
+    param([object]$Py)
+    $v = Get-PythonVersion $Py
+    if (-not $v) { return $false }
+    $parts = $v.Split(".")
+    $major = [int]$parts[0]; $minor = [int]$parts[1]
+    return ($major -gt 3 -or ($major -eq 3 -and $minor -ge 10))
+}
+
+function Get-PythonGe310 {
+    foreach ($candidate in Get-PythonCandidates) {
+        if (Test-PythonGe310 $candidate) { return $candidate }
+    }
+    return $null
+}
+
+function Require-Python {
+    param([object]$Py)
+    if (-not (Test-PythonGe310 $Py)) {
+        $v = Get-PythonVersion $Py
+        throw "System Analyzer requires Python 3.10 or newer; this interpreter is $v ($Py). Install a newer Python (python.org/Homebrew) or use a 3.10+ virtual environment, then retry."
+    }
+}
+
+function Resolve-Python {
+    param([string]$Python)
+    if ($Python) { return @($Python) }
+    $repoPy = Join-Path (Get-PackageDir) ".venv\Scripts\python.exe"
+    if (Test-Path $repoPy) { return @($repoPy) }
+    $found = Get-PythonGe310
+    if ($found) { return $found }
+    return @("python")
+}
+
+function Get-WheelPath {
+    param([string]$Version)
+    $dist = Join-Path (Get-PackageDir) "dist"
+    if ($Version) {
+        $w = Join-Path $dist "system_analyzer-$Version-py3-none-any.whl"
+        if (-not (Test-Path $w)) { throw "wheel not found for version ${Version}: $w" }
+        return $w
+    }
+    $wheels = @(Get-ChildItem (Join-Path $dist "system_analyzer-*.whl") -ErrorAction SilentlyContinue)
+    if ($wheels.Count -eq 0) { throw "no wheel in $dist -- run build.ps1 first" }
+    $sorted = $wheels | Sort-Object {
+        if ($_.BaseName -match "system_analyzer-(\d+)\.(\d+)\.(\d+)\.(\d+)") {
+            [version]"$($matches[1]).$($matches[2]).$($matches[3]).$($matches[4])"
+        } else { [version]"0.0.0.0" }
+    }
+    return $sorted[-1].FullName
+}
+
+function Show-InstalledVersion {
+    param([object]$Py)
+    & $Py -m pip show system-analyzer 2>$null | Select-String "^Version:"
+}
+
+# Install one wheel per-user, handling old pip that lacks the flag. The
+# --break-system-packages flag is a no-op where PEP 668 does not apply.
+function Install-UserWheel {
+    param([object]$Py, [string]$Wheel)
+    $argsWith = @("-m", "pip", "install", "--user", "--break-system-packages", $Wheel)
+    $out = & $Py @argsWith 2>&1
+    if ($LASTEXITCODE -eq 0) { return }
+    $joined = ($out -join "`n")
+    if ($joined -match "no such option") {
+        $argsPlain = @("-m", "pip", "install", "--user", $Wheel)
+        $out = & $Py @argsPlain 2>&1
+        if ($LASTEXITCODE -ne 0) { throw ($out -join "`n") }
+        return
+    }
+    throw $joined
+}
+
+function Invoke-Versioned {
+    param([object]$Py, [string]$Module, [string[]]$Arguments)
+    Push-Location (Get-PackageDir)
+    try {
+        & $Py -m $Module @Arguments
+        if ($LASTEXITCODE -ne 0) { throw "exit code $LASTEXITCODE" }
+    } finally {
+        Pop-Location
+    }
+}

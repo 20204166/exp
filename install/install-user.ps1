@@ -1,0 +1,44 @@
+# Install System Analyzer into the CURRENT USER's Python WITHOUT a virtual
+# environment, so `system-analyzer` runs directly from any directory.
+#
+#   install-user.ps1               # per-user install (no venv)
+#   install-user.ps1 -Version 1.2.2.0   # install a specific wheel from dist/
+#   install-user.ps1 -Python C:\Python312\python.exe   # pin the interpreter
+#
+# Auto-finds a Python 3.10+ interpreter (py launcher, python3.x, python.org
+# paths) and prints the exact PATH step for the scripts directory.
+param([string]$Version, [string]$Python)
+. (Join-Path $PSScriptRoot "_common.ps1")
+
+if ($Python) { $py = @($Python) } else { $py = Get-PythonGe310 }
+if (-not $py) {
+    throw "no Python 3.10+ interpreter found. Install one (python.org/Homebrew) or pass -Python <path>."
+}
+Require-Python $py
+
+$wheel = Get-WheelPath $Version
+Write-Host "System interpreter: $($py -join ' ') (Python $(Get-PythonVersion $py))"
+Write-Host "Verifying wheel: $(Split-Path $wheel -Leaf)"
+Invoke-Versioned $py "maintenance._release" @("verify-wheel", $wheel)
+
+Write-Host "Installing into the user environment (no venv)..."
+Install-UserWheel $py $wheel
+
+$binDir = & $py -c "import os,sysconfig;print(sysconfig.get_path('scripts', scheme='nt_user' if os.name=='nt' else 'posix_user'))" 2>$null
+if (-not $binDir) { $binDir = if ($env:OS -eq "Windows_NT") { Join-Path $env:APPDATA "Python\Scripts" } else { Join-Path $HOME ".local\bin" } }
+Write-Host "Installed. Console scripts are in: $binDir"
+
+$sep = if ($env:OS -eq "Windows_NT") { ";" } else { ":" }
+$already = ($env:PATH -split [regex]::Escape($sep)) | Where-Object { $_ -eq $binDir }
+if ($already) {
+    Write-Host "That directory is already on PATH: run 'system-analyzer'"
+} else {
+    Write-Host "Add it to PATH once:"
+    if ($env:OS -eq "Windows_NT") {
+        Write-Host "  setx PATH \"$binDir;%PATH%\""
+    } else {
+        Write-Host "  echo 'export PATH=\"$binDir:`$PATH\"' >> `$HOME/.zshrc   # (or ~/.bashrc for bash)"
+    }
+    Write-Host "Then open a new terminal and run: system-analyzer"
+}
+Write-Host "Verify: system-analyzer-snapshot --help"

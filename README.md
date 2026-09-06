@@ -46,7 +46,21 @@ without any install step (development usage is preserved).
 
 The distribution builds a wheel into `dist/` (with `dist/SHA256SUMS`) and
 installs it non-editable, so `system-analyzer` runs from anywhere without
-needing the source folder or a virtual environment.
+needing the source folder or a virtual environment. The install tooling is
+**universal**: `.sh` scripts work on Linux, macOS, and WSL; `.ps1` scripts
+work on native Windows (and any OS with PowerShell).
+
+| OS        | Per-user install            | Machine-wide         |
+| --------- | --------------------------- | -------------------- |
+| Linux     | `./install/install-user.sh` | `./install/install-user.sh --system` |
+| macOS     | `./install/install-user.sh` | `./install/install-user.sh --system` |
+| WSL       | `./install/install-user.sh` | `./install/install-user.sh --system` |
+| Windows   | `.\install\install-user.ps1` | `.\install\install.ps1` (into a venv) |
+
+All scripts auto-find a Python 3.10+, verify the committed wheel, install the
+app with its dependencies, and print the exact PATH step for your shell/OS.
+`build.ps1` / `verify.ps1` / `upgrade.ps1` / `rollback.ps1` / `uninstall.ps1`
+mirror their `.sh` counterparts for the release workflow on Windows.
 
 ### Requirements
 
