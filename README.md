@@ -62,6 +62,25 @@ app with its dependencies, and print the exact PATH step for your shell/OS.
 `build.ps1` / `verify.ps1` / `upgrade.ps1` / `rollback.ps1` / `uninstall.ps1`
 mirror their `.sh` counterparts for the release workflow on Windows.
 
+### Install without the repository folder
+
+The online installers work from any directory and download the latest wheel
+from GitHub. They do not require `cd` into the repository:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/20204166/exp/main/install/install-online.sh | bash
+```
+
+On Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/20204166/exp/main/install/install-online.ps1 | iex
+```
+
+After adding the printed scripts directory to PATH, `system-analyzer` works
+from any folder. The repository-local scripts remain available for offline
+wheel installs and release management.
+
 ### Requirements
 
 - **Python 3.10 or newer** (the app uses modern type syntax). The install
