@@ -90,10 +90,40 @@ pip install --user --break-system-packages dist/system_analyzer-*.whl   # per-us
 sudo pip install --break-system-packages dist/system_analyzer-*.whl     # machine-wide
 ```
 
-On PEP 668 Linux systems (e.g. Ubuntu 24.04+) pip refuses installs unless
-`--break-system-packages` is given — the script adds it automatically. After
-either install the app is independent of the repo folder (a real install, not
-editable): you can delete the clone and `system-analyzer` keeps working.
+On PEP 668 Linux systems (e.g. Ubuntu 24.04+, Debian 12+) pip refuses installs
+unless `--break-system-packages` is given — the script adds it automatically.
+After either install the app is independent of the repo folder (a real install,
+not editable): you can delete the clone and `system-analyzer` keeps working.
+
+### Troubleshooting: `externally-managed-environment`
+
+If you see pip's *externally-managed-environment* error on a device, pip is
+blocking installs into system/user Python (Ubuntu 24.04+ / Debian 12+). The
+fix is `--break-system-packages`, which `install-user.sh` already applies:
+
+```sh
+/path/to/exp/install/install-user.sh        # per-user (handles PEP 668)
+/path/to/exp/install/install-user.sh --system   # machine-wide (sudo)
+```
+
+Manual fallbacks:
+
+```sh
+pip install --user --break-system-packages dist/system_analyzer-*.whl
+sudo pip install --break-system-packages dist/system_analyzer-*.whl
+```
+
+Or use a virtual environment, which sidesteps PEP 668 entirely:
+
+```sh
+python -m venv .venv
+. .venv/bin/activate
+pip install .
+```
+
+On very old pip (< 23.0) the `--break-system-packages` flag does not exist; the
+script detects that and retries without it (those pip versions predate the PEP
+668 restriction anyway).
 
 ### Dev/venv install
 
