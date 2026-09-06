@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Standalone online installer. It can be downloaded and run from any folder:
 #   curl -fsSL https://raw.githubusercontent.com/20204166/exp/main/install/install-online.sh | bash
+#   curl -fsSL .../install-online.sh | bash -s -- --force-reinstall
 set -euo pipefail
 
 base="https://raw.githubusercontent.com/20204166/exp/main/dist"
@@ -20,6 +21,17 @@ download() {
 py_in_venv() {
   "$1" -c 'import sys; raise SystemExit(0 if sys.prefix != sys.base_prefix else 1)' >/dev/null 2>&1
 }
+
+force_reinstall=0
+for arg in "$@"; do
+  case "$arg" in
+    --force-reinstall) force_reinstall=1 ;;
+    -*) echo "Unknown option: $arg" >&2; exit 1 ;;
+  esac
+done
+
+reinstall_flag=()
+[ "$force_reinstall" -eq 1 ] && reinstall_flag=(--force-reinstall)
 
 choose_python() {
   local candidate version major minor base
@@ -70,7 +82,7 @@ install_pip() {
   cat "$err" >&2; rm -f "$err"; return 1
 }
 
-install_pip "$py" -m pip install --user "$tmp/$wheel"
+install_pip "$py" -m pip install --user "${reinstall_flag[@]}" "$tmp/$wheel"
 bin_dir="$($py -c 'import sysconfig;print(sysconfig.get_path("scripts", scheme="posix_user"))')"
 launcher="$bin_dir/system-analyzer"
 [ -x "$launcher" ] || { echo "Install completed but launcher was not found at $launcher" >&2; exit 1; }

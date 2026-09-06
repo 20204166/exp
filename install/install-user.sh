@@ -8,6 +8,7 @@
 #
 #   install-user.sh              # per-user install  -> ~/.local/bin
 #   install-user.sh --system     # machine-wide      -> /usr/local/bin (uses sudo)
+#   install-user.sh --force-reinstall  # force pip to reinstall the wheel
 #   install-user.sh 1.2.2.0      # install a specific wheel from dist/
 #
 #   - uses the system interpreter (SA_SYSTEM_PYTHON to override; default
@@ -22,13 +23,18 @@ source "$here/install/_common.sh"
 
 mode="user"
 version=""
+force_reinstall=0
 for arg in "$@"; do
   case "$arg" in
     --system) mode="system" ;;
+    --force-reinstall) force_reinstall=1 ;;
     -*) echo "Unknown option: $arg" >&2; exit 1 ;;
     *) version="$arg" ;;
   esac
 done
+
+reinstall_flag=()
+[ "$force_reinstall" -eq 1 ] && reinstall_flag=(--force-reinstall)
 
 if [ -n "${SA_SYSTEM_PYTHON:-}" ]; then py="$SA_SYSTEM_PYTHON"
 elif found="$(first_system_python_ge_310)"; then py="$found"
@@ -72,7 +78,7 @@ install_pip() {
 if [ "$mode" = "system" ]; then
   command -v sudo >/dev/null 2>&1 || { echo "sudo is required for --system" >&2; exit 1; }
   echo "Installing machine-wide (system Python, no venv)..."
-  install_pip sudo -H "$py" -m pip install "$wheel"
+  install_pip sudo -H "$py" -m pip install "${reinstall_flag[@]}" "$wheel"
   launcher="$(command -v system-analyzer || true)"
   if [ -n "$launcher" ]; then
     bin_dir="$(dirname "$launcher")"
@@ -100,7 +106,7 @@ if [ "$mode" = "system" ]; then
   fi
 else
   echo "Installing into the user environment (no venv)..."
-  install_pip "$py" -m pip install --user "$wheel"
+  install_pip "$py" -m pip install --user "${reinstall_flag[@]}" "$wheel"
   bin_dir="$("$py" -c 'import sysconfig;print(sysconfig.get_path("scripts", scheme="posix_user"))' 2>/dev/null || echo "$HOME/.local/bin")"
   echo "Installed. Console scripts are in: $bin_dir"
   if echo "$PATH" | tr ':' '\n' | grep -qx "$bin_dir"; then
