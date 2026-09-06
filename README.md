@@ -44,17 +44,68 @@ without any install step (development usage is preserved).
 
 ## Normal local install
 
+The distribution builds a wheel into `dist/` (with `dist/SHA256SUMS`) and
+installs it non-editable, so `system-analyzer` runs from anywhere without
+needing the source folder or a virtual environment.
+
+### One-command install — no venv, system/user Python
+
+Install into the current user's Python (no virtual environment, deps pulled in
+automatically, PEP 668 handled):
+
 ```sh
-pip install .
+./install/install-user.sh
 ```
 
-Installs the app into the active environment (no PyPI publishing; everything
-stays local). The following commands become available on `PATH`:
+That verifies the committed wheel, installs it together with all its
+dependencies, and prints where the `system-analyzer` scripts landed
+(`~/.local/bin` by default). Add that directory to `PATH` once, then:
+
+```sh
+system-analyzer          # launch the GUI
+system-analyzer-snapshot # read-only JSON snapshot
+```
+
+Equivalent manual command (after `./install/build.sh`):
+
+```sh
+pip install --user --break-system-packages dist/system_analyzer-*.whl
+```
+
+On PEP 668 Linux systems (e.g. Ubuntu 24.04+) pip refuses user installs unless
+`--break-system-packages` is given — the script adds it automatically. For a
+machine-wide install instead, use `sudo pip install --break-system-packages .`.
+
+### Dev/venv install
+
+```sh
+python -m venv .venv
+. .venv/bin/activate
+pip install -e .
+```
+
+The following commands become available on `PATH`:
 
 | Command                    | Purpose                                        |
 | -------------------------- | ---------------------------------------------- |
 | `system-analyzer`          | Launch the desktop GUI                          |
 | `system-analyzer-snapshot` | Print a read-only system snapshot as JSON      |
+
+### Wheel build / release automation
+
+```sh
+./install/build.sh      # auto-bumps version, builds dist/system_analyzer-*.whl, writes dist/SHA256SUMS
+./install/verify.sh     # verifies the newest wheel (content + checksums)
+./install/upgrade.sh    # builds (if needed) and installs the latest wheel
+./install/rollback.sh 1.0.0.0   # reinstall a previous wheel kept in dist/
+./install/uninstall.sh  # remove the app
+```
+
+The package version is a single source of truth in `maintenance/_version.py`;
+`build.sh` auto-bumps it (patch/feature/minor) only when the source inputs
+differ from the newest wheel, so rebuilds are no-ops unless something changed.
+The app needs only its declared dependencies plus a Python build with
+`tkinter` (the only non-pip prerequisite).
 
 ## Run
 

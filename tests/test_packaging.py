@@ -18,7 +18,28 @@ class PyprojectConfigurationTests(unittest.TestCase):
         project = _pyproject()
         self.assertIn("project", project)
         self.assertEqual(project["project"]["name"], "system-analyzer")
-        self.assertGreaterEqual(project["project"]["version"].count("."), 1)
+        self.assertIn("version", project["project"]["dynamic"])
+
+    def test_version_is_dynamic_from_single_source(self) -> None:
+        from maintenance import __version__
+        from maintenance._version import __version__ as module_version
+
+        self.assertEqual(__version__, module_version)
+        segments = module_version.split(".")
+        self.assertEqual(len(segments), 4)
+        for segment in segments:
+            self.assertTrue(segment.isdigit())
+
+        dynamic = _pyproject()["tool"]["setuptools"]["dynamic"]
+        self.assertEqual(
+            dynamic["version"]["attr"],
+            "maintenance._version.__version__",
+        )
+
+    def test_py_typed_marker_is_shipped(self) -> None:
+        self.assertTrue((REPO / "maintenance" / "py.typed").is_file())
+        package_data = _pyproject()["tool"]["setuptools"]["package-data"]
+        self.assertIn("py.typed", package_data["maintenance"])
 
     def test_console_scripts_are_declared(self) -> None:
         scripts = _pyproject()["project"]["scripts"]

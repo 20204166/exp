@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "system-analyzer"
-version = "1.0.0"
 description = "Local system dashboard and safe cleanup for the current machine."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "UNLICENSED" }
+dynamic = ["version"]
 dependencies = [
     "psutil>=5.9",
     "send2trash>=1.8",
@@ -18,6 +18,12 @@ dependencies = [
 [project.scripts]
 system-analyzer = "main:main"
 system-analyzer-snapshot = "maintenance.snapshot:main"
+
+[tool.setuptools.dynamic]
+# The version lives in one place (maintenance/_version.py, a leaf module so
+# setuptools can read it without importing Tkinter or optional runtime deps).
+# maintenance._release bumps it automatically when a wheel is built.
+version = { attr = "maintenance._version.__version__" }
 
 [tool.setuptools]
 # The app keeps its historical top-level modules (main/window/algo) as the
@@ -35,6 +41,13 @@ py-modules = [
     "window",
     "algo",
 ]
+
+[tool.setuptools.package-data]
+# Ship the per-package READMEs so the built wheel matches the source manifest
+# (maintenance._release diffs wheel members against source inputs), plus the
+# PEP 561 typed marker.
+"*" = ["*.md"]
+maintenance = ["py.typed"]
 
 [tool.mypy]
 # In-tree `pip install .`/`pip install -e .` leaves build/ and *.egg-info/

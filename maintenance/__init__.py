@@ -1,3 +1,4 @@
+from maintenance._version import __version__
 from maintenance.actions import FileManager, ProcessManager
 from maintenance.models import (
     DashboardSnapshot,
@@ -19,4 +20,5 @@ __all__ = [
     "ProcessManager",
     "ResourceSummary",
     "SystemScanner",
+    "__version__",
 ]

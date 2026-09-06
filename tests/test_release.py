@@ -1,0 +1,226 @@
+"""Focused tests for the System Analyzer release/build helpers."""
+
+import hashlib
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+
+from maintenance import _release
+
+
+def _make_package(root: Path, version: str) -> None:
+    maintenance = root / "maintenance"
+    maintenance.mkdir(parents=True)
+    (maintenance / "__init__.py").write_text(
+        "from maintenance._version import __version__\n"
+    )
+    (maintenance / "_version.py").write_text(f'__version__ = "{version}"\n')
+    (maintenance / "py.typed").write_text("")
+    for name in ("main.py", "window.py", "algo.py"):
+        (root / name).write_text(f"# {name}\n")
+
+
+def _wheel_from_package(root: Path, version: str) -> Path:
+    """Zip the exact source bytes into a wheel so manifests compare equal."""
+
+    wheel = root / "dist" / f"system_analyzer-{version}-py3-none-any.whl"
+    wheel.parent.mkdir(exist_ok=True)
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for path in sorted((root / "maintenance").rglob("*")):
+            if path.is_file():
+                relative = path.relative_to(root / "maintenance").as_posix()
+                archive.writestr(f"maintenance/{relative}", path.read_bytes())
+        for name in ("main.py", "window.py", "algo.py"):
+            archive.writestr(name, (root / name).read_bytes())
+        archive.writestr(
+            f"system_analyzer-{version}.dist-info/entry_points.txt",
+            "[console_scripts]\nsystem-analyzer = main:main\n",
+        )
+    return wheel
+
+
+class VersionHelpersTests(unittest.TestCase):
+    def test_parse_and_format_round_trip(self) -> None:
+        self.assertEqual(
+            _release._format_version(_release._parse_version("1.2.3.4")), "1.2.3.4"
+        )
+
+    def test_parse_rejects_non_four_segment_versions(self) -> None:
+        with self.assertRaises(ValueError):
+            _release._parse_version("1.0.0")
+
+    def test_bump_carries_into_earlier_segments(self) -> None:
+        self.assertEqual(
+            _release._format_version(_release._bump_segment((1, 2, 3, 4), 3)), "1.2.3.5"
+        )
+        self.assertEqual(
+            _release._format_version(_release._bump_segment((1, 2, 3, 9), 3)), "1.2.4.0"
+        )
+        self.assertEqual(
+            _release._format_version(_release._bump_segment((1, 2, 9, 9), 2)), "1.3.0.9"
+        )
+        self.assertEqual(
+            _release._format_version(_release._bump_segment((1, 9, 9, 9), 1)), "2.0.9.9"
+        )
+
+    def test_next_version_levels(self) -> None:
+        self.assertEqual(_release._next_version("1.2.3.4", "none"), "1.2.3.4")
+        self.assertEqual(_release._next_version("1.2.3.4", "patch"), "1.2.3.5")
+        self.assertEqual(_release._next_version("1.2.3.4", "feature"), "1.2.4.0")
+        self.assertEqual(_release._next_version("1.2.3.4", "minor"), "1.3.0.0")
+
+    def test_pick_base_version_prefers_newer(self) -> None:
+        self.assertEqual(_release._pick_base_version("1.0.0.0", None), "1.0.0.0")
+        self.assertEqual(_release._pick_base_version("1.0.0.0", "1.2.0.0"), "1.2.0.0")
+        self.assertEqual(_release._pick_base_version("1.5.0.0", "1.2.0.0"), "1.5.0.0")
+
+
+class ManifestDiffTests(unittest.TestCase):
+    def test_diff_categorises_added_removed_changed(self) -> None:
+        diff = _release.diff_manifests(
+            {"a": "1", "b": "1", "c": "1"},
+            {"b": "2", "c": "1", "d": "1"},
+        )
+        self.assertEqual(diff.added, ("d",))
+        self.assertEqual(diff.removed, ("a",))
+        self.assertEqual(diff.changed, ("b",))
+
+    def test_classify_bump_levels(self) -> None:
+        no_change = _release.DiffSummary((), (), ())
+        self.assertEqual(_release.classify_bump(no_change), "none")
+
+        minor = _release.DiffSummary(("window.py",), (), ())
+        self.assertEqual(_release.classify_bump(minor), "minor")
+
+        feature_add = _release.DiffSummary(("maintenance/health.py",), (), ())
+        self.assertEqual(_release.classify_bump(feature_add), "feature")
+
+        feature_change = _release.DiffSummary((), (), ("maintenance/scanner.py",))
+        self.assertEqual(_release.classify_bump(feature_change), "feature")
+
+        patch_change = _release.DiffSummary((), (), ("maintenance/components/gpu.py",))
+        self.assertEqual(_release.classify_bump(patch_change), "patch")
+
+    def test_classify_bump_override(self) -> None:
+        diff = _release.DiffSummary((), (), ("maintenance/components/gpu.py",))
+        self.assertEqual(_release.classify_bump(diff, override="minor"), "minor")
+        with self.assertRaises(ValueError):
+            _release.classify_bump(diff, override="bogus")
+
+
+class VersionFileTests(unittest.TestCase):
+    def test_read_and_write_version_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory)
+            version_path = package / "maintenance"
+            version_path.mkdir()
+            (version_path / "_version.py").write_text(
+                '__version__ = "1.0.0.0"\n', encoding="utf-8"
+            )
+            self.assertEqual(_release.read_current_version(package), "1.0.0.0")
+            _release.write_current_version(package, "1.1.0.0")
+            self.assertEqual(_release.read_current_version(package), "1.1.0.0")
+
+
+class WheelManifestTests(unittest.TestCase):
+    def test_version_change_does_not_count_as_content_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _make_package(root, "1.2.3.4")
+            wheel = _wheel_from_package(root, "1.2.3.4")
+            wheel_manifest = _release._read_manifest_from_wheel(wheel)
+
+            _release.write_current_version(root, "1.2.3.5")
+            source_manifest = _release._collect_package_inputs(root)
+
+            diff = _release.diff_manifests(wheel_manifest, source_manifest)
+            self.assertFalse(diff.has_changes, diff)
+
+    def test_real_content_change_is_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _make_package(root, "1.0.0.0")
+            wheel = _wheel_from_package(root, "1.0.0.0")
+            wheel_manifest = _release._read_manifest_from_wheel(wheel)
+
+            (root / "algo.py").write_text("# changed algo.py\n")
+            source_manifest = _release._collect_package_inputs(root)
+
+            diff = _release.diff_manifests(wheel_manifest, source_manifest)
+            self.assertIn("algo.py", diff.changed)
+
+    def test_prepare_build_bumps_once_then_stays_put_with_wheel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _make_package(root, "1.0.0.0")
+
+            first = _release.prepare_build(root)
+            version_after_first = _release.read_current_version(root)
+            self.assertEqual(version_after_first, first)
+
+            _wheel_from_package(root, version_after_first)
+            second = _release.prepare_build(root)
+            self.assertEqual(second, version_after_first)
+            self.assertEqual(_release.read_current_version(root), version_after_first)
+
+    def test_rewrite_sha256sums_sorts_and_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _make_package(root, "1.0.0.0")
+            older = _wheel_from_package(root, "1.0.0.0")
+            newer = _wheel_from_package(root, "1.1.0.0")
+            _release.rewrite_sha256sums(root / "dist")
+            lines = (root / "dist" / "SHA256SUMS").read_text().splitlines()
+
+            self.assertEqual(len(lines), 2)
+            self.assertTrue(
+                lines[0].endswith("system_analyzer-1.0.0.0-py3-none-any.whl"), lines[0]
+            )
+            self.assertTrue(
+                lines[1].endswith("system_analyzer-1.1.0.0-py3-none-any.whl"), lines[1]
+            )
+            for line, wheel in zip(lines, sorted([older, newer])):
+                expected = hashlib.sha256(wheel.read_bytes()).hexdigest()
+                self.assertEqual(line.split()[0], expected)
+
+
+class WheelVerifyTests(unittest.TestCase):
+    def test_verify_accepts_valid_wheel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _make_package(root, "1.0.0.0")
+            wheel = _wheel_from_package(root, "1.0.0.0")
+            _release.verify_wheel(wheel)  # must not raise
+
+    def test_verify_rejects_forbidden_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _make_package(root, "1.0.0.0")
+            wheel = _wheel_from_package(root, "1.0.0.0")
+            with zipfile.ZipFile(wheel, "a") as archive:
+                archive.writestr("secrets/.env", "TOKEN=x")
+            with self.assertRaises(ValueError):
+                _release.verify_wheel(wheel)
+
+    def test_verify_rejects_missing_members(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _make_package(root, "1.0.0.0")
+            wheel = _wheel_from_package(root, "1.0.0.0")
+            rebuild = root / "dist" / "stripped.whl"
+            with zipfile.ZipFile(wheel) as source:
+                keep = [
+                    name
+                    for name in source.namelist()
+                    if name not in ("window.py", "algo.py")
+                ]
+                with zipfile.ZipFile(rebuild, "w") as archive:
+                    for name in keep:
+                        archive.writestr(name, source.read(name))
+            with self.assertRaises(ValueError):
+                _release.verify_wheel(rebuild)
+
+
+if __name__ == "__main__":
+    unittest.main()

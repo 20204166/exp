@@ -11,4 +11,6 @@ __pycache__/
 # local packaging artifacts
 *.egg-info/
 build/
-dist/
+dist/*
+!dist/*.whl
+!dist/SHA256SUMS
