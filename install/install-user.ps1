@@ -27,11 +27,14 @@ Install-UserWheel $py $wheel
 $binDir = & $py -c "import os,sysconfig;print(sysconfig.get_path('scripts', scheme='nt_user' if os.name=='nt' else 'posix_user'))" 2>$null
 if (-not $binDir) { $binDir = if ($env:OS -eq "Windows_NT") { Join-Path $env:APPDATA "Python\Scripts" } else { Join-Path $HOME ".local\bin" } }
 Write-Host "Installed. Console scripts are in: $binDir"
+$launcher = Join-Path $binDir "system-analyzer.exe"
+if (-not (Test-Path $launcher)) { $launcher = Join-Path $binDir "system-analyzer" }
+if (-not (Test-Path $launcher)) { throw "Install completed but launcher was not found in $binDir" }
 
 $sep = if ($env:OS -eq "Windows_NT") { ";" } else { ":" }
 $already = ($env:PATH -split [regex]::Escape($sep)) | Where-Object { $_ -eq $binDir }
 if ($already) {
-    Write-Host "That directory is already on PATH: run 'system-analyzer'"
+    Write-Host "Launcher found on PATH: run 'system-analyzer'"
 } else {
     Write-Host "Add it to PATH once:"
     if ($env:OS -eq "Windows_NT") {
@@ -41,4 +44,5 @@ if ($already) {
     }
     Write-Host "Then open a new terminal and run: system-analyzer"
 }
+Write-Host "Direct launcher path: $launcher"
 Write-Host "Verify: system-analyzer-snapshot --help"

@@ -64,9 +64,26 @@ install_pip() {
 if [ "$mode" = "system" ]; then
   command -v sudo >/dev/null 2>&1 || { echo "sudo is required for --system" >&2; exit 1; }
   echo "Installing machine-wide (system Python, no venv)..."
-  install_pip sudo "$py" -m pip install "$wheel"
-  echo "Installed. Console scripts are in: /usr/local/bin"
-  echo "Run: system-analyzer"
+  install_pip sudo -H "$py" -m pip install "$wheel"
+  bin_dir="/usr/local/bin"
+  launcher="$bin_dir/system-analyzer"
+  [ -x "$launcher" ] || { echo "Install completed but launcher was not found at $launcher" >&2; exit 1; }
+  echo "Installed. Console scripts are in: $bin_dir"
+  if echo "$PATH" | tr ':' '\n' | grep -qx "$bin_dir"; then
+    echo "Launcher found on PATH. Run: system-analyzer"
+  else
+    login_shell="$(basename "${SHELL:-bash}")"
+    case "$login_shell" in
+      zsh) rc_file="$HOME/.zshrc" ;;
+      bash) rc_file="$HOME/.bashrc" ;;
+      *) rc_file="$HOME/.profile" ;;
+    esac
+    echo "Launcher exists at: $launcher"
+    echo "Add it to PATH (shell: $login_shell):"
+    echo "  echo 'export PATH=\"$bin_dir:\$PATH\"' >> $rc_file"
+    echo "  source $rc_file"
+    echo "Or launch directly now: $launcher"
+  fi
 else
   echo "Installing into the user environment (no venv)..."
   install_pip "$py" -m pip install --user "$wheel"

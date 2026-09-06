@@ -81,6 +81,9 @@ After adding the printed scripts directory to PATH, `system-analyzer` works
 from any folder. The repository-local scripts remain available for offline
 wheel installs and release management.
 
+If a shell still reports `command not found`, use the exact `Direct launcher`
+path printed by the installer, or open a new terminal after updating PATH.
+
 ### Requirements
 
 - **Python 3.10 or newer** (the app uses modern type syntax). The install

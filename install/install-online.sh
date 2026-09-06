@@ -48,6 +48,8 @@ install_pip() {
 
 install_pip "$py" -m pip install --user "$tmp/$wheel"
 bin_dir="$($py -c 'import sysconfig;print(sysconfig.get_path("scripts", scheme="posix_user"))')"
+launcher="$bin_dir/system-analyzer"
+[ -x "$launcher" ] || { echo "Install completed but launcher was not found at $launcher" >&2; exit 1; }
 echo "Installed $wheel. Console scripts: $bin_dir"
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$bin_dir"; then
   rc_file="$HOME/.profile"; case "$(basename "${SHELL:-bash}")" in
@@ -55,4 +57,8 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$bin_dir"; then
   echo "Add it to PATH: echo 'export PATH=\"$bin_dir:\$PATH\"' >> $rc_file"
   echo "Then run: source $rc_file"
 fi
-echo "Run from anywhere: system-analyzer"
+if echo "$PATH" | tr ':' '\n' | grep -qx "$bin_dir"; then
+  echo "Run from anywhere: system-analyzer"
+else
+  echo "Launch directly now: $launcher"
+fi
