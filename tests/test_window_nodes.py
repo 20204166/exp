@@ -6,6 +6,7 @@ from queue import Queue
 from typing import Any
 from unittest.mock import Mock, patch
 
+from maintenance.cluster import ClusterState, trusted_node_record
 from maintenance.components import ScanCoordinator
 from maintenance.components.coordinator import (
     AppCoordinator,
@@ -17,6 +18,7 @@ from maintenance.components.network_discovery import (
 from maintenance.models import CapabilityState
 from maintenance.nodes import (
     LOCAL_NODE_ID,
+    DiscoveredNodeCandidate,
     NodeCapability,
     NodeContext,
     NodeDescriptor,
@@ -399,11 +401,73 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
             {d.id for d in window._node_registry.selectable_descriptors()},
         )
 
+    def test_reject_discovered_node_clears_only_the_candidate(self) -> None:
+        window = _make_window()
+        window._on_discovered_candidate(_candidate("peer-a"))
+
+        window._reject_discovered_node("peer-a")
+
+        self.assertEqual(window._node_registry.discovered_candidates(), ())
+        self.assertEqual(window._selected_node_id, NodeId(LOCAL_NODE_ID))
+
     def test_discovered_lost_removes_candidate(self) -> None:
         window = _make_window()
         window._on_discovered_candidate(_candidate("peer-a"))
         window._on_discovered_lost("peer-a")
         self.assertEqual(window._node_registry.discovered_candidates(), ())
+
+    def test_trusted_rediscovery_updates_saved_endpoint_after_hello(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer")
+        )
+        window._cluster_store = Mock()
+        window._cluster_store.save = Mock()
+        window._cluster_state = ClusterState(
+            discovery_enabled=True,
+            trusted_nodes=(
+                trusted_node_record(
+                    node_id="peer-a",
+                    display_name="Peer A",
+                    hostname="peer-a",
+                    host="192.168.1.10",
+                    port=5000,
+                    secret="a" * 64,
+                ),
+            ),
+        )
+        provider = Mock()
+        provider.hello.return_value = {
+            "ok": True,
+            "node_id": "peer-a",
+            "app_version": "1.2.2.0",
+            "capabilities": ["dashboard_read"],
+        }
+
+        candidate = DiscoveredNodeCandidate(
+            stable_id="peer-a",
+            hostname="new-host",
+            addresses=("192.168.1.20",),
+            port=6000,
+            service_name="peer-a._system-analyzer._tcp.local.",
+            app_version="1.2.4.0",
+            protocol_version="1",
+            platform="Linux",
+            connectable=False,
+            compatible=True,
+            last_seen=1.0,
+        )
+
+        with patch(
+            "window.AuthenticatedNodeProvider", return_value=provider
+        ) as factory:
+            window._on_discovered_candidate(candidate)
+
+        factory.assert_called_once()
+        record = window._cluster_state.record("peer-a")
+        assert record is not None
+        self.assertEqual(record.host, "192.168.1.20")
+        self.assertEqual(record.port, 6000)
+        self.assertEqual(record.hostname, "new-host")
 
     def test_discovery_status_lists_untrusted_peers_and_hides_when_lost(self) -> None:
         window = _make_window()

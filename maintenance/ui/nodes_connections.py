@@ -30,6 +30,7 @@ class NodesConnectionsCallbacks:
     on_back: Callable[[], None]
     on_discovery_toggle: Callable[[bool], None]
     on_pair: Callable[[str], None]
+    on_reject: Callable[[str], None]
     on_rename: Callable[[str], None]
     on_color: Callable[[str, str], None]
     on_revoke: Callable[[str], None]
@@ -208,8 +209,9 @@ class NodesConnectionsPage:
             fonts=self.fonts,
             description=(
                 "Machines seen on the local network. Pair a peer to record it "
-                "as trusted; pairing only grants read access and never happens "
-                "automatically."
+                "as trusted. Review the stable node ID before pairing or "
+                "rejecting it; pairing only grants read access and never "
+                "happens automatically."
             ),
         )
         self._discovered_body = body
@@ -232,6 +234,7 @@ class NodesConnectionsPage:
             text += f"  ·  port {spec.port}"
         if not spec.compatible:
             text += "  ·  incompatible"
+        text += f"  ·  ID {spec.node_id}"
         self.label_cls(
             row,
             text=text,
@@ -248,6 +251,12 @@ class NodesConnectionsPage:
             state=tk.NORMAL if spec.compatible else tk.DISABLED,
         )
         button.pack(side="right")
+        self.button_cls(
+            row,
+            text="Reject",
+            command=lambda: self.callbacks.on_reject(spec.node_id),
+            style="Neutral.TButton",
+        ).pack(side="right", padx=(0, 8))
         return row
 
     def _build_trusted_section(self) -> None:
@@ -260,8 +269,8 @@ class NodesConnectionsPage:
             fonts=self.fonts,
             description=(
                 "Machines you have explicitly paired or configured manually. "
-                "Trusted nodes stay read-only; destructive capabilities are "
-                "never granted here."
+                "The stable node ID is the trust identity. Trusted nodes stay "
+                "read-only; destructive capabilities are never granted here."
             ),
         )
         self._trusted_body = body
@@ -297,6 +306,7 @@ class NodesConnectionsPage:
         text = spec.display_name
         if spec.hostname and spec.hostname != spec.display_name:
             text += f"  ·  {spec.hostname}"
+        text += f"  ·  ID {spec.node_id}"
         text += f"  ·  {spec.status}"
         self.label_cls(
             row,
@@ -427,6 +437,7 @@ class NodesConnectionsPage:
                 text += f"  ·  {spec.host}"
             if spec.port is not None:
                 text += f"  ·  port {spec.port}"
+            text += f"  ·  ID {spec.node_id}"
             self.label_cls(
                 row,
                 text=text,

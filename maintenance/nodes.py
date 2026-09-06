@@ -117,6 +117,12 @@ class NodeDescriptor:
         return capability in self.capabilities
 
 
+def is_trusted_descriptor(descriptor: NodeDescriptor) -> bool:
+    """Return whether a descriptor is trusted or authorised."""
+
+    return descriptor.trust in (NodeTrustState.TRUSTED, NodeTrustState.AUTHORISED)
+
+
 @dataclass(frozen=True, slots=True)
 class NodeSnapshot:
     """Versioned, node-bound read snapshot for one machine.
@@ -384,9 +390,8 @@ class NodeRegistry:
         existing = self._contexts.get(node_id)
         if existing is not None:
             if self._is_placeholder(existing) and self._is_operational(context):
-                if context.descriptor.is_local or context.descriptor.trust not in (
-                    NodeTrustState.TRUSTED,
-                    NodeTrustState.AUTHORISED,
+                if context.descriptor.is_local or not is_trusted_descriptor(
+                    context.descriptor
                 ):
                     raise ValueError(
                         "A trusted placeholder must be replaced by a trusted "
@@ -428,7 +433,11 @@ class NodeRegistry:
             context.descriptor
             for context in self._contexts.values()
             if context.descriptor.trust
-            in (NodeTrustState.LOCAL, NodeTrustState.TRUSTED, NodeTrustState.AUTHORISED)
+            in (
+                NodeTrustState.LOCAL,
+                NodeTrustState.TRUSTED,
+                NodeTrustState.AUTHORISED,
+            )
             and (context.descriptor.is_local or self._is_operational(context))
         )
 
@@ -482,9 +491,13 @@ class NodeRegistry:
         node_id = NodeId(candidate.stable_id)
         known_context = self._contexts.get(node_id)
         if known_context is not None:
+            descriptor = known_context.descriptor
+            display_name = descriptor.display_name
+            if display_name == descriptor.hostname:
+                display_name = candidate.hostname
             known_context.descriptor = replace(
-                known_context.descriptor,
-                display_name=candidate.hostname,
+                descriptor,
+                display_name=display_name,
                 hostname=candidate.hostname,
                 status=NodeStatus.ONLINE,
                 platform=candidate.platform,
@@ -511,6 +524,11 @@ class NodeRegistry:
         context = self._contexts.get(node_id)
         if context is not None and not context.descriptor.is_local:
             context.descriptor = replace(context.descriptor, status=NodeStatus.OFFLINE)
+
+    def reject_discovered(self, node_id: NodeId) -> None:
+        """Explicitly reject one discovered peer candidate."""
+
+        self.remove_discovered(node_id)
 
     def promote_to_trusted(
         self,

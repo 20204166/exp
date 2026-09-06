@@ -1,5 +1,6 @@
 """Authenticated remote read contract tests (memory + loopback socket)."""
 
+import json
 import socket
 import unittest
 from datetime import datetime, timezone
@@ -32,6 +33,7 @@ from maintenance.remote import (
     ReplayCache,
     SocketRemoteTransport,
     sign_request,
+    sign_response,
     verify_request,
 )
 
@@ -258,6 +260,29 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
             node_id=NodeId("peer"),
             secret="b" * 64,
             transport=MemoryRemoteTransport(service),
+        )
+        with self.assertRaises(RemoteAuthError):
+            client.hello()
+
+    def test_response_from_wrong_node_is_rejected(self) -> None:
+        class WrongNodeTransport:
+            def request(self, envelope_text: str) -> str:
+                envelope = json.loads(envelope_text)
+                return json.dumps(
+                    sign_response(
+                        node_id="other",
+                        request_id=envelope["request_id"],
+                        status="ok",
+                        payload={"ok": True},
+                        timestamp=100.0,
+                        secret=SECRET,
+                    )
+                )
+
+        client = AuthenticatedNodeProvider(
+            node_id=NodeId("peer"),
+            secret=SECRET,
+            transport=WrongNodeTransport(),
         )
         with self.assertRaises(RemoteAuthError):
             client.hello()

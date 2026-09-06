@@ -13,6 +13,7 @@ from maintenance.nodes import (
     NodeRegistry,
     NodeStatus,
     NodeTrustState,
+    is_trusted_descriptor,
     local_node_descriptor,
     node_operation_key,
 )
@@ -164,6 +165,17 @@ class NodeRegistryTests(unittest.TestCase):
         names = {d.display_name for d in registry.selectable_descriptors()}
         self.assertEqual(names, {"This System", "Trusted"})
 
+    def test_is_trusted_descriptor_accepts_trusted_and_authorised(self) -> None:
+        trusted = _peer_context("peer-a", "Peer A", NodeTrustState.TRUSTED).descriptor
+        authorised = _peer_context(
+            "peer-b", "Peer B", NodeTrustState.AUTHORISED
+        ).descriptor
+        local = local_node_descriptor()
+
+        self.assertTrue(is_trusted_descriptor(trusted))
+        self.assertTrue(is_trusted_descriptor(authorised))
+        self.assertFalse(is_trusted_descriptor(local))
+
 
 class DiscoveredBoundaryTests(unittest.TestCase):
     def test_discovered_candidate_is_untrusted_and_non_selectable(self) -> None:
@@ -205,6 +217,12 @@ class DiscoveredBoundaryTests(unittest.TestCase):
         registry.remove_discovered(NodeId("peer-a"))
         self.assertEqual(registry.discovered_candidates(), ())
 
+    def test_reject_discovered_is_explicit_remove(self) -> None:
+        registry = NodeRegistry(_local_context())
+        registry.update_discovered(_candidate("peer-a"))
+        registry.reject_discovered(NodeId("peer-a"))
+        self.assertEqual(registry.discovered_candidates(), ())
+
     def test_known_trusted_node_presence_updates_without_reintroducing_discovery(
         self,
     ) -> None:
@@ -222,6 +240,34 @@ class DiscoveredBoundaryTests(unittest.TestCase):
         self.assertEqual(registry.discovered_candidates(), ())
         descriptor = registry.context(NodeId("peer-a")).descriptor
         self.assertEqual(descriptor.status, NodeStatus.ONLINE)
+        self.assertEqual(descriptor.hostname, "new-host")
+        self.assertEqual(descriptor.display_name, "new-host")
+
+    def test_trusted_rediscovery_preserves_custom_display_name(self) -> None:
+        registry = NodeRegistry(_local_context())
+        registry.register_context(
+            NodeContext(
+                descriptor=NodeDescriptor(
+                    id=NodeId("peer-a"),
+                    display_name="Peer A",
+                    hostname="peer-a-host",
+                    is_local=False,
+                    trust=NodeTrustState.TRUSTED,
+                    status=NodeStatus.ONLINE,
+                    capabilities=frozenset(),
+                ),
+                provider=object(),
+                process_manager=object(),
+                file_manager=object(),
+                scheduler=object(),
+                coordinator=object(),
+            )
+        )
+
+        registry.update_discovered(_candidate("peer-a", hostname="new-host"))
+
+        descriptor = registry.context(NodeId("peer-a")).descriptor
+        self.assertEqual(descriptor.display_name, "Peer A")
         self.assertEqual(descriptor.hostname, "new-host")
 
     def test_promote_to_trusted_is_explicit_and_read_only_by_default(self) -> None:

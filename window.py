@@ -61,6 +61,7 @@ from maintenance.nodes import (
     NodeRegistry,
     NodeStatus,
     NodeTrustState,
+    is_trusted_descriptor,
     local_node_descriptor,
     node_operation_key,
 )
@@ -77,6 +78,7 @@ from maintenance.remote import (
     SocketRemoteTransport,
 )
 from maintenance.ui import cluster_page as ui_cluster
+from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import nodes_connections as ui_nodes
 from maintenance.ui import preferences_page as ui_preferences
@@ -359,7 +361,10 @@ class AppWindow:
             "_dashboard_discovery_label",
             None,
         )
-        self._refresh_discovery_status()
+        ui_discovery_refresh.render_discovery_status(
+            self.discovery_status_label,
+            self._node_registry.discovered_candidates(),
+        )
 
         self.settings_button = ttk.Button(
             self.header_actions,
@@ -606,6 +611,7 @@ class AppWindow:
                 on_back=self._show_settings_page,
                 on_discovery_toggle=self._apply_discovery_enabled,
                 on_pair=self._pair_discovered_node,
+                on_reject=self._reject_discovered_node,
                 on_rename=self._rename_node,
                 on_color=self._set_node_color,
                 on_revoke=self._revoke_trusted_node,
@@ -648,10 +654,7 @@ class AppWindow:
             descriptor = context.descriptor
             if descriptor.is_local:
                 continue
-            if descriptor.trust not in (
-                NodeTrustState.TRUSTED,
-                NodeTrustState.AUTHORISED,
-            ):
+            if not is_trusted_descriptor(descriptor):
                 continue
             if descriptor.id.value in manual:
                 continue
@@ -861,6 +864,22 @@ class AppWindow:
         self._refresh_cluster_page()
         self._rebuild_node_selector()
         self._nodes_status(f"Paired {descriptor.display_name} (read-only)")
+
+    def _reject_discovered_node(self, node_id: str) -> None:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        registry.reject_discovered(NodeId(node_id))
+        ui_discovery_refresh.refresh_discovery_views(
+            page=getattr(self, "nodes_page", None),
+            peer_specs=self._nodes_peer_specs(),
+            trusted_specs=(),
+            refresh_trusted=False,
+            refresh_cluster_page=self._refresh_cluster_page,
+            status_label=getattr(self, "discovery_status_label", None),
+            discovered_candidates=registry.discovered_candidates(),
+        )
+        self._nodes_status(f"Rejected {node_id}")
 
     def _rename_node(self, node_id: str) -> None:
         registry = self.__dict__.get("_node_registry")
@@ -1294,40 +1313,135 @@ class AppWindow:
         if self._is_closing:
             return
         registry = self.__dict__.get("_node_registry")
+        trusted_descriptor = None
+        trusted_updated = False
         if registry is not None:
             registry.update_discovered(candidate)
-        self._refresh_discovery_status()
+            try:
+                context = registry.context(NodeId(candidate.stable_id))
+            except KeyError:
+                context = None
+            if context is not None and is_trusted_descriptor(context.descriptor):
+                trusted_descriptor = context.descriptor
+            trusted_updated = self._sync_trusted_node_endpoint(candidate)
+            trusted_specs = self._nodes_trusted_specs() if trusted_descriptor else ()
+            ui_discovery_refresh.refresh_discovery_views(
+                page=getattr(self, "nodes_page", None),
+                peer_specs=self._nodes_peer_specs(),
+                trusted_specs=trusted_specs,
+                refresh_trusted=trusted_descriptor is not None,
+                refresh_cluster_page=self._refresh_cluster_page,
+                status_label=getattr(self, "discovery_status_label", None),
+                discovered_candidates=registry.discovered_candidates(),
+            )
+            if trusted_updated:
+                try:
+                    descriptor = registry.context(
+                        NodeId(candidate.stable_id)
+                    ).descriptor
+                except KeyError:
+                    descriptor = None
+                if descriptor is not None:
+                    self._nodes_status(
+                        f"Verified {descriptor.display_name} at a new address"
+                    )
 
     def _on_discovered_lost(self, stable_id: str) -> None:
         if self._is_closing:
             return
         registry = self.__dict__.get("_node_registry")
+        trusted_descriptor = None
         if registry is not None:
             registry.remove_discovered(NodeId(stable_id))
-        self._refresh_discovery_status()
+            try:
+                context = registry.context(NodeId(stable_id))
+            except KeyError:
+                context = None
+            if context is not None and is_trusted_descriptor(context.descriptor):
+                trusted_descriptor = context.descriptor
+        ui_discovery_refresh.refresh_discovery_views(
+            page=getattr(self, "nodes_page", None),
+            peer_specs=self._nodes_peer_specs(),
+            trusted_specs=(),
+            refresh_trusted=trusted_descriptor is not None,
+            refresh_cluster_page=self._refresh_cluster_page,
+            status_label=getattr(self, "discovery_status_label", None),
+            discovered_candidates=registry.discovered_candidates()
+            if registry is not None
+            else (),
+        )
+
+    def _sync_trusted_node_endpoint(self, candidate: Any) -> bool:
+        registry = self.__dict__.get("_node_registry")
+        state = self.__dict__.get("_cluster_state")
+        if registry is None or state is None:
+            return False
+        try:
+            context = registry.context(NodeId(candidate.stable_id))
+        except (AttributeError, KeyError):
+            return False
+        descriptor = context.descriptor
+        if descriptor.is_local or not is_trusted_descriptor(descriptor):
+            return False
+        record = state.record(descriptor.id.value)
+        if record is None:
+            return False
+        address = candidate.addresses[0] if candidate.addresses else record.host
+        port = candidate.port if candidate.port is not None else record.port
+        if address == record.host and port == record.port:
+            return False
+        if port is None:
+            return False
+        try:
+            provider = AuthenticatedNodeProvider(
+                node_id=descriptor.id,
+                secret=record.secret,
+                transport=SocketRemoteTransport(address, port),
+            )
+            provider.hello()
+        except Exception as error:  # noqa: BLE001 - failed verification means no update.
+            LOGGER.info(
+                "Trusted node %s could not be verified at %s:%s: %s",
+                descriptor.id,
+                address,
+                port,
+                error,
+            )
+            return False
+        display_name = record.display_name
+        if display_name == record.hostname:
+            display_name = descriptor.display_name
+        updated_record = replace(
+            record,
+            display_name=display_name,
+            hostname=descriptor.hostname,
+            host=address,
+            port=port,
+            platform=descriptor.platform,
+        )
+        if updated_record == record:
+            return False
+        updated_records = tuple(
+            updated_record if item.node_id == record.node_id else item
+            for item in state.trusted_nodes
+        )
+        updated_state = ClusterState(
+            discovery_enabled=state.discovery_enabled,
+            trusted_nodes=updated_records,
+        )
+        if not self._save_cluster_state(updated_state):
+            self._nodes_error("Cluster settings could not be saved")
+            return False
+        self._cluster_state = updated_state
+        return True
 
     def _refresh_discovery_status(self) -> None:
         """Render untrusted peer presence without offering any interaction."""
 
-        label = getattr(self, "discovery_status_label", None)
-        registry = self.__dict__.get("_node_registry")
-        if label is None or registry is None:
-            return
-        candidates = registry.discovered_candidates()
-        if not candidates:
-            label.pack_forget()
-            return
-        names = sorted(candidate.hostname for candidate in candidates)
-        preview = ", ".join(names[:3])
-        remaining = len(names) - len(names[:3])
-        suffix = f" +{remaining} more" if remaining else ""
-        label.config(
-            text=(
-                f"Discovered {len(candidates)} untrusted peer"
-                f"{'s' if len(candidates) != 1 else ''}: {preview}{suffix}"
-            )
+        ui_discovery_refresh.render_discovery_status(
+            getattr(self, "discovery_status_label", None),
+            self._node_registry.discovered_candidates(),
         )
-        label.pack(anchor="w", pady=(2, 0))
 
     def _stop_discovery(self) -> None:
         self._cancel_timer(self.__dict__.get("_discovery_tick_id"))

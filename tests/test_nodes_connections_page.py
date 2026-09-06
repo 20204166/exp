@@ -18,6 +18,7 @@ def make_callbacks() -> Any:
         on_back=Mock(),
         on_discovery_toggle=Mock(),
         on_pair=Mock(),
+        on_reject=Mock(),
         on_rename=Mock(),
         on_color=Mock(),
         on_revoke=Mock(),
@@ -119,6 +120,19 @@ class NodesConnectionsPageTests(unittest.TestCase):
         _page, _parent, recorder = make_page(callbacks)
         button_with_text(recorder, "Pair").kwargs["command"]()
         callbacks.on_pair.assert_called_once_with("peer-a")
+
+    def test_reject_button_emits_peer_id(self) -> None:
+        callbacks = make_callbacks()
+        _page, _parent, recorder = make_page(callbacks)
+        button_with_text(recorder, "Reject").kwargs["command"]()
+        callbacks.on_reject.assert_called_once_with("peer-a")
+
+    def test_discovered_rows_show_stable_id(self) -> None:
+        _page, _parent, recorder = make_page()
+        row_texts = [
+            widget.kwargs.get("text", "") for widget in recorder.widgets("label")
+        ]
+        self.assertTrue(any("ID peer-a" in text for text in row_texts))
 
     def test_incompatible_peer_pair_button_is_disabled(self) -> None:
         _page, _parent, recorder = make_page(
