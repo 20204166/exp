@@ -75,9 +75,18 @@ else
   if echo "$PATH" | tr ':' '\n' | grep -qx "$bin_dir"; then
     echo "That directory is already on PATH: run 'system-analyzer'"
   else
-    echo "Add it to PATH once, e.g.:"
-    echo "  echo 'export PATH=\"$bin_dir:\$PATH\"' >> ~/.bashrc"
-    echo "  export PATH=\"$bin_dir:\$PATH\""
+    # Match the user's actual login shell (zsh ignores ~/.bashrc; macOS uses
+    # ~/.zshrc by default), so the instruction actually works.
+    login_shell="$(basename "${SHELL:-bash}")"
+    case "$login_shell" in
+      zsh) rc_file="$HOME/.zshrc" ;;
+      bash) rc_file="$HOME/.bashrc" ;;
+      *) rc_file="$HOME/.profile" ;;
+    esac
+    echo "Add it to PATH once (shell: $login_shell), e.g.:"
+    echo "  echo 'export PATH=\"$bin_dir:\$PATH\"' >> $rc_file"
+    echo "  source $rc_file    # or open a new terminal"
+    echo "Then run: system-analyzer"
   fi
 fi
 echo "Verify: system-analyzer-snapshot --help"
