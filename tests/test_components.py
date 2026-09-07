@@ -11,12 +11,15 @@ from unittest.mock import Mock, patch
 
 from maintenance.components import (
     BackgroundTaskRunner,
+    ClockCoordinator,
     DownloadScanner,
     DownloadsPathResolver,
     GpuDetector,
+    JobProfile,
     ProcessSafetyPolicy,
     ResourceFeature,
     ResourceFeatureCatalog,
+    ResourceGovernor,
     ScanCancelled,
     ScanCoordinator,
     check_cancelled,
@@ -860,6 +863,66 @@ class ComponentRefreshSchedulerTests(unittest.TestCase):
         scheduler = ComponentRefreshScheduler({"cpu": 1000})
         with self.assertRaises(ValueError):
             scheduler.request_refresh("nope")
+
+
+class ClockCoordinatorTests(unittest.TestCase):
+    def test_begin_keeps_absolute_deadlines_after_long_run(self) -> None:
+        clock = ClockCoordinator({"cpu": 1.0})
+
+        self.assertEqual(clock.due_keys(0.0), ("cpu",))
+        self.assertTrue(clock.begin("cpu", 0.0))
+        clock.finish("cpu")
+
+        self.assertEqual(clock.due_keys(0.5), ())
+        self.assertEqual(clock.due_keys(1.0), ("cpu",))
+
+        self.assertTrue(clock.begin("cpu", 3.2))
+        clock.finish("cpu")
+
+        self.assertEqual(clock.next_deadline(3.2), 4.0)
+        self.assertEqual(clock.due_keys(3.2), ())
+
+    def test_refresh_requests_and_deferrals_are_coalesced(self) -> None:
+        clock = ClockCoordinator({"cpu": 1.0})
+        clock.mark_all_refreshed(10.0)
+
+        clock.request_refresh("cpu")
+        self.assertEqual(clock.due_keys(10.0), ("cpu",))
+        self.assertTrue(clock.begin("cpu", 10.0))
+        clock.finish("cpu")
+
+        clock.defer("cpu", 12.0)
+        self.assertEqual(clock.due_keys(11.0), ())
+        self.assertEqual(clock.next_deadline(11.0), 12.0)
+        self.assertEqual(clock.due_keys(12.0), ("cpu",))
+
+
+class ResourceGovernorTests(unittest.TestCase):
+    def test_background_capacity_reserves_space_for_manual_work(self) -> None:
+        governor = ResourceGovernor(max_active=2, max_periodic=1, manual_reserve=1)
+
+        first = governor.admit(JobProfile(key="component:cpu", kind="periodic"), 0.0)
+        second = governor.admit(
+            JobProfile(key="component:memory", kind="periodic"), 0.0
+        )
+        manual = governor.admit(JobProfile(key="dashboard", kind="manual"), 0.0)
+
+        self.assertTrue(first.admitted)
+        self.assertFalse(second.admitted)
+        self.assertTrue(manual.admitted)
+
+        governor.release("component:cpu")
+        governor.release("dashboard")
+
+    def test_pressure_degrades_periodic_work_without_blocking_manual_work(self) -> None:
+        governor = ResourceGovernor(max_active=2, max_periodic=2, manual_reserve=1)
+        governor._pressure_degraded = True
+
+        periodic = governor.admit(JobProfile(key="component:cpu", kind="periodic"), 0.0)
+        manual = governor.admit(JobProfile(key="dashboard", kind="manual"), 0.0)
+
+        self.assertFalse(periodic.admitted)
+        self.assertTrue(manual.admitted)
 
 
 class SharedScanHelperTests(unittest.TestCase):

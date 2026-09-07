@@ -8,9 +8,12 @@ and the Tkinter UI thread.
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from .clock_coordinator import ClockCoordinator
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,73 +48,53 @@ class RefreshIntervals:
 
 
 class ComponentRefreshScheduler:
-    """Track per-component refresh due times and prevent overlapping scans.
+    """Track per-component refresh due times and prevent overlapping scans."""
 
-    Each component has its own interval and in-flight flag, so a slow or
-    failing component never delays the others and the same component is never
-    scanned twice concurrently.
-    """
-
-    def __init__(self, intervals: dict[str, int] | None = None) -> None:
+    def __init__(
+        self,
+        intervals: dict[str, int] | None = None,
+        *,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
         self.intervals = (
             dict(intervals) if intervals is not None else RefreshIntervals().as_dict()
         )
-        self._next_due: dict[str, float] = {}
-        self._in_flight: set[str] = set()
-        self._paused: set[str] = set()
-        self._refresh_requested: set[str] = set()
+        self._clock = clock or time.monotonic
+        self._core = ClockCoordinator(
+            {
+                key: milliseconds / 1000.0
+                for key, milliseconds in self.intervals.items()
+            },
+            clock=self._clock,
+        )
+        self._next_due = self._core._next_due
+        self._in_flight = self._core._in_flight
+        self._paused = self._core._paused
+        self._refresh_requested = self._core._refresh_requested
+        self._deferred_until = self._core._deferred_until
 
     def begin(self, key: str, now: float) -> bool:
-        """Claim a component scan if it is due and not already running."""
-
-        if key in self._in_flight:
-            return False
-        if key in self._paused:
-            return False
-        if key not in self._refresh_requested and now < self._next_due.get(key, 0.0):
-            return False
-        self._in_flight.add(key)
-        self._refresh_requested.discard(key)
-        self._next_due[key] = now + self.intervals.get(key, 5000) / 1000.0
-        return True
+        return self._core.begin(key, now, self.intervals.get(key, 5000) / 1000.0)
 
     def finish(self, key: str) -> None:
-        self._in_flight.discard(key)
+        self._core.finish(key)
 
     def mark_all_refreshed(self, now: float) -> None:
-        """Push every component's next due time past its interval.
-
-        Called after a full snapshot so the scheduler does not immediately
-        re-scan every component, and so a queued refresh request is satisfied
-        by the snapshot rather than launching another scan.
-        """
-
-        for key in self.intervals:
-            self._next_due[key] = now + self.intervals[key] / 1000.0
-        self._refresh_requested.clear()
+        self._core.mark_all_refreshed(now)
 
     def due_keys(self, now: float) -> tuple[str, ...]:
-        """Return the keys that are due now and not already running."""
+        return self._core.collect_due(now)
 
-        return tuple(
-            key
-            for key in self.intervals
-            if key not in self._in_flight
-            and key not in self._paused
-            and (key in self._refresh_requested or now >= self._next_due.get(key, 0.0))
-        )
+    def collect_due(self, now: float | None = None) -> tuple[str, ...]:
+        return self._core.collect_due(now)
+
+    def next_deadline(self, now: float | None = None) -> float | None:
+        return self._core.next_deadline(now)
 
     def in_flight(self, key: str) -> bool:
         return key in self._in_flight
 
     def set_interval(self, key: str, milliseconds: int, now: float) -> None:
-        """Change one component's refresh interval and reset its deadline.
-
-        Only the named component is touched: its next due time is pushed out
-        by the new interval from ``now`` and any in-flight scan is preserved.
-        This never launches a worker itself.
-        """
-
         if key not in self.intervals:
             raise ValueError(f"Unknown component: {key}")
         if not isinstance(milliseconds, int) or isinstance(milliseconds, bool):
@@ -119,36 +102,30 @@ class ComponentRefreshScheduler:
         if milliseconds <= 0:
             raise ValueError("Interval must be positive")
         self.intervals[key] = milliseconds
-        self._next_due[key] = now + milliseconds / 1000.0
+        self._core.update_interval(key, milliseconds / 1000.0, now)
 
     def pause(self, key: str) -> None:
-        """Prevent new scans of a component without disturbing a running one."""
-
         if key not in self.intervals:
             raise ValueError(f"Unknown component: {key}")
-        self._paused.add(key)
+        self._core.pause(key)
 
     def resume(self, key: str) -> None:
-        """Allow a paused component to be scanned again."""
-
         if key not in self.intervals:
             raise ValueError(f"Unknown component: {key}")
-        self._paused.discard(key)
+        self._core.resume(key)
 
     def is_paused(self, key: str) -> bool:
         return key in self._paused
 
     def request_refresh(self, key: str) -> None:
-        """Queue one coalesced immediate refresh for a component.
-
-        Repeated requests collapse into one. A request made while the
-        component is in flight or paused becomes due as soon as the worker
-        finishes or the component is resumed, without ever overlapping.
-        """
-
         if key not in self.intervals:
             raise ValueError(f"Unknown component: {key}")
-        self._refresh_requested.add(key)
+        self._core.request_refresh(key)
+
+    def defer(self, key: str, retry_at: float) -> None:
+        if key not in self.intervals:
+            raise ValueError(f"Unknown component: {key}")
+        self._core.defer(key, retry_at)
 
 
 @dataclass

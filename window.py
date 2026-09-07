@@ -21,7 +21,9 @@ from maintenance.cluster import (
 )
 from maintenance.components import (
     DOWNLOADS_SCAN_CANCELLED,
+    JobProfile,
     ResourceFeatureCatalog,
+    ResourceGovernor,
     ScanCoordinator,
 )
 from maintenance.components.coordinator import (
@@ -160,6 +162,7 @@ class AppWindow:
             deliver=self._submit_ui,
             on_activity=self._start_background_poll,
         )
+        self._resource_governor = ResourceGovernor()
         self._component_scheduler = ComponentRefreshScheduler(
             self._preferences.refresh_intervals.as_dict()
         )
@@ -1719,19 +1722,43 @@ class AppWindow:
         task: Callable[[], DashboardSnapshot],
         on_success: Callable[[DashboardSnapshot], None] | None = None,
         on_error: Callable[[str], None] | None = None,
-    ) -> None:
+        *,
+        job_profile: JobProfile | None = None,
+        retry_callback: Callable[[], None] | None = None,
+    ) -> bool:
+        governor = self.__dict__.get("_resource_governor")
+        decision = (
+            governor.admit(job_profile, time.monotonic())
+            if governor is not None and job_profile is not None
+            else None
+        )
+        if decision is not None and not decision.admitted:
+            if (
+                retry_callback is not None
+                and decision.retry_at is not None
+                and not self._is_closing
+            ):
+                delay = max(0, int((decision.retry_at - time.monotonic()) * 1000))
+                self._schedule_timer(delay, retry_callback)
+            return False
         self._set_busy(True)
         self._background_tasks += 1
         self._start_background_poll()
         success_callback = on_success or self._show_snapshot
         error_callback = on_error or self._show_error
 
+        def on_finished() -> None:
+            if governor is not None and job_profile is not None:
+                governor.release(job_profile.key)
+            self._background_queue.put(None)
+
         self._run_daemon(
             task,
             lambda result: self._background_queue.put((success_callback, (result,))),
             lambda error: self._background_queue.put((error_callback, (str(error),))),
-            on_finished=lambda: self._background_queue.put(None),
+            on_finished=on_finished,
         )
+        return True
 
     def _submit_ui(self, callback: Callable[[], None]) -> None:
         """Deliver one UI callback through the shared background queue.
@@ -1797,8 +1824,37 @@ class AppWindow:
     def handle_analyze(self) -> None:
         if self._is_closing:
             return
-        generation, started = self._scan_coordinator_state().begin()
+        scan_state = self._scan_coordinator_state()
+        if scan_state.active:
+            scan_state.begin()
+            return
+        source_node_id = self.__dict__.get("_selected_node_id")
+        source_context = self._selected_context()
+        source_provider = (
+            source_context.provider if source_context is not None else self.analyzer
+        )
+        governor = self.__dict__.get("_resource_governor")
+        job_profile = JobProfile(
+            key=self._operation_key("dashboard"),
+            kind="manual",
+            node_id=str(source_node_id) if source_node_id is not None else None,
+            priority=10,
+        )
+        admission = (
+            governor.admit(job_profile, time.monotonic())
+            if governor is not None
+            else None
+        )
+        if admission is not None and not admission.admitted:
+            if admission.retry_at is not None and not self._is_closing:
+                delay = max(0, int((admission.retry_at - time.monotonic()) * 1000))
+                self._schedule_timer(delay, self.handle_analyze)
+            return
+
+        generation, started = scan_state.begin()
         if not started:
+            if admission is not None and admission.admitted and governor is not None:
+                governor.release(job_profile.key)
             return
         coordinator = self._render_coordinator()
         if coordinator is not None:
@@ -1807,11 +1863,6 @@ class AppWindow:
 
         cancel_event = threading.Event()
         self._analysis_cancel_event = cancel_event
-        source_node_id = self.__dict__.get("_selected_node_id")
-        source_context = self._selected_context()
-        source_provider = (
-            source_context.provider if source_context is not None else self.analyzer
-        )
         self._scan_timeout_id = self._schedule_timer(
             self.SCAN_TIMEOUT_MILLISECONDS,
             self._handle_scan_timeout,
@@ -1879,6 +1930,8 @@ class AppWindow:
             dashboard_task,
             on_success=queue_snapshot,
             on_error=queue_error,
+            job_profile=job_profile,
+            retry_callback=self.handle_analyze,
         )
 
     def _claim_scan_resolution(self, generation: int) -> tuple[bool, bool]:
@@ -2101,7 +2154,7 @@ class AppWindow:
         )
         self._refresh_health()
         self._component_scheduler.mark_all_refreshed(time.monotonic())
-        self._schedule_component_poll()
+        self._schedule_component_poll(force=True)
 
     def _show_ready_after_completion_hold(self) -> None:
         """Return the status to Ready after the completion hold expires.
@@ -2244,12 +2297,45 @@ class AppWindow:
         if node_id is None or node_id == self.__dict__.get("_selected_node_id"):
             self._rescan_after_change()
 
-    def _schedule_component_poll(self) -> None:
-        if self._component_poll_id is None and not self._is_closing:
-            self._component_poll_id = self._schedule_timer(
-                self.COMPONENT_POLL_MILLISECONDS,
-                self._run_component_cycle,
+    def _component_poll_delay(self) -> int | None:
+        scheduler = self.__dict__.get("_component_scheduler")
+        if scheduler is None:
+            return None
+        now = time.monotonic()
+        deadline = scheduler.next_deadline(now)
+        if (
+            getattr(self, "snapshot", None) is None
+            or self.__dict__.get("_full_snapshot_applied_at") is None
+        ):
+            has_pending = bool(
+                getattr(scheduler, "_refresh_requested", ())
+                or getattr(scheduler, "_deferred_until", {})
+                or getattr(scheduler, "_in_flight", ())
             )
+            if deadline is None:
+                return None if has_pending else self.COMPONENT_POLL_MILLISECONDS
+            if deadline > now:
+                return max(0, int((deadline - now) * 1000))
+            return 0 if has_pending else self.COMPONENT_POLL_MILLISECONDS
+        if deadline is None:
+            return None
+        return max(0, int((deadline - now) * 1000))
+
+    def _schedule_component_poll(self, *, force: bool = False) -> None:
+        if self._is_closing:
+            return
+        delay = self._component_poll_delay()
+        if delay is None:
+            if self._component_poll_id is not None:
+                self._cancel_timer(self._component_poll_id)
+                self._component_poll_id = None
+            return
+        if self._component_poll_id is not None and not force:
+            return
+        if self._component_poll_id is not None:
+            self._cancel_timer(self._component_poll_id)
+            self._component_poll_id = None
+        self._component_poll_id = self._schedule_timer(delay, self._run_component_cycle)
 
     def _run_component_cycle(self) -> None:
         self._component_poll_id = None
@@ -2257,7 +2343,7 @@ class AppWindow:
             return
         for key in self._component_scheduler.due_keys(time.monotonic()):
             self._launch_component_scan(key)
-        self._schedule_component_poll()
+        self._schedule_component_poll(force=True)
 
     def _launch_component_scan(self, key: str) -> None:
         source_context = self._selected_context()
@@ -2267,7 +2353,29 @@ class AppWindow:
         if source_context is not None:
             source_scheduler = source_context.scheduler
             source_provider = source_context.provider
+        operation_key = self._operation_key(f"component:{key}")
+        governor = self.__dict__.get("_resource_governor")
+        admission = (
+            governor.admit(
+                JobProfile(
+                    key=operation_key,
+                    kind="periodic",
+                    node_id=str(source_node_id) if source_node_id is not None else None,
+                    priority=1,
+                ),
+                time.monotonic(),
+            )
+            if governor is not None
+            else None
+        )
+        if admission is not None and not admission.admitted:
+            retry_at = admission.retry_at or (time.monotonic() + 0.5)
+            source_scheduler.defer(key, retry_at)
+            self._schedule_component_poll(force=True)
+            return
         if not source_scheduler.begin(key, time.monotonic()):
+            if admission is not None and admission.admitted and governor is not None:
+                governor.release(operation_key)
             return
 
         started_at = time.monotonic()
@@ -2279,6 +2387,10 @@ class AppWindow:
             return source_provider.component_summary(key)
 
         def queue_component_snapshot(resource: ResourceSummary) -> None:
+            source_scheduler.finish(key)
+            if governor is not None:
+                governor.release(operation_key)
+            self._schedule_component_poll(force=True)
             self._request_render(
                 ui_render.RenderIntent(
                     target=f"component:{key}",
@@ -2297,6 +2409,10 @@ class AppWindow:
             )
 
         def queue_component_error(message: str) -> None:
+            source_scheduler.finish(key)
+            if governor is not None:
+                governor.release(operation_key)
+            self._schedule_component_poll(force=True)
             self._request_render(
                 ui_render.RenderIntent(
                     target=f"component:{key}",
@@ -2315,7 +2431,7 @@ class AppWindow:
             )
 
         self._coordinator.run(
-            self._operation_key(f"component:{key}"),
+            operation_key,
             task_factory,
             on_result=lambda _operation, resource: queue_component_snapshot(resource),
             on_error=lambda _operation, message: queue_component_error(message),
@@ -2334,16 +2450,21 @@ class AppWindow:
 
         source_scheduler = scheduler or self._component_scheduler
         source_scheduler.finish(key)
-        if node_id is not None and node_id != self.__dict__.get("_selected_node_id"):
-            return
-        applied_at = self.__dict__.get("_full_snapshot_applied_at")
-        if applied_at is not None and started_at < applied_at:
-            return
-        if isinstance(value, Exception):
-            resource = self._failed_component_summary(key)
-        else:
-            resource = value
-        self._apply_component(key, resource)
+        try:
+            if node_id is not None and node_id != self.__dict__.get(
+                "_selected_node_id"
+            ):
+                return
+            applied_at = self.__dict__.get("_full_snapshot_applied_at")
+            if applied_at is not None and started_at < applied_at:
+                return
+            if isinstance(value, Exception):
+                resource = self._failed_component_summary(key)
+            else:
+                resource = value
+            self._apply_component(key, resource)
+        finally:
+            self._schedule_component_poll(force=True)
 
     def _failed_component_summary(self, key: str) -> ResourceSummary:
         title = self._fallback_component_title(key)
@@ -2547,7 +2668,7 @@ class AppWindow:
         if analyzer is not None and hasattr(analyzer, "reset_component_sample"):
             analyzer.reset_component_sample(key)
         self._component_scheduler.request_refresh(key)
-        self._schedule_component_poll()
+        self._schedule_component_poll(force=True)
 
     def _reconcile_intervals(self) -> None:
         now = time.monotonic()
@@ -2555,6 +2676,7 @@ class AppWindow:
         for key, milliseconds in self._preferences.refresh_intervals.as_dict().items():
             if current.get(key) != milliseconds:
                 self._component_scheduler.set_interval(key, milliseconds, now)
+        self._schedule_component_poll(force=True)
 
     def _apply_preferences(self, candidate: AppPreferences) -> None:
         """Persist, then publish, one preferences candidate.

@@ -11,6 +11,13 @@ package in `maintenance.external_commands`.
 
 from .background import BackgroundTaskRunner
 from .catalog import ResourceFeature, ResourceFeatureCatalog
+from .clock_coordinator import (
+    AdmissionDecision,
+    ClockCoordinator,
+    JobProfile,
+    PressureSnapshot,
+    ResourceGovernor,
+)
 from .coordinator import ScanCoordinator
 from .downloads import (
     DownloadScanner,
@@ -48,19 +55,24 @@ __all__ = [
     "GPU_INFORMATION_UNAVAILABLE",
     "PROTECTED_PROCESS_NAMES",
     "SERVICE_TYPE",
+    "AdmissionDecision",
     "BackgroundTaskRunner",
+    "ClockCoordinator",
     "DiscoveryAdvertisement",
     "DiscoveryEndpoint",
     "DownloadScanner",
     "DownloadsPathResolver",
     "GpuDetector",
     "HashFingerprint",
+    "JobProfile",
     "NetworkDiscovery",
+    "PressureSnapshot",
     "ProcessSafetyPolicy",
     "ProgressCallback",
     "ProgressTask",
     "ResourceFeature",
     "ResourceFeatureCatalog",
+    "ResourceGovernor",
     "ScanCancelled",
     "ScanCoordinator",
     "check_cancelled",
