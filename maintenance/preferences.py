@@ -12,18 +12,17 @@ any interpreter and inside tests without a display.
   + best-effort directory fsync).
 """
 
-import contextlib
 import json
 import logging
 import os
 import platform
-import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
 from maintenance.components.catalog import ResourceFeatureCatalog
 from maintenance.components.coordinator import RefreshIntervals
+from maintenance.persistence import atomic_write_text, read_text_or_none
 from maintenance.ui.styles import ACCENT_THEMES, DEFAULT_APPEARANCE
 
 LOGGER = logging.getLogger(__name__)
@@ -204,7 +203,11 @@ class PreferencesStore:
         self.path = Path(path)
 
     def load(self) -> AppPreferences:
-        text = self._read_raw()
+        text = read_text_or_none(
+            self.path,
+            logger=LOGGER,
+            warning_template="Failed to read preferences: %s",
+        )
         if text is None:
             return AppPreferences.defaults()
         return self._parse(text)
@@ -218,43 +221,18 @@ class PreferencesStore:
         """
 
         payload = self._serialize(preferences)
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as error:
-            raise PreferencesSaveError(
-                f"Cannot create preferences directory: {error}"
-            ) from error
-
-        temp_name: str | None = None
-        try:
-            fd, temp_name = tempfile.mkstemp(
-                prefix=".preferences-",
-                suffix=".tmp",
-                dir=str(self.path.parent),
-            )
-            try:
-                handle = os.fdopen(fd, "w", encoding="utf-8")
-            except OSError:
-                with contextlib.suppress(OSError):
-                    os.close(fd)
-                raise
-            try:
-                with handle:
-                    handle.write(payload)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temp_name, self.path)
-                temp_name = None
-            finally:
-                if temp_name is not None:
-                    with contextlib.suppress(OSError):
-                        os.unlink(temp_name)
-        except OSError as error:
-            raise PreferencesSaveError(
-                f"Failed to save preferences: {error}"
-            ) from error
-
-        self._fsync_directory()
+        atomic_write_text(
+            self.path,
+            payload,
+            temp_prefix=".preferences-",
+            create_directory_message="Cannot create preferences directory",
+            save_message="Failed to save preferences",
+            save_error_factory=PreferencesSaveError,
+            fsync_warning_template=(
+                "Preferences committed but directory fsync failed: %s"
+            ),
+            logger=LOGGER,
+        )
 
     def reset_to_defaults(self) -> AppPreferences:
         """Persist and return the default preferences."""
@@ -262,15 +240,6 @@ class PreferencesStore:
         defaults = AppPreferences.defaults()
         self.save(defaults)
         return defaults
-
-    def _read_raw(self) -> str | None:
-        try:
-            return self.path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return None
-        except OSError as error:
-            LOGGER.warning("Failed to read preferences: %s", error)
-            return None
 
     def _parse(self, text: str) -> AppPreferences:
         try:
@@ -345,29 +314,3 @@ class PreferencesStore:
             "appearance": preferences.appearance,
         }
         return json.dumps(payload, indent=2, sort_keys=True) + "\n"
-
-    def _fsync_directory(self) -> None:
-        """Best-effort fsync of the destination directory after replace.
-
-        A failure here happens after the commit point, so it must never
-        cause the caller to roll runtime state back to the old value.
-        """
-
-        if not hasattr(os, "O_DIRECTORY"):
-            return
-        try:
-            dir_fd = os.open(
-                self.path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-            )
-        except OSError:
-            return
-        try:
-            os.fsync(dir_fd)
-        except OSError:
-            LOGGER.warning(
-                "Preferences committed but directory fsync failed: %s",
-                self.path.parent,
-            )
-        finally:
-            with contextlib.suppress(OSError):
-                os.close(dir_fd)
