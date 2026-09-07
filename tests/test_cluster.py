@@ -39,6 +39,7 @@ from maintenance.nodes import (
     NodeSnapshot,
     NodeStatus,
 )
+from tests.support.temperature import make_temperature_sample
 
 NOW = datetime.now(timezone.utc).astimezone()
 
@@ -81,6 +82,22 @@ def _snapshot() -> NodeSnapshot:
 class ResourceSummaryCodecTests(unittest.TestCase):
     def test_round_trip_preserves_summary(self) -> None:
         original = _summary("cpu")
+        decoded = resource_summary_from_dict(resource_summary_to_dict(original))
+        self.assertEqual(decoded, original)
+
+    def test_round_trip_preserves_temperatures(self) -> None:
+        original = ResourceSummary(
+            key="cpu",
+            title="CPU",
+            value="10%",
+            subtitle="running",
+            percent=10.0,
+            details=("CPU: 45°C",),
+            actionable=False,
+            failed=False,
+            capability=CapabilityState.SUPPORTED,
+            temperatures=(make_temperature_sample("cpu", 45.0),),
+        )
         decoded = resource_summary_from_dict(resource_summary_to_dict(original))
         self.assertEqual(decoded, original)
 

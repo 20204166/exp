@@ -244,6 +244,7 @@ class SectionTemperatureTests(unittest.TestCase):
         self.assertIn("Temperature: 45°C", snapshot.get("cpu").details)
         self.assertIn("Temperature: 51°C", snapshot.get("gpu").details)
         self.assertIn("Drive temperature: 38°C", snapshot.get("storage").details)
+        self.assertEqual(snapshot.get("cpu").temperatures[0].value_celsius, 45.0)
         self.assertNotIn("45°C", snapshot.get("battery").details)
         self.assertNotIn("51°C", snapshot.get("battery").details)
 
@@ -282,7 +283,7 @@ class SectionTemperatureTests(unittest.TestCase):
 
         with patch(
             "maintenance.scanner.time.monotonic",
-            side_effect=[0.0, 1.0, 4.0, 6.0, 7.0],
+            side_effect=[0.0, 1.0, 1.0, 4.9, 6.1, 7.1, 8.1],
         ):
             first = scanner._cached_temperature_lines(fake)
             second = scanner._cached_temperature_lines(fake)

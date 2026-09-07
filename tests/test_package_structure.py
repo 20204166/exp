@@ -15,6 +15,7 @@ from maintenance.components import (
     network_discovery,
     process_safety,
     scan_support,
+    temperature,
 )
 
 REPO = Path(__file__).parents[1]
@@ -34,6 +35,7 @@ class ComponentPackageLayoutTests(unittest.TestCase):
             "network_discovery.py",
             "process_safety.py",
             "scan_support.py",
+            "temperature.py",
         }
         actual = {path.name for path in package_dir.glob("*.py")}
         self.assertEqual(actual, expected_modules)
@@ -67,6 +69,13 @@ class ComponentFacadeReexportTests(unittest.TestCase):
             "GpuDetector": gpu,
             "GPU_INFORMATION_UNAVAILABLE": gpu,
             "gpu_unavailable_message": gpu,
+            "TemperatureEvent": temperature,
+            "TemperaturePolicy": temperature,
+            "TemperatureSample": temperature,
+            "TemperatureScan": temperature,
+            "TemperatureSeriesSnapshot": temperature,
+            "TemperatureState": temperature,
+            "TemperatureTelemetry": temperature,
             "BackgroundTaskRunner": background,
             "ResourceFeature": catalog,
             "ResourceFeatureCatalog": catalog,
@@ -116,6 +125,13 @@ class ComponentFacadeReexportTests(unittest.TestCase):
             "GpuDetector",
             "GPU_INFORMATION_UNAVAILABLE",
             "gpu_unavailable_message",
+            "TemperatureEvent",
+            "TemperaturePolicy",
+            "TemperatureSample",
+            "TemperatureScan",
+            "TemperatureSeriesSnapshot",
+            "TemperatureState",
+            "TemperatureTelemetry",
             "ScanCoordinator",
             "NetworkDiscovery",
             "DiscoveryAdvertisement",

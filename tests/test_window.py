@@ -58,6 +58,7 @@ class AppWindowTests(unittest.TestCase):
         window._background_queue = Queue()
         window._component_scheduler = ComponentRefreshScheduler()
         window._feature_catalog = ResourceFeatureCatalog()
+        window._thermal_dialogs = {}
         window._component_poll_id = None
         window._component_queue = Queue()
         window._preferences = AppPreferences.defaults()

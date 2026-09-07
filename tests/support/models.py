@@ -8,6 +8,7 @@ without copying a full structure.
 
 from datetime import datetime, timezone
 
+from maintenance.components.temperature import TemperatureSample
 from maintenance.models import CapabilityState, DashboardSnapshot, ResourceSummary
 
 FIXED_SCANNED_AT = datetime(2026, 9, 5, 3, 42, 52, tzinfo=timezone.utc)
@@ -24,6 +25,7 @@ def make_summary(
     actionable: bool = False,
     failed: bool = False,
     capability: CapabilityState = CapabilityState.UNKNOWN,
+    temperatures: tuple[TemperatureSample, ...] = (),
 ) -> ResourceSummary:
     """Build a valid :class:`ResourceSummary` with explicit overrides."""
 
@@ -37,6 +39,7 @@ def make_summary(
         actionable=actionable,
         failed=failed,
         capability=capability,
+        temperatures=temperatures,
     )
 
 

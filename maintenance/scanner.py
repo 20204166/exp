@@ -69,6 +69,7 @@ from maintenance.components.scan_support import (
     stat_fingerprint,
     walk_directory_entries,
 )
+from maintenance.components.temperature import TemperatureSample, TemperatureScan
 from maintenance.external_commands import run_json_command, run_text_command
 from maintenance.models import (
     CapabilityState,
@@ -179,7 +180,7 @@ class SystemScanner:
         self._static_gpu_fingerprint: tuple[Any, ...] | None = None
         self._network_sample: tuple[float, int, int] | None = None
         self._network_sample_lock = threading.Lock()
-        self._temperature_cache: tuple[float, list[str]] | None = None
+        self._temperature_cache: tuple[float, TemperatureScan] | None = None
         self._temperature_cache_lock = threading.Lock()
         self._trash_size_cache: tuple[float, int] | None = None
         self._trash_size_cache_lock = threading.Lock()
@@ -304,11 +305,13 @@ class SystemScanner:
                 lambda: self._read_cpu_percent(psutil_module, cancel_event)
             )
             frequency = self._component_value(lambda: psutil_module.cpu_freq())
+            temperature_scan = self._cached_temperature_scan(psutil_module)
             return self._resource_with_fallback(
                 lambda: self._cpu_resource(
                     cpu_percent,
                     frequency,
-                    self._cached_temperature_lines(psutil_module),
+                    list(temperature_scan.lines),
+                    temperature_scan.samples_for("cpu"),
                 ),
                 "cpu",
                 self._component_title("cpu"),
@@ -328,11 +331,13 @@ class SystemScanner:
                 lambda: psutil_module.disk_usage(str(Path.home()))
             )
             trash_bytes = self._safe_trash_size()
+            temperature_scan = self._cached_temperature_scan(psutil_module)
             return self._resource_with_fallback(
                 lambda: self._storage_resource(
                     disk,
                     trash_bytes,
-                    self._cached_temperature_lines(psutil_module),
+                    list(temperature_scan.lines),
+                    temperature_scan.samples_for("storage"),
                 ),
                 "storage",
                 self._component_title("storage"),
@@ -341,10 +346,12 @@ class SystemScanner:
         if key == "gpu":
             details = self.gpu_details()
             capability = self._gpu_capability_for_thread()
+            temperature_scan = self._cached_temperature_scan(psutil_module)
             return self._resource_with_fallback(
                 lambda: self._gpu_resource(
                     details,
-                    self._cached_temperature_lines(psutil_module),
+                    list(temperature_scan.lines),
+                    temperature_scan.samples_for("gpu"),
                     capability=capability,
                 ),
                 "gpu",
@@ -365,11 +372,13 @@ class SystemScanner:
 
         if key == "battery":
             battery, battery_error = self._read_battery(psutil_module)
+            temperature_scan = self._cached_temperature_scan(psutil_module)
             return self._resource_with_fallback(
                 lambda: self._battery_resource(
                     battery,
                     battery_error,
-                    self._cached_temperature_lines(psutil_module),
+                    list(temperature_scan.lines),
+                    temperature_scan.samples_for("battery"),
                 ),
                 "battery",
                 self._component_title("battery"),
@@ -748,6 +757,7 @@ class SystemScanner:
         cpu_percent: float | None,
         frequency: Any,
         temperature_lines: list[str],
+        temperature_samples: tuple[TemperatureSample, ...] = (),
     ) -> ResourceSummary:
         physical_cores, logical_cores = self._cpu_core_counts()
         details: tuple[str, ...] = (
@@ -768,6 +778,7 @@ class SystemScanner:
             details=details,
             actionable=True,
             capability=CapabilityState.SUPPORTED,
+            temperatures=temperature_samples,
         )
 
     @staticmethod
@@ -908,6 +919,7 @@ class SystemScanner:
         disk: Any,
         trash_bytes: int,
         temperature_lines: list[str],
+        temperature_samples: tuple[TemperatureSample, ...] = (),
     ) -> ResourceSummary:
         details: tuple[str, ...] = (
             f"Main disk: {Path.home()}",
@@ -930,12 +942,14 @@ class SystemScanner:
             details=details,
             actionable=True,
             capability=CapabilityState.SUPPORTED,
+            temperatures=temperature_samples,
         )
 
     def _gpu_resource(
         self,
         gpu_details: tuple[str, ...],
         temperature_lines: list[str],
+        temperature_samples: tuple[TemperatureSample, ...] = (),
         capability: CapabilityState = CapabilityState.UNKNOWN,
     ) -> ResourceSummary:
         details = gpu_details
@@ -955,6 +969,7 @@ class SystemScanner:
             details=details,
             failed=unavailable,
             capability=capability,
+            temperatures=temperature_samples,
         )
 
     @classmethod
@@ -1297,6 +1312,7 @@ class SystemScanner:
         battery: Any,
         battery_error: Exception | None,
         temperature_lines: list[str],
+        temperature_samples: tuple[TemperatureSample, ...] = (),
     ) -> ResourceSummary:
         if battery is not None:
             subtitle = "Charging" if battery.power_plugged else "Not charging"
@@ -1315,6 +1331,7 @@ class SystemScanner:
                 percent=battery.percent,
                 details=tuple(details),
                 capability=CapabilityState.SUPPORTED,
+                temperatures=temperature_samples,
             )
 
         if battery_error is not None:
@@ -1327,6 +1344,7 @@ class SystemScanner:
                 details=("Battery information is unavailable.",),
                 failed=True,
                 capability=CapabilityState.UNKNOWN,
+                temperatures=temperature_samples,
             )
 
         if temperature_lines:
@@ -1341,6 +1359,7 @@ class SystemScanner:
                 percent=None,
                 details=(detail,),
                 capability=CapabilityState.UNSUPPORTED,
+                temperatures=temperature_samples,
             )
         return ResourceSummary(
             key="battery",
@@ -1350,6 +1369,7 @@ class SystemScanner:
             percent=None,
             details=("No temperature sensors detected.",),
             capability=CapabilityState.UNSUPPORTED,
+            temperatures=temperature_samples,
         )
 
     @staticmethod
@@ -1403,44 +1423,77 @@ class SystemScanner:
         `TEMPERATURE_REFRESH_SECONDS` instead of hammering the sensor.
         """
 
+        return list(self._cached_temperature_scan(psutil_module).lines)
+
+    def _cached_temperature_scan(self, psutil_module: Any) -> TemperatureScan:
         return self._ttl_cached_value(
             lock=self._temperature_cache_lock,
             cache_name="_temperature_cache",
             ttl_seconds=self.TEMPERATURE_REFRESH_SECONDS,
-            loader=lambda: self._temperature_lines(psutil_module),
+            loader=lambda: self._temperature_scan(psutil_module),
         )
 
     @classmethod
-    def _temperature_lines(cls, psutil_module: Any) -> list[str]:
-        """Return confidently-attributed temperature lines, or an empty list.
+    def _temperature_scan(cls, psutil_module: Any) -> TemperatureScan:
+        """Return normalised temperature samples plus the concise card lines."""
 
-        Only CPU/GPU/NVMe drivers are considered and only sensible readings
-        (``0 < current < 250``) are kept, so missing, zero, negative, or
-        nonsense sensor values are never fabricated into the overview.
-        """
         sensors = cls._psutil_value(lambda: psutil_module.sensors_temperatures())
         if not isinstance(sensors, dict) or not sensors:
-            return []
+            now = datetime.now(timezone.utc).astimezone()
+            return TemperatureScan(now, time.monotonic(), (), ())
 
+        captured_at = datetime.now(timezone.utc).astimezone()
+        captured_monotonic = time.monotonic()
+        component_map: dict[str, tuple[str, tuple[str, ...]]] = {
+            "cpu": ("CPU", cls.CPU_TEMP_DRIVERS),
+            "gpu": ("GPU", cls.GPU_TEMP_DRIVERS),
+            "storage": ("NVMe", cls.NVME_TEMP_DRIVERS),
+        }
         lines: list[str] = []
-        for category, drivers in (
-            ("CPU", cls.CPU_TEMP_DRIVERS),
-            ("GPU", cls.GPU_TEMP_DRIVERS),
-            ("NVMe", cls.NVME_TEMP_DRIVERS),
-        ):
-            readings: list[float] = []
+        grouped: list[tuple[str, tuple[TemperatureSample, ...]]] = []
+
+        for component, (label, drivers) in component_map.items():
+            readings: list[TemperatureSample] = []
             for name, entries in sensors.items():
                 if not any(driver in name.casefold() for driver in drivers):
                     continue
                 if not isinstance(entries, (list, tuple)):
                     continue
-                for entry in entries:
+                for index, entry in enumerate(entries):
                     current = getattr(entry, "current", None)
-                    if cls._sensible_temperature(current):
-                        readings.append(float(current))
+                    if not cls._sensible_temperature(current):
+                        continue
+                    sensor_name = str(
+                        getattr(entry, "label", None)
+                        or getattr(entry, "sensor", None)
+                        or name
+                    )
+                    sensor_id = f"{name}:{index}:{sensor_name}"
+                    readings.append(
+                        TemperatureSample(
+                            component=component,
+                            sensor_id=sensor_id,
+                            sensor_name=sensor_name,
+                            value_celsius=float(current),
+                            sampled_at=captured_at,
+                            sampled_monotonic=captured_monotonic,
+                        )
+                    )
             if readings:
-                lines.append(f"{category}: {max(readings):.0f}°C")
-        return lines
+                grouped.append((component, tuple(readings)))
+                lines.append(
+                    f"{label}: {max(sample.value_celsius for sample in readings):.0f}°C"
+                )
+
+        return TemperatureScan(
+            captured_at, captured_monotonic, tuple(lines), tuple(grouped)
+        )
+
+    @classmethod
+    def _temperature_lines(cls, psutil_module: Any) -> list[str]:
+        """Return the legacy concise temperature lines for compatibility tests."""
+
+        return list(cls._temperature_scan(psutil_module).lines)
 
     @staticmethod
     def _sensible_temperature(value: Any) -> TypeGuard[int | float]:

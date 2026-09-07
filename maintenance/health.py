@@ -97,6 +97,8 @@ def _temperature(
     resource = _resource(snapshot, key)
     if resource is None:
         return None
+    if resource.temperatures:
+        return max(sample.value_celsius for sample in resource.temperatures)
     line = detail_line_suffix(resource.details, prefix)
     if line is None:
         return None

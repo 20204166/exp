@@ -21,6 +21,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
+from maintenance.components.temperature import (
+    temperature_sample_from_dict,
+    temperature_sample_to_dict,
+)
 from maintenance.models import (
     CapabilityState,
     DashboardSnapshot,
@@ -96,6 +100,9 @@ def resource_summary_to_dict(summary: ResourceSummary) -> dict[str, Any]:
         "actionable": summary.actionable,
         "failed": summary.failed,
         "capability": summary.capability.value,
+        "temperatures": [
+            temperature_sample_to_dict(sample) for sample in summary.temperatures
+        ],
     }
 
 
@@ -115,6 +122,9 @@ def resource_summary_from_dict(data: Any) -> ResourceSummary:
         isinstance(item, str) for item in details
     ):
         raise ClusterDataError("resource summary details must be a string list")
+    temperatures = data.get("temperatures", [])
+    if not isinstance(temperatures, list):
+        raise ClusterDataError("resource summary temperatures must be a list")
     percent = data.get("percent")
     if percent is not None and not isinstance(percent, (int, float)):
         raise ClusterDataError("resource summary percent must be a number")
@@ -134,6 +144,7 @@ def resource_summary_from_dict(data: Any) -> ResourceSummary:
         actionable=bool(data["actionable"]),
         failed=bool(data["failed"]),
         capability=state,
+        temperatures=tuple(temperature_sample_from_dict(item) for item in temperatures),
     )
 
 

@@ -16,6 +16,10 @@ from maintenance.components.scan_support import (
     SCAN_CANCELLED_NOTICE,
     call_legacy_compatible,
 )
+from maintenance.components.temperature import (
+    TemperatureEvent,
+    TemperatureTelemetry,
+)
 from maintenance.models import (
     FileActionResult,
     FileCandidate,
@@ -28,6 +32,7 @@ from maintenance.scanner import ProgressCallback, SystemScanner
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
+from maintenance.ui.telemetry_graph import TelemetryMiniGraph
 
 
 def _invoke_delivered(callback: Callable[[], None]) -> None:
@@ -225,6 +230,35 @@ def detail_sections(
     if buckets[-1]:
         sections.append(("Details", tuple(buckets[-1])))
     return tuple(sections)
+
+
+def _thermal_components_for(key: str) -> tuple[str, ...]:
+    if key in ("cpu", "gpu", "storage"):
+        return (key,)
+    if key == "battery":
+        return ("battery", "cpu", "gpu", "storage")
+    return ()
+
+
+def _temperature_rows(samples: tuple[Any, ...]) -> tuple[tuple[str, str], ...]:
+    rows: list[tuple[str, str]] = []
+    for sample in samples:
+        name = getattr(sample, "sensor_name", "Sensor")
+        value = getattr(sample, "value_celsius", None)
+        if isinstance(value, (int, float)):
+            rows.append((str(name), f"{value:.0f}°C"))
+    return tuple(rows)
+
+
+def _recent_events(
+    telemetry: TemperatureTelemetry,
+    components: tuple[str, ...],
+) -> tuple[TemperatureEvent, ...]:
+    events: list[TemperatureEvent] = []
+    for component in components:
+        events.extend(telemetry.recent_events(component))
+    events.sort(key=lambda event: event.started_monotonic)
+    return tuple(events[-6:])
 
 
 def show_action_result(
@@ -582,8 +616,22 @@ class InfoDialog(tk.Toplevel):
         master: tk.Misc,
         summary: ResourceSummary,
         colors: dict[str, str],
+        telemetry: TemperatureTelemetry | None = None,
+        node_id: NodeId | None = None,
+        render_coordinator: Any | None = None,
+        on_close: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master)
+        self.summary = summary
+        self.colors = colors
+        self.telemetry = telemetry
+        self.node_id = node_id
+        self.render_coordinator = render_coordinator
+        self._on_close = on_close or self.destroy
+        self._graph_keys = _thermal_components_for(summary.key)
+        self._thermal_graphs: dict[str, TelemetryMiniGraph] = {}
+        self._event_rows: list[Any] = []
+
         container = ui_layout.dialog_shell(
             self,
             master=master,
@@ -594,6 +642,7 @@ class InfoDialog(tk.Toplevel):
             padx=28,
             pady=24,
             frame_cls=tk.Frame,
+            on_close=self._close,
         )
 
         footer = tk.Frame(container, bg=colors["background"])
@@ -686,6 +735,121 @@ class InfoDialog(tk.Toplevel):
                     wraplength=self.DETAIL_WRAPLENGTH,
                     justify="left",
                 )
+
+        if self.telemetry is not None and self._graph_keys:
+            self._build_thermal_sections(inner)
+            self.refresh_thermal_view(summary)
+
+    def _close(self) -> None:
+        self._on_close()
+
+    def _graph_title(self, component: str) -> str:
+        if component == "battery":
+            return "Battery Temperature"
+        return f"{component.upper()} Temperature"
+
+    def _build_thermal_sections(self, parent: Any) -> None:
+        graph_description = (
+            "Live temperature history is drawn from the shared node telemetry."
+        )
+        self._graphs_card, graphs_body = ui_layout.section_card(
+            parent,
+            "Thermal history",
+            frame_cls=tk.Frame,
+            label_cls=tk.Label,
+            colors=self.colors,
+            fonts=ui_styles.FONTS,
+            description=graph_description,
+        )
+        for component in self._graph_keys:
+            graph = TelemetryMiniGraph(
+                graphs_body,
+                colors=self.colors,
+                title=self._graph_title(component),
+            )
+            graph.pack(fill=tk.X, pady=(0, 10))
+            self._thermal_graphs[component] = graph
+
+        self._events_card, self._events_body = ui_layout.section_card(
+            parent,
+            "Recent thermal events",
+            frame_cls=tk.Frame,
+            label_cls=tk.Label,
+            colors=self.colors,
+            fonts=ui_styles.FONTS,
+            description="Bounded snapshots of genuine thermal spikes.",
+        )
+
+    def refresh_thermal_view(self, summary: ResourceSummary | None = None) -> None:
+        if self.telemetry is None or not self._graph_keys:
+            return
+        if summary is not None:
+            self.summary = summary
+        for component, graph in self._thermal_graphs.items():
+            graph.render(
+                self.telemetry.series_snapshot(
+                    component,
+                    title=self._graph_title(component),
+                )
+            )
+        self._refresh_events()
+
+    def _refresh_events(self) -> None:
+        for row in self._event_rows:
+            row.destroy()
+        self._event_rows.clear()
+        events = (
+            _recent_events(self.telemetry, self._graph_keys)
+            if self.telemetry is not None
+            else ()
+        )
+        if not events:
+            row, _label, _value = ui_layout.metric_row(
+                self._events_body,
+                "Status",
+                "No recent thermal events",
+                frame_cls=tk.Frame,
+                label_cls=tk.Label,
+                bg=self.colors["card"],
+                label_fg=self.colors["secondary"],
+                value_fg=self.colors["text"],
+                font=ui_styles.FONTS["detail_row"],
+                justify="left",
+            )
+            self._event_rows.append(row)
+            return
+
+        for event in events:
+            row, _label, _value = ui_layout.metric_row(
+                self._events_body,
+                event.component.upper(),
+                f"{event.started_at.strftime('%H:%M')} · {event.summary()}",
+                frame_cls=tk.Frame,
+                label_cls=tk.Label,
+                bg=self.colors["card"],
+                label_fg=self.colors["secondary"],
+                value_fg=self.colors["text"],
+                font=ui_styles.FONTS["detail_row"],
+                justify="left",
+            )
+            button = ttk.Button(
+                row,
+                text="View event",
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+
+            def show_event(event: TemperatureEvent = event) -> None:
+                self._show_event(event)
+
+            button.configure(command=show_event)
+            button.pack(side=tk.RIGHT, padx=(12, 0))
+            self._event_rows.append(row)
+
+    def _show_event(self, event: TemperatureEvent) -> None:
+        graph = self._thermal_graphs.get(event.component)
+        if graph is None:
+            return
+        graph.render(event.snapshot(title=self._graph_title(event.component)))
 
 
 class ProcessDialog(tk.Toplevel):
@@ -1117,6 +1281,9 @@ class StorageDialog(tk.Toplevel):
         node_id: NodeId | None = None,
         node_title: str | None = None,
         read_only: bool = False,
+        telemetry: TemperatureTelemetry | None = None,
+        thermal_summary: ResourceSummary | None = None,
+        on_close: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master)
         self.analyzer = analyzer
@@ -1127,6 +1294,11 @@ class StorageDialog(tk.Toplevel):
         self.node_id = node_id
         self._operation_key = operation_key(node_id, "storage")
         self._read_only = read_only
+        self.telemetry = telemetry
+        self.thermal_summary = thermal_summary
+        self._on_close = on_close or self._default_close
+        self._thermal_graph: TelemetryMiniGraph | None = None
+        self._thermal_event_rows: list[Any] = []
         self.candidates: dict[str, FileCandidate] = {}
         self._scan_active = False
         self._waiting_for_shared = False
@@ -1170,6 +1342,9 @@ class StorageDialog(tk.Toplevel):
             container,
             ui_layout.fit_wrap_to_width(description_label, 860),
         )
+
+        if self.telemetry is not None:
+            self._build_thermal_section(container)
 
         self.tree_frame = tk.Frame(container, bg=colors["card"])
         self.tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -1256,6 +1431,99 @@ class StorageDialog(tk.Toplevel):
         if cached is not None:
             self._show_candidates(cached)
         self.scan()
+
+        if self.telemetry is not None:
+            self.refresh_thermal_view()
+
+    def _build_thermal_section(self, parent: Any) -> None:
+        _, body = ui_layout.section_card(
+            parent,
+            "Thermal history",
+            frame_cls=tk.Frame,
+            label_cls=tk.Label,
+            colors=self.colors,
+            fonts=ui_styles.FONTS,
+            description="Storage temperature history from the shared node telemetry.",
+        )
+        self._thermal_graph = TelemetryMiniGraph(
+            body,
+            colors=self.colors,
+            title="Storage Temperature",
+        )
+        self._thermal_graph.pack(fill=tk.X, pady=(0, 10))
+        _, self._thermal_events_body = ui_layout.section_card(
+            parent,
+            "Recent thermal events",
+            frame_cls=tk.Frame,
+            label_cls=tk.Label,
+            colors=self.colors,
+            fonts=ui_styles.FONTS,
+            description="Recent bounded storage temperature spikes.",
+        )
+
+    def _default_close(self) -> None:
+        close_coordinated_dialog(
+            self,
+            key=self._operation_key,
+            unsubscribe_callback=self._on_shared_scan_result,
+            active=self._scan_active,
+        )
+
+    def refresh_thermal_view(self, _summary: ResourceSummary | None = None) -> None:
+        if self.telemetry is None or self._thermal_graph is None:
+            return
+        self._thermal_graph.render(
+            self.telemetry.series_snapshot("storage", title="Storage Temperature")
+        )
+        for row in self._thermal_event_rows:
+            row.destroy()
+        self._thermal_event_rows.clear()
+        events = self.telemetry.recent_events("storage")
+        if not events:
+            row, _label, _value = ui_layout.metric_row(
+                self._thermal_events_body,
+                "Status",
+                "No recent thermal events",
+                frame_cls=tk.Frame,
+                label_cls=tk.Label,
+                bg=self.colors["card"],
+                label_fg=self.colors["secondary"],
+                value_fg=self.colors["text"],
+                font=ui_styles.FONTS["detail_row"],
+                justify="left",
+            )
+            self._thermal_event_rows.append(row)
+            return
+        for event in events[-4:]:
+            row, _label, _value = ui_layout.metric_row(
+                self._thermal_events_body,
+                event.component.upper(),
+                f"{event.started_at.strftime('%H:%M')} · {event.summary()}",
+                frame_cls=tk.Frame,
+                label_cls=tk.Label,
+                bg=self.colors["card"],
+                label_fg=self.colors["secondary"],
+                value_fg=self.colors["text"],
+                font=ui_styles.FONTS["detail_row"],
+                justify="left",
+            )
+            button = ttk.Button(
+                row,
+                text="View event",
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+
+            def show_event(event: TemperatureEvent = event) -> None:
+                self._show_event(event)
+
+            button.configure(command=show_event)
+            button.pack(side=tk.RIGHT, padx=(12, 0))
+            self._thermal_event_rows.append(row)
+
+    def _show_event(self, event: TemperatureEvent) -> None:
+        if self._thermal_graph is None:
+            return
+        self._thermal_graph.render(event.snapshot(title="Storage Temperature"))
 
     def _resize_columns(self, _event: tk.Event | None = None) -> None:
         available_width = self.tree.winfo_width()
@@ -1356,12 +1624,7 @@ class StorageDialog(tk.Toplevel):
         )
 
     def _close(self) -> None:
-        close_coordinated_dialog(
-            self,
-            key=self._operation_key,
-            unsubscribe_callback=self._on_shared_scan_result,
-            active=self._scan_active,
-        )
+        self._on_close()
 
     def _show_scan_progress(self, message: str) -> None:
         if self._scan_active:

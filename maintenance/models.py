@@ -1,7 +1,13 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from maintenance.components.temperature import TemperatureSample
 
 
 class CapabilityState(str, Enum):
@@ -30,6 +36,7 @@ class ResourceSummary:
     actionable: bool = False
     failed: bool = False
     capability: CapabilityState = CapabilityState.UNKNOWN
+    temperatures: tuple[TemperatureSample, ...] = ()
 
 
 def unavailable_summary(key: str, title: str) -> ResourceSummary:

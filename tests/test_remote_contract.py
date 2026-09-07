@@ -36,6 +36,7 @@ from maintenance.remote import (
     sign_response,
     verify_request,
 )
+from tests.support.temperature import make_temperature_sample
 
 SECRET = "a" * 64
 
@@ -64,6 +65,7 @@ class FakeProvider:
                     False,
                     False,
                     CapabilityState.SUPPORTED,
+                    (make_temperature_sample("cpu", 45.0),),
                 ),
             ),
         )
@@ -79,6 +81,7 @@ class FakeProvider:
             False,
             False,
             CapabilityState.SUPPORTED,
+            (make_temperature_sample(key, 45.0),),
         )
 
     def process_candidates(self, cancel_event=None) -> list[ProcessCandidate]:
@@ -241,6 +244,7 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
         client = _client(_service())
         resource = client.component_summary("cpu")
         self.assertEqual(resource.title, "CPU")
+        self.assertEqual(resource.temperatures[0].value_celsius, 45.0)
 
     def test_process_candidates_round_trip(self) -> None:
         client = _client(_service())

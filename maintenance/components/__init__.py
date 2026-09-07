@@ -2,7 +2,7 @@
 
 The component subsystem lives in responsibility modules beside this file:
 `scan_support` (shared scan primitives), `process_safety`, `downloads`,
-`gpu`, `background`, `catalog`, and `coordinator`. This package ``__init__``
+`gpu`, `temperature`, `background`, `catalog`, and `coordinator`. This package ``__init__``
 re-exports the historical `maintenance.components` surface unchanged, so
 existing imports and test monkeypatch seams keep resolving to the identical
 objects. Generic external-command execution deliberately stays outside this
@@ -52,6 +52,15 @@ from .scan_support import (
     require_psutil,
     windows_windll,
 )
+from .temperature import (
+    TemperatureEvent,
+    TemperaturePolicy,
+    TemperatureSample,
+    TemperatureScan,
+    TemperatureSeriesSnapshot,
+    TemperatureState,
+    TemperatureTelemetry,
+)
 
 
 def __getattr__(name: str) -> Any:
@@ -88,6 +97,13 @@ __all__ = [
     "ResourceGovernor",
     "ScanCancelled",
     "ScanCoordinator",
+    "TemperatureEvent",
+    "TemperaturePolicy",
+    "TemperatureSample",
+    "TemperatureScan",
+    "TemperatureSeriesSnapshot",
+    "TemperatureState",
+    "TemperatureTelemetry",
     "check_cancelled",
     "gpu_unavailable_message",
     "normalize_username",

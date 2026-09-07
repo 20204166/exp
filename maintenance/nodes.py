@@ -26,6 +26,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol
 
+from maintenance.components.temperature import TemperatureTelemetry
 from maintenance.models import DashboardSnapshot
 
 LOCAL_NODE_ID = "local"
@@ -366,6 +367,7 @@ class NodeContext:
     scheduler: Any
     coordinator: Any
     snapshot: Any | None = None
+    telemetry: TemperatureTelemetry = field(default_factory=TemperatureTelemetry)
     capabilities: dict[str, Any] = field(default_factory=dict)
     capability_counts: dict[str, int] = field(default_factory=dict)
     failed_card_counts: dict[str, int] = field(default_factory=dict)

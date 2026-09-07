@@ -98,6 +98,7 @@ def _make_window(
     window._background_queue = Queue()
     window._feature_catalog = Mock()
     window._feature_catalog.all = list
+    window._thermal_dialogs = {}
     window._component_poll_id = None
     window._component_queue = Queue()
     window._coordinator = AppCoordinator(deliver=lambda callback: None)
