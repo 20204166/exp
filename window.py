@@ -163,6 +163,7 @@ class AppWindow:
             on_activity=self._start_background_poll,
         )
         self._resource_governor = ResourceGovernor()
+        self._resource_governor.request_pressure_sample()
         self._component_scheduler = ComponentRefreshScheduler(
             self._preferences.refresh_intervals.as_dict()
         )
@@ -788,6 +789,7 @@ class AppWindow:
                 ui_render.RenderIntent(
                     target="nodes-status",
                     payload=message,
+                    payload_set=True,
                     priority=1,
                 ),
                 lambda intent: page.show_status(cast(str, intent.payload)),
@@ -800,6 +802,7 @@ class AppWindow:
                 ui_render.RenderIntent(
                     target="nodes-status",
                     payload=message,
+                    payload_set=True,
                     priority=1,
                 ),
                 lambda intent: page.show_error(cast(str, intent.payload)),
@@ -1276,6 +1279,7 @@ class AppWindow:
             return
         if node_id == self.__dict__.get("_selected_node_id"):
             return
+        old_context = self._selected_context()
         try:
             registry.select(node_id)
         except (KeyError, ValueError):
@@ -1287,8 +1291,16 @@ class AppWindow:
         coordinator = self._render_coordinator()
         if coordinator is not None:
             generation = self._scan_coordinator_state().generation
-            coordinator.invalidate(DASHBOARD_PAGE, generation)
-            coordinator.invalidate("scan-status", generation)
+            coordinator.invalidate(DASHBOARD_PAGE, generation, node_id=node_id)
+            coordinator.invalidate("scan-status", generation, node_id=node_id)
+            coordinator.invalidate("discovery-pages", 0, node_id=node_id)
+            for feature in self._feature_catalog.all():
+                coordinator.invalidate(
+                    f"component:{feature.key}",
+                    0,
+                    node_id=node_id,
+                )
+        self._cancel_node_operations(old_context)
         self._sync_selected_context_mirrors(context)
         self._render_selected_node(context)
         self._schedule_timer(0, self.handle_analyze)
@@ -1305,6 +1317,35 @@ class AppWindow:
         self.__dict__["_timed_out_generation"] = None
         self._cancel_timer(self.__dict__.get("_lease_grace_id"))
         self.__dict__["_lease_grace_id"] = None
+
+    def _cancel_node_operations(self, context: NodeContext | None) -> None:
+        """Cancel every known component operation owned by one node context."""
+
+        if context is None:
+            return
+        coordinator = self.__dict__.get("_coordinator")
+        scheduler = getattr(context, "scheduler", None)
+        node_id = getattr(context.descriptor, "id", None)
+        for feature in self._feature_catalog.all():
+            if coordinator is not None and node_id is not None:
+                coordinator.cancel(
+                    node_operation_key(node_id, f"component:{feature.key}")
+                )
+            cancel = getattr(scheduler, "cancel", None)
+            if cancel is not None:
+                try:
+                    cancel(feature.key)
+                except Exception as error:  # noqa: BLE001 - cancellation is best-effort.
+                    LOGGER.debug(
+                        "Ignoring cancellation failure for %s: %s", feature.key, error
+                    )
+
+    def _cancel_all_node_operations(self) -> None:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        for context in registry.contexts():
+            self._cancel_node_operations(context)
 
     def _sync_selected_context_mirrors(self, context: NodeContext) -> None:
         """Point the window's historical attributes at the selected context's state."""
@@ -1425,6 +1466,7 @@ class AppWindow:
                     components=frozenset({"nodes", "cluster"}),
                     layout_changed=True,
                     payload=(trusted_descriptor, trusted_specs),
+                    payload_set=True,
                     priority=2,
                 ),
                 lambda _intent: ui_discovery_refresh.refresh_discovery_views(
@@ -1469,6 +1511,7 @@ class AppWindow:
                 components=frozenset({"nodes", "cluster"}),
                 layout_changed=True,
                 payload=stable_id,
+                payload_set=True,
                 priority=2,
             ),
             lambda _intent: ui_discovery_refresh.refresh_discovery_views(
@@ -1560,6 +1603,7 @@ class AppWindow:
                 components=frozenset({"discovery"}),
                 layout_changed=True,
                 payload=self._node_registry.discovered_candidates(),
+                payload_set=True,
                 priority=1,
             ),
             lambda _intent: ui_discovery_refresh.render_discovery_status(
@@ -1858,8 +1902,12 @@ class AppWindow:
             return
         coordinator = self._render_coordinator()
         if coordinator is not None:
-            coordinator.invalidate("scan-status", generation)
-            coordinator.invalidate("dashboard-snapshot", generation)
+            coordinator.invalidate("scan-status", generation, node_id=source_node_id)
+            coordinator.invalidate(
+                "dashboard-snapshot",
+                generation,
+                node_id=source_node_id,
+            )
 
         cancel_event = threading.Event()
         self._analysis_cancel_event = cancel_event
@@ -1877,6 +1925,7 @@ class AppWindow:
                     node_id=source_node_id,
                     components=frozenset({"progress"}),
                     payload=message,
+                    payload_set=True,
                     priority=1,
                 ),
                 lambda intent: self._show_progress(cast(str, intent.payload)),
@@ -1900,6 +1949,7 @@ class AppWindow:
                     components=frozenset({"snapshot"}),
                     layout_changed=True,
                     payload=snapshot,
+                    payload_set=True,
                     priority=3,
                 ),
                 lambda intent: self._show_snapshot_for_generation(
@@ -1917,6 +1967,7 @@ class AppWindow:
                     node_id=source_node_id,
                     components=frozenset({"error"}),
                     payload=message,
+                    payload_set=True,
                     priority=2,
                 ),
                 lambda intent: self._show_error_for_generation(
@@ -2384,7 +2435,13 @@ class AppWindow:
             _cancel_event: threading.Event,
             _progress: Callable[[str], None],
         ) -> ResourceSummary:
-            return source_provider.component_summary(key)
+            return call_legacy_compatible(
+                lambda: source_provider.component_summary(
+                    key,
+                    cancel_event=_cancel_event,
+                ),
+                lambda: source_provider.component_summary(key),
+            )
 
         def queue_component_snapshot(resource: ResourceSummary) -> None:
             source_scheduler.finish(key)
@@ -2397,6 +2454,7 @@ class AppWindow:
                     node_id=source_node_id,
                     components=frozenset({key}),
                     payload=resource,
+                    payload_set=True,
                     priority=2,
                 ),
                 lambda intent: self._queue_component_result(
@@ -2419,6 +2477,7 @@ class AppWindow:
                     node_id=source_node_id,
                     components=frozenset({key}),
                     payload=RuntimeError(message),
+                    payload_set=True,
                     priority=2,
                 ),
                 lambda intent: self._queue_component_result(
@@ -2836,13 +2895,17 @@ class AppWindow:
         self._scan_coordinator_state().cancel()
         self.__dict__["_timed_out_generation"] = None
         self.__dict__["_lease_grace_id"] = None
+        coordinator = self.__dict__.get("_coordinator")
+        if coordinator is not None:
+            coordinator.cancel_all()
+        self._cancel_all_node_operations()
         self._cancel_pending_timers()
         self._component_poll_id = None
         self._background_poll_id = None
         self._scan_timeout_id = None
-        coordinator = self._render_coordinator()
-        if coordinator is not None:
-            coordinator.shutdown()
+        render_coordinator = self._render_coordinator()
+        if render_coordinator is not None:
+            render_coordinator.shutdown()
 
     def _stop_all_node_workers(self) -> None:
         """Stop every registered node's persistent scanner workers.

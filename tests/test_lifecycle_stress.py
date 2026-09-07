@@ -205,6 +205,28 @@ class AppCoordinatorStressTests(unittest.TestCase):
         self.assertTrue(state.subscribers in (None, []))
         self.assertEqual(len(coordinator._states), 1)
 
+    def test_cancel_all_wakes_each_tracked_operation_once(self) -> None:
+        coordinator, runner = self._make()
+        notices: list[tuple[str, str]] = []
+
+        coordinator.run(
+            "storage",
+            lambda _event, _progress: ["x"],
+            on_error=lambda key, message: notices.append((key, message)),
+        )
+        coordinator.run(
+            "process",
+            lambda _event, _progress: ["y"],
+            on_error=lambda key, message: notices.append((key, message)),
+        )
+
+        coordinator.cancel_all("stopped")
+
+        self.assertEqual(notices, [("storage", "stopped"), ("process", "stopped")])
+        runner.run_next()
+        runner.run_next()
+        self.assertFalse(coordinator.has_pending_work)
+
 
 if __name__ == "__main__":
     unittest.main()

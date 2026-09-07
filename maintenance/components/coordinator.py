@@ -79,6 +79,11 @@ class ComponentRefreshScheduler:
     def finish(self, key: str) -> None:
         self._core.finish(key)
 
+    def cancel(self, key: str) -> None:
+        if key not in self.intervals:
+            raise ValueError(f"Unknown component: {key}")
+        self._core.cancel(key)
+
     def mark_all_refreshed(self, now: float) -> None:
         self._core.mark_all_refreshed(now)
 
@@ -480,6 +485,12 @@ class AppCoordinator:
         ):
             handler = state.on_error
             self._deliver(lambda: self._safe_invoke(handler, key, cancellation_message))
+
+    def cancel_all(self, cancellation_message: str | None = None) -> None:
+        """Cancel every tracked run, typically during shutdown."""
+
+        for key in tuple(self._states):
+            self.cancel(key, cancellation_message)
 
     def in_flight(self, key: str) -> bool:
         state = self._states.get(key)

@@ -87,7 +87,8 @@ name requires updating `__all__` (enforced by `tests/test_package_structure.py`)
 ### `background.py` — background Tk task delivery
 - `class BackgroundTaskRunner` — runs work off the Tk thread and delivers
   success/error/progress callbacks via `widget.after`, tolerating widget
-  teardown.
+  teardown. The Tk adapter is exposed lazily from `maintenance.components` so
+  headless imports stay Tk-free unless a UI caller asks for it.
 
 ### `catalog.py` — resource feature metadata
 - `class ResourceFeature` — immutable metadata for one dashboard resource

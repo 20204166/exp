@@ -195,6 +195,20 @@ class PackageImportChainTests(unittest.TestCase):
                 )
                 self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    def test_component_package_import_does_not_require_tkinter(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.modules['tkinter'] = None; import maintenance.components; print('ok')",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=REPO,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_ui_navigation_settings_and_preferences_imports_create_no_tk_root(
         self,
     ) -> None:

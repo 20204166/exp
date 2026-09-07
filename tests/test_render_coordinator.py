@@ -15,6 +15,7 @@ class UICoordinatorTests(unittest.TestCase):
             RenderIntent(
                 target="dashboard",
                 payload="first",
+                payload_set=True,
                 components=frozenset({"cpu"}),
             ),
             received.append,
@@ -23,6 +24,7 @@ class UICoordinatorTests(unittest.TestCase):
             RenderIntent(
                 target="dashboard",
                 payload="second",
+                payload_set=True,
                 components=frozenset({"network"}),
                 layout_changed=True,
                 priority=2,
@@ -49,7 +51,12 @@ class UICoordinatorTests(unittest.TestCase):
         received: list[RenderIntent] = []
 
         accepted = coordinator.request(
-            RenderIntent(target="dashboard", generation=1, payload="old"),
+            RenderIntent(
+                target="dashboard",
+                generation=1,
+                payload="old",
+                payload_set=True,
+            ),
             received.append,
         )
 
@@ -64,7 +71,7 @@ class UICoordinatorTests(unittest.TestCase):
         received: list[str] = []
 
         coordinator.request(
-            RenderIntent(target="dashboard", payload="cached"),
+            RenderIntent(target="dashboard", payload="cached", payload_set=True),
             lambda intent: received.append(str(intent.payload)),
         )
 
@@ -83,7 +90,11 @@ class UICoordinatorTests(unittest.TestCase):
         coordinator.begin_batch()
         for index in range(100):
             coordinator.request(
-                RenderIntent(target="dashboard", payload=f"value-{index}"),
+                RenderIntent(
+                    target="dashboard",
+                    payload=f"value-{index}",
+                    payload_set=True,
+                ),
                 lambda intent: received.append(str(intent.payload)),
             )
 
@@ -100,7 +111,7 @@ class UICoordinatorTests(unittest.TestCase):
 
         coordinator.begin_batch()
         coordinator.request(
-            RenderIntent(target="dashboard", payload="queued"),
+            RenderIntent(target="dashboard", payload="queued", payload_set=True),
             lambda intent: received.append(str(intent.payload)),
         )
 
@@ -110,13 +121,60 @@ class UICoordinatorTests(unittest.TestCase):
         self.assertEqual(coordinator.pending_count, 0)
         self.assertFalse(
             coordinator.request(
-                RenderIntent(target="dashboard", payload="late"),
+                RenderIntent(target="dashboard", payload="late", payload_set=True),
                 lambda intent: received.append(str(intent.payload)),
             )
         )
         coordinator.end_batch()
 
         self.assertEqual(received, [])
+
+    def test_explicit_none_payload_clears_previous_payload(self) -> None:
+        coordinator = UICoordinator()
+        received: list[RenderIntent] = []
+
+        coordinator.begin_batch()
+        coordinator.request(
+            RenderIntent(target="dashboard", payload="value", payload_set=True),
+            received.append,
+        )
+        coordinator.request(
+            RenderIntent(target="dashboard", payload=None, payload_set=True),
+            received.append,
+        )
+        coordinator.end_batch()
+
+        self.assertEqual(len(received), 1)
+        self.assertIsNone(received[0].payload)
+        self.assertTrue(received[0].payload_set)
+
+    def test_node_mismatch_rejects_stale_pending_render(self) -> None:
+        coordinator = UICoordinator()
+        received: list[RenderIntent] = []
+
+        coordinator.invalidate("component:cpu", generation=0, node_id="node-a")
+        coordinator.request(
+            RenderIntent(
+                target="component:cpu",
+                node_id="node-a",
+                payload="old",
+                payload_set=True,
+            ),
+            received.append,
+        )
+        coordinator.invalidate("component:cpu", generation=0, node_id="node-b")
+        accepted = coordinator.request(
+            RenderIntent(
+                target="component:cpu",
+                node_id="node-a",
+                payload="stale",
+                payload_set=True,
+            ),
+            received.append,
+        )
+
+        self.assertFalse(accepted)
+        self.assertEqual(coordinator.pending_count, 0)
 
 
 if __name__ == "__main__":

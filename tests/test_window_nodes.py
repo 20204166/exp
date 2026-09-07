@@ -361,7 +361,11 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window._switch_selected_node(NodeId("dev"))
         task(threading.Event(), lambda _message: None)
 
-        local.provider.component_summary.assert_called_once_with("cpu")
+        local.provider.component_summary.assert_called_once()
+        args, kwargs = local.provider.component_summary.call_args
+        self.assertEqual(args, ("cpu",))
+        self.assertIn("cancel_event", kwargs)
+        self.assertIsInstance(kwargs["cancel_event"], threading.Event)
         window._node_registry.context(
             NodeId("dev")
         ).provider.component_summary.assert_not_called()

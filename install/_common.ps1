@@ -14,6 +14,34 @@ function Get-PackageDir {
     return (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 }
 
+function Test-IsWindows {
+    if (Get-Variable IsWindows -ErrorAction SilentlyContinue) {
+        return [bool]$IsWindows
+    }
+    return $env:OS -eq "Windows_NT"
+}
+
+function Get-RepoVenvPython {
+    $repo = Get-PackageDir
+    if (Test-IsWindows) {
+        foreach ($path in @(
+            (Join-Path $repo ".venv\Scripts\python.exe"),
+            (Join-Path $repo ".venv\Scripts\python"),
+            (Join-Path $repo ".venv\bin\python.exe")
+        )) {
+            if (Test-Path $path) { return @($path) }
+        }
+    } else {
+        foreach ($path in @(
+            (Join-Path $repo ".venv/bin/python"),
+            (Join-Path $repo ".venv/bin/python3")
+        )) {
+            if (Test-Path $path) { return @($path) }
+        }
+    }
+    return $null
+}
+
 # Ordered candidate interpreters: the Windows `py` launcher first (modern
 # reliable way to pick a specific Python on Windows), then named python3.x
 # commands, then common python.org install locations, then bare python.
@@ -99,8 +127,8 @@ function Require-Python {
 function Resolve-Python {
     param([string]$Python)
     if ($Python) { return @($Python) }
-    $repoPy = Join-Path (Get-PackageDir) ".venv\Scripts\python.exe"
-    if (Test-Path $repoPy) { return @($repoPy) }
+    $repoPy = Get-RepoVenvPython
+    if ($repoPy) { return $repoPy }
     $found = Get-PythonGe310
     if ($found) { return $found }
     return @("python")

@@ -16,6 +16,7 @@ from maintenance.components import (
     DownloadsPathResolver,
     GpuDetector,
     JobProfile,
+    PressureSnapshot,
     ProcessSafetyPolicy,
     ResourceFeature,
     ResourceFeatureCatalog,
@@ -792,6 +793,19 @@ class ComponentRefreshSchedulerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scheduler.set_interval("cpu", 0, 0.0)
 
+    def test_cancel_clears_in_flight_and_retry_state(self) -> None:
+        scheduler = ComponentRefreshScheduler({"cpu": 1000})
+        self.assertTrue(scheduler.begin("cpu", 0.0))
+        scheduler.request_refresh("cpu")
+        scheduler.defer("cpu", 10.0)
+
+        scheduler.cancel("cpu")
+
+        self.assertFalse(scheduler.in_flight("cpu"))
+        self.assertNotIn("cpu", scheduler._in_flight)
+        self.assertNotIn("cpu", scheduler._refresh_requested)
+        self.assertNotIn("cpu", scheduler._deferred_until)
+
     def test_pause_prevents_due_and_new_claims_but_not_running(self) -> None:
         scheduler = ComponentRefreshScheduler({"cpu": 1000})
         self.assertTrue(scheduler.begin("cpu", 0.0))
@@ -898,6 +912,89 @@ class ClockCoordinatorTests(unittest.TestCase):
 
 
 class ResourceGovernorTests(unittest.TestCase):
+    def test_pressure_sampling_runs_off_the_caller_thread(self) -> None:
+        sampler_started = threading.Event()
+        sampler_release = threading.Event()
+        ran_on_main_thread: list[bool] = []
+
+        def sampler() -> PressureSnapshot:
+            ran_on_main_thread.append(
+                threading.current_thread() is threading.main_thread()
+            )
+            sampler_started.set()
+            sampler_release.wait(1)
+            return PressureSnapshot(
+                sampled_at=1.0,
+                memory_percent=40.0,
+                available=True,
+            )
+
+        governor = ResourceGovernor(
+            clock=lambda: 0.0,
+            pressure_sampler=sampler,
+            pressure_sample_seconds=0.0,
+        )
+
+        decision = governor.admit(JobProfile(key="component:cpu", kind="periodic"))
+
+        self.assertTrue(decision.admitted)
+        self.assertTrue(sampler_started.wait(1))
+        self.assertEqual(ran_on_main_thread, [False])
+        sampler_release.set()
+
+    def test_refresh_pressure_recovers_after_partial_missing_metrics(self) -> None:
+        samples = iter(
+            [
+                PressureSnapshot(
+                    sampled_at=1.0,
+                    memory_percent=96.0,
+                    swap_percent=15.0,
+                    rss_bytes=10,
+                    cpu_percent=90.0,
+                    available=True,
+                ),
+                PressureSnapshot(
+                    sampled_at=2.0,
+                    memory_percent=None,
+                    swap_percent=None,
+                    rss_bytes=None,
+                    cpu_percent=None,
+                    available=False,
+                    sample_error="unavailable",
+                ),
+                PressureSnapshot(
+                    sampled_at=3.0,
+                    memory_percent=40.0,
+                    swap_percent=0.0,
+                    rss_bytes=1,
+                    cpu_percent=5.0,
+                    available=True,
+                ),
+            ]
+        )
+        governor = ResourceGovernor(
+            clock=lambda: 0.0,
+            pressure_sampler=lambda: next(samples),
+            pressure_sample_seconds=0.0,
+            memory_enter_percent=90.0,
+            memory_leave_percent=80.0,
+            swap_enter_percent=10.0,
+            swap_leave_percent=5.0,
+            rss_enter_fraction=0.75,
+            rss_leave_fraction=0.65,
+        )
+
+        first = governor.refresh_pressure(1.0)
+        second = governor.refresh_pressure(2.0)
+        third = governor.refresh_pressure(3.0)
+
+        self.assertTrue(first.degraded)
+        self.assertTrue(second.degraded)
+        self.assertFalse(third.degraded)
+        self.assertEqual(first.available, True)
+        self.assertEqual(second.available, False)
+        self.assertEqual(third.available, True)
+
     def test_background_capacity_reserves_space_for_manual_work(self) -> None:
         governor = ResourceGovernor(max_active=2, max_periodic=1, manual_reserve=1)
 
@@ -917,6 +1014,11 @@ class ResourceGovernorTests(unittest.TestCase):
     def test_pressure_degrades_periodic_work_without_blocking_manual_work(self) -> None:
         governor = ResourceGovernor(max_active=2, max_periodic=2, manual_reserve=1)
         governor._pressure_degraded = True
+        governor._pressure = PressureSnapshot(
+            sampled_at=0.0,
+            degraded=True,
+            available=True,
+        )
 
         periodic = governor.admit(JobProfile(key="component:cpu", kind="periodic"), 0.0)
         manual = governor.admit(JobProfile(key="dashboard", kind="manual"), 0.0)

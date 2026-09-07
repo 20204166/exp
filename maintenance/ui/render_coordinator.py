@@ -27,6 +27,7 @@ class RenderIntent:
     layout_changed: bool = False
     style_changed: bool = False
     payload: Any | None = None
+    payload_set: bool = False
     priority: int = 0
 
     def merge(self, other: RenderIntent) -> RenderIntent:
@@ -39,7 +40,8 @@ class RenderIntent:
             components=self.components | other.components,
             layout_changed=self.layout_changed or other.layout_changed,
             style_changed=self.style_changed or other.style_changed,
-            payload=other.payload if other.payload is not None else self.payload,
+            payload=other.payload if other.payload_set else self.payload,
+            payload_set=self.payload_set or other.payload_set,
             priority=max(self.priority, other.priority),
         )
 
@@ -63,6 +65,7 @@ class UICoordinator:
         self._pending: dict[str, _PendingRender] = {}
         self._visible: dict[str, bool] = {}
         self._generations: dict[str, int] = {}
+        self._target_nodes: dict[str, Any | None] = {}
         self._batch_depth = 0
         self._closed = False
         self.render_requests = 0
@@ -90,16 +93,33 @@ class UICoordinator:
         if visible and self._batch_depth == 0:
             self.flush()
 
-    def invalidate(self, target: str, generation: int | None = None) -> None:
-        """Advance one target's presentation generation and drop stale work."""
+    def invalidate(
+        self,
+        target: str,
+        generation: int | None = None,
+        node_id: Any | None = None,
+    ) -> None:
+        """Advance one target's generation and optionally retarget it to one node."""
 
         current = self._generations.get(target, 0)
         next_generation = (
             current + 1 if generation is None else max(current, generation)
         )
         self._generations[target] = next_generation
+        if node_id is not None:
+            previous = self._target_nodes.get(target)
+            self._target_nodes[target] = node_id
+            if previous is not None and previous != node_id:
+                self._pending.pop(target, None)
         pending = self._pending.get(target)
         if pending is not None and pending.intent.generation < next_generation:
+            del self._pending[target]
+        if (
+            pending is not None
+            and node_id is not None
+            and pending.intent.node_id is not None
+            and pending.intent.node_id != node_id
+        ):
             del self._pending[target]
 
     def clear(self, target: str | None = None) -> None:
@@ -107,10 +127,12 @@ class UICoordinator:
             self._pending.clear()
             self._generations.clear()
             self._visible.clear()
+            self._target_nodes.clear()
             return
         self._pending.pop(target, None)
-        self._generations.pop(target, None)
         self._visible.pop(target, None)
+        self._target_nodes.pop(target, None)
+        self._generations[target] = self._generations.get(target, 0) + 1
 
     def shutdown(self) -> None:
         self._closed = True
@@ -131,15 +153,32 @@ class UICoordinator:
         if intent.generation > current:
             self._generations[intent.target] = intent.generation
 
+        owner = self._target_nodes.get(intent.target)
+        if owner is not None and intent.node_id is not None and owner != intent.node_id:
+            self.stale_rejections += 1
+            return False
+        if intent.node_id is not None and owner is None:
+            self._target_nodes[intent.target] = intent.node_id
+
         pending = self._pending.get(intent.target)
         if pending is None:
             self._pending[intent.target] = _PendingRender(intent=intent, apply=apply)
         else:
-            self.coalesced_requests += 1
-            self._pending[intent.target] = _PendingRender(
-                intent=pending.intent.merge(intent),
-                apply=apply,
-            )
+            if (
+                pending.intent.node_id is not None
+                and intent.node_id is not None
+                and pending.intent.node_id != intent.node_id
+            ):
+                self._pending[intent.target] = _PendingRender(
+                    intent=intent,
+                    apply=apply,
+                )
+            else:
+                self.coalesced_requests += 1
+                self._pending[intent.target] = _PendingRender(
+                    intent=pending.intent.merge(intent),
+                    apply=apply,
+                )
         self.render_requests += 1
 
         if self._batch_depth == 0 and self._visible.get(intent.target, True):
@@ -165,7 +204,8 @@ class UICoordinator:
                     item[1].intent.target,
                 )
             )
-            if not self._apply_target(ready[0][0]):
+            target = ready[0][0]
+            if not self._apply_target(target) and target in self._pending:
                 return
 
     def _apply_target(self, target: str) -> bool:
@@ -174,6 +214,15 @@ class UICoordinator:
             return False
         current = self._generations.get(target, 0)
         if pending.intent.generation < current:
+            self.stale_rejections += 1
+            del self._pending[target]
+            return False
+        owner = self._target_nodes.get(target)
+        if (
+            owner is not None
+            and pending.intent.node_id is not None
+            and owner != pending.intent.node_id
+        ):
             self.stale_rejections += 1
             del self._pending[target]
             return False

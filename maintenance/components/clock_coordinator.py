@@ -7,6 +7,7 @@ Neither class starts threads or talks to Tkinter.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -52,8 +53,11 @@ class PressureSnapshot:
     memory_percent: float | None = None
     swap_percent: float | None = None
     rss_bytes: int | None = None
+    memory_total_bytes: int | None = None
     cpu_percent: float | None = None
     degraded: bool = False
+    available: bool = False
+    sample_error: str | None = None
 
 
 @dataclass(slots=True)
@@ -222,6 +226,15 @@ class ClockCoordinator:
         record.paused = False
         self._paused.discard(key)
 
+    def cancel(self, key: str) -> None:
+        record = self._record_or_raise(key)
+        record.in_flight = False
+        record.refresh_requested = False
+        record.deferred_until = None
+        self._in_flight.discard(key)
+        self._refresh_requested.discard(key)
+        self._deferred_until.pop(key, None)
+
     def is_paused(self, key: str) -> bool:
         return key in self._paused
 
@@ -281,6 +294,7 @@ class ResourceGovernor:
         swap_leave_percent: float = 5.0,
         rss_enter_fraction: float = 0.75,
         rss_leave_fraction: float = 0.65,
+        pressure_sampler: Callable[[], PressureSnapshot] | None = None,
     ) -> None:
         self._clock = clock or time.monotonic
         self.max_active = max_active
@@ -296,26 +310,30 @@ class ResourceGovernor:
         self.swap_leave_percent = swap_leave_percent
         self.rss_enter_fraction = rss_enter_fraction
         self.rss_leave_fraction = rss_leave_fraction
+        self._pressure_sampler = pressure_sampler or self._default_pressure_sampler
+        self._pressure_lock = threading.Lock()
+        self._pressure_sampling = False
         self._active: dict[str, _AdmissionState] = {}
         self._active_by_node: dict[str, int] = {}
         self._active_periodic = 0
         self._defer_counts: dict[str, int] = {}
-        self._pressure = PressureSnapshot(sampled_at=self._clock())
+        self._pressure = PressureSnapshot(sampled_at=self._clock(), available=False)
         self._pressure_degraded = False
-        self._last_pressure_sample = 0.0
+        self._last_pressure_sample = float("-inf")
 
     @property
     def pressure(self) -> PressureSnapshot:
-        return self._pressure
+        with self._pressure_lock:
+            return self._pressure
 
     def admit(self, profile: JobProfile, now: float | None = None) -> AdmissionDecision:
         now = self._clock() if now is None else now
-        self.sample_pressure(now)
+        pressure = self.sample_pressure(now)
 
         if profile.key in self._active:
             return self._defer(profile, now, "already running")
 
-        if profile.kind != "manual" and self._pressure_degraded:
+        if profile.kind != "manual" and pressure.degraded:
             return self._defer(profile, now, "resource pressure")
 
         if self._active_total() >= self.max_active:
@@ -366,39 +384,99 @@ class ResourceGovernor:
 
     def sample_pressure(self, now: float | None = None) -> PressureSnapshot:
         now = self._clock() if now is None else now
-        if now - self._last_pressure_sample < self.pressure_sample_seconds:
-            return self._pressure
-        self._last_pressure_sample = now
+        self.request_pressure_sample(now)
+        return self.pressure
 
-        memory_percent: float | None = None
-        swap_percent: float | None = None
-        rss_bytes: int | None = None
-        cpu_percent: float | None = None
+    def refresh_pressure(self, now: float | None = None) -> PressureSnapshot:
+        now = self._clock() if now is None else now
+        return self._apply_pressure_snapshot(self._collect_pressure_snapshot(now))
 
+    def request_pressure_sample(self, now: float | None = None) -> bool:
+        now = self._clock() if now is None else now
+        with self._pressure_lock:
+            if self._pressure_sampling:
+                return False
+            if now - self._last_pressure_sample < self.pressure_sample_seconds:
+                return False
+            self._pressure_sampling = True
+
+        threading.Thread(target=self._pressure_sample_worker, daemon=True).start()
+        return True
+
+    def _pressure_sample_worker(self) -> None:
         try:
-            import psutil  # type: ignore[import-not-found]
-        except Exception:  # noqa: BLE001 - psutil sampling is best-effort.
-            self._pressure = PressureSnapshot(
+            self._apply_pressure_snapshot(self._collect_pressure_snapshot())
+        finally:
+            with self._pressure_lock:
+                self._pressure_sampling = False
+
+    def _collect_pressure_snapshot(self, now: float | None = None) -> PressureSnapshot:
+        now = self._clock() if now is None else now
+        try:
+            snapshot = self._pressure_sampler()
+        except Exception as error:  # noqa: BLE001 - psutil sampling is best-effort.
+            return PressureSnapshot(
                 sampled_at=now,
                 memory_percent=None,
                 swap_percent=None,
                 rss_bytes=None,
+                memory_total_bytes=None,
                 cpu_percent=None,
                 degraded=self._pressure_degraded,
+                available=False,
+                sample_error=str(error),
             )
-            return self._pressure
+
+        if snapshot.sampled_at <= 0:
+            snapshot = PressureSnapshot(
+                sampled_at=now,
+                memory_percent=snapshot.memory_percent,
+                swap_percent=snapshot.swap_percent,
+                rss_bytes=snapshot.rss_bytes,
+                memory_total_bytes=snapshot.memory_total_bytes,
+                cpu_percent=snapshot.cpu_percent,
+                degraded=snapshot.degraded,
+                available=snapshot.available,
+                sample_error=snapshot.sample_error,
+            )
+        return snapshot
+
+    def _default_pressure_sampler(self) -> PressureSnapshot:
+        now = self._clock()
+
+        memory_percent: float | None = None
+        swap_percent: float | None = None
+        rss_bytes: int | None = None
+        memory_total_bytes: int | None = None
+        cpu_percent: float | None = None
+
+        try:
+            import psutil  # type: ignore[import-not-found]
+        except Exception as error:  # noqa: BLE001 - psutil sampling is best-effort.
+            return PressureSnapshot(
+                sampled_at=now,
+                memory_percent=None,
+                swap_percent=None,
+                rss_bytes=None,
+                memory_total_bytes=None,
+                cpu_percent=None,
+                degraded=self._pressure_degraded,
+                available=False,
+                sample_error=str(error),
+            )
 
         try:
             memory = psutil.virtual_memory()
             memory_percent = float(memory.percent)
+            memory_total_bytes = int(memory.total)
         except Exception:  # noqa: BLE001 - psutil sampling is best-effort.
-            memory = None
+            memory_percent = None
+            memory_total_bytes = None
 
         try:
-            swap = psutil.swap_memory()
-            swap_percent = float(swap.percent)
+            swap_percent = float(psutil.swap_memory().percent)
         except Exception:  # noqa: BLE001 - psutil sampling is best-effort.
-            swap = None
+            swap_percent = None
 
         try:
             rss_bytes = int(psutil.Process().memory_info().rss)
@@ -410,40 +488,65 @@ class ResourceGovernor:
         except Exception:  # noqa: BLE001 - psutil sampling is best-effort.
             cpu_percent = None
 
-        degraded = self._pressure_degraded
-        if degraded:
-            if self._pressure_relaxed(memory_percent, swap_percent, rss_bytes, memory):
-                degraded = False
-        else:
-            if self._pressure_entered(memory_percent, swap_percent, rss_bytes, memory):
-                degraded = True
-
-        self._pressure_degraded = degraded
-        self._pressure = PressureSnapshot(
+        return PressureSnapshot(
             sampled_at=now,
             memory_percent=memory_percent,
             swap_percent=swap_percent,
             rss_bytes=rss_bytes,
+            memory_total_bytes=memory_total_bytes,
             cpu_percent=cpu_percent,
-            degraded=degraded,
+            degraded=self._pressure_degraded,
+            available=True,
         )
-        return self._pressure
+
+    def _apply_pressure_snapshot(self, snapshot: PressureSnapshot) -> PressureSnapshot:
+        with self._pressure_lock:
+            degraded = self._pressure_degraded
+            if snapshot.available:
+                if degraded:
+                    if self._pressure_relaxed(
+                        snapshot.memory_percent,
+                        snapshot.swap_percent,
+                        snapshot.rss_bytes,
+                        snapshot.memory_total_bytes,
+                    ):
+                        degraded = False
+                elif self._pressure_entered(
+                    snapshot.memory_percent,
+                    snapshot.swap_percent,
+                    snapshot.rss_bytes,
+                    snapshot.memory_total_bytes,
+                ):
+                    degraded = True
+
+            self._pressure_degraded = degraded
+            self._pressure = PressureSnapshot(
+                sampled_at=snapshot.sampled_at,
+                memory_percent=snapshot.memory_percent,
+                swap_percent=snapshot.swap_percent,
+                rss_bytes=snapshot.rss_bytes,
+                memory_total_bytes=snapshot.memory_total_bytes,
+                cpu_percent=snapshot.cpu_percent,
+                degraded=degraded,
+                available=snapshot.available,
+                sample_error=snapshot.sample_error,
+            )
+            self._last_pressure_sample = snapshot.sampled_at
+            return self._pressure
 
     def _pressure_entered(
         self,
         memory_percent: float | None,
         swap_percent: float | None,
         rss_bytes: int | None,
-        memory: object | None,
+        memory_total_bytes: int | None,
     ) -> bool:
         if memory_percent is not None and memory_percent >= self.memory_enter_percent:
             return True
         if swap_percent is not None and swap_percent >= self.swap_enter_percent:
             return True
-        if rss_bytes is not None and memory is not None:
-            total = getattr(memory, "total", None)
-            if total:
-                return (rss_bytes / float(total)) >= self.rss_enter_fraction
+        if rss_bytes is not None and memory_total_bytes:
+            return (rss_bytes / float(memory_total_bytes)) >= self.rss_enter_fraction
         return False
 
     def _pressure_relaxed(
@@ -451,17 +554,22 @@ class ResourceGovernor:
         memory_percent: float | None,
         swap_percent: float | None,
         rss_bytes: int | None,
-        memory: object | None,
+        memory_total_bytes: int | None,
     ) -> bool:
+        seen = False
         if memory_percent is not None and memory_percent >= self.memory_leave_percent:
             return False
+        if memory_percent is not None:
+            seen = True
         if swap_percent is not None and swap_percent >= self.swap_leave_percent:
             return False
-        if rss_bytes is not None and memory is not None:
-            total = getattr(memory, "total", None)
-            if total and (rss_bytes / float(total)) >= self.rss_leave_fraction:
+        if swap_percent is not None:
+            seen = True
+        if rss_bytes is not None and memory_total_bytes:
+            if (rss_bytes / float(memory_total_bytes)) >= self.rss_leave_fraction:
                 return False
-        return True
+            seen = True
+        return seen
 
     def _active_total(self) -> int:
         return len(self._active)

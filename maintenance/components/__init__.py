@@ -9,7 +9,11 @@ objects. Generic external-command execution deliberately stays outside this
 package in `maintenance.external_commands`.
 """
 
-from .background import BackgroundTaskRunner
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .background import BackgroundTaskRunner
+
 from .catalog import ResourceFeature, ResourceFeatureCatalog
 from .clock_coordinator import (
     AdmissionDecision,
@@ -48,6 +52,15 @@ from .scan_support import (
     require_psutil,
     windows_windll,
 )
+
+
+def __getattr__(name: str) -> Any:
+    if name == "BackgroundTaskRunner":
+        from .background import BackgroundTaskRunner
+
+        return BackgroundTaskRunner
+    raise AttributeError(name)
+
 
 __all__ = [
     "DEFAULT_TTL_SECONDS",

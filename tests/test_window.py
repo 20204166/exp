@@ -23,6 +23,7 @@ from maintenance.models import (
     DashboardSnapshot,
     ResourceSummary,
 )
+from maintenance.nodes import NodeId
 from maintenance.preferences import AppPreferences, PreferencesSaveError
 from tests.support.models import FIXED_SCANNED_AT, make_snapshot, make_summary
 from tests.support.scheduling import TimerMaster
@@ -186,6 +187,41 @@ class AppWindowTests(unittest.TestCase):
             window.master.scheduled[-1][0],
             AppWindow.COMPONENT_POLL_MILLISECONDS,
         )
+
+    def test_switch_selected_node_cancels_old_node_component_work(self) -> None:
+        window = self.make_window()
+        old_context = Mock()
+        old_context.descriptor = Mock(id=NodeId("old"))
+        old_context.scheduler = Mock()
+        new_context = Mock()
+        new_context.descriptor = Mock(id=NodeId("new"))
+        new_context.scheduler = Mock()
+        registry = Mock()
+        registry.select = Mock()
+        registry.context = Mock(side_effect=[old_context, new_context])
+        registry.selected_context = Mock(return_value=new_context)
+        window._node_registry = registry
+        window._selected_node_id = NodeId("old")
+        window._feature_catalog = Mock(all=Mock(return_value=(Mock(key="cpu"),)))
+        render_coordinator = Mock(invalidate=Mock())
+        window._render_coordinator = Mock(return_value=render_coordinator)
+        window._cancel_active_scan = Mock()
+        window._sync_selected_context_mirrors = Mock()
+        window._render_selected_node = Mock()
+        window._schedule_timer = Mock()
+
+        window._switch_selected_node(NodeId("new"))
+
+        registry.select.assert_called_once_with(NodeId("new"))
+        window._cancel_active_scan.assert_called_once()
+        old_context.scheduler.cancel.assert_called_once_with("cpu")
+        render_coordinator.invalidate.assert_any_call(
+            "component:cpu",
+            0,
+            node_id=NodeId("new"),
+        )
+        window._sync_selected_context_mirrors.assert_called_once_with(new_context)
+        window._render_selected_node.assert_called_once_with(new_context)
 
     def test_late_snapshot_and_error_callbacks_are_ignored(self) -> None:
         window = self.make_window()
