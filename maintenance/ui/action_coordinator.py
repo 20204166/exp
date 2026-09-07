@@ -7,6 +7,7 @@ background work, coalescing, and cancellation to the app coordinator.
 
 from __future__ import annotations
 
+import tkinter as tk
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -38,7 +39,11 @@ class ButtonCoordinator:
         existing = self._actions.get(action_id)
         if existing is not None and not replace:
             raise ValueError(f"Action already registered: {action_id}")
-        widgets = existing.widgets if existing is not None else []
+        widgets = [
+            widget
+            for widget in (existing.widgets if existing is not None else [])
+            if self._widget_exists(widget)
+        ]
         self._actions[action_id] = _ActionRecord(
             callback=callback,
             enabled=enabled,
@@ -52,6 +57,8 @@ class ButtonCoordinator:
 
     def bind(self, widget: Any, action_id: str) -> None:
         record = self._actions[action_id]
+        if not self._widget_exists(widget):
+            return
         if widget not in record.widgets:
             record.widgets.append(widget)
         config = getattr(widget, "config", None)
@@ -74,8 +81,9 @@ class ButtonCoordinator:
     def set_enabled(self, action_id: str, enabled: bool) -> None:
         record = self._actions[action_id]
         record.enabled = enabled
-        for widget in record.widgets:
-            self._apply_state(widget, enabled)
+        record.widgets = [
+            widget for widget in record.widgets if self._apply_state(widget, enabled)
+        ]
 
     def is_enabled(self, action_id: str) -> bool:
         return self._actions[action_id].enabled
@@ -92,15 +100,30 @@ class ButtonCoordinator:
                 del self._actions[action_id]
 
     @staticmethod
-    def _apply_state(widget: Any, enabled: bool) -> None:
+    def _apply_state(widget: Any, enabled: bool) -> bool:
+        if not ButtonCoordinator._widget_exists(widget):
+            return False
         state = "normal" if enabled else "disabled"
         config = getattr(widget, "config", None)
         if config is None:
             config = getattr(widget, "configure", None)
         if config is None:
-            return
+            return True
         try:
             config(state=state)
         except TypeError:
             # Non-button widgets may reject state updates; ignore them.
-            return
+            return True
+        except tk.TclError:
+            return False
+        return True
+
+    @staticmethod
+    def _widget_exists(widget: Any) -> bool:
+        exists = getattr(widget, "winfo_exists", None)
+        if exists is None:
+            return True
+        try:
+            return bool(exists())
+        except tk.TclError:
+            return False

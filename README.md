@@ -14,7 +14,8 @@ algo.py, window.py       app facade and Tk controller (kept top-level for
                          compatibility with historical imports)
 maintenance/             shared implementation package
 maintenance/components/  component subsystem (scan primitives, process safety,
-                         downloads, GPU, background, catalog, coordinator)
+                         downloads, GPU, background, catalog, coordinator,
+                         clock/governor)
 maintenance/ui/          presentation layer (styles, layout, pages, status)
 maintenance/snapshot.py  read-only snapshot CLI (system-analyzer-snapshot)
 pyproject.toml           local packaging configuration

@@ -40,6 +40,7 @@ class RecordingWidget:
         self.config_options: dict[str, Any] = {}
         self.bindings: dict[str, Any] = {}
         self.mapped = True
+        self.exists = True
         self._yview_fraction: float | None = None
 
     def pack(self, **options: Any) -> None:
@@ -89,7 +90,10 @@ class RecordingWidget:
         return []
 
     def destroy(self) -> None:
-        return None
+        self.exists = False
+
+    def winfo_exists(self) -> bool:
+        return self.exists
 
     def yview(self, *args: Any) -> None:
         pass

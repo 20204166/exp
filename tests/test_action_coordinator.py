@@ -57,6 +57,20 @@ class ButtonCoordinatorTests(unittest.TestCase):
         self.assertFalse(coordinator.dispatch("nodes:peer:peer-a:pair"))
         second.assert_not_called()
 
+    def test_dead_widgets_are_dropped_during_replacement(self) -> None:
+        coordinator = ButtonCoordinator()
+        callback = Mock()
+        widget = RecordingWidget()
+
+        coordinator.register("dashboard:settings", callback)
+        coordinator.bind(widget, "dashboard:settings")
+        widget.destroy()
+
+        coordinator.register("dashboard:settings", callback, replace=True)
+
+        self.assertEqual(coordinator.registered_ids(), ("dashboard:settings",))
+        self.assertEqual(coordinator._actions["dashboard:settings"].widgets, [])
+
     def test_clear_prefix_removes_only_matching_actions(self) -> None:
         coordinator = ButtonCoordinator()
         pair = Mock()
