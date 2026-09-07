@@ -910,6 +910,13 @@ class ClockCoordinatorTests(unittest.TestCase):
         self.assertEqual(clock.next_deadline(11.0), 12.0)
         self.assertEqual(clock.due_keys(12.0), ("cpu",))
 
+    def test_clock_never_moves_backwards_for_due_calculation(self) -> None:
+        clock = ClockCoordinator({"cpu": 1.0}, clock=lambda: 10.0)
+        clock.mark_all_refreshed(10.0)
+
+        self.assertEqual(clock.next_deadline(9.0), 11.0)
+        self.assertEqual(clock.due_keys(9.0), ())
+
 
 class ResourceGovernorTests(unittest.TestCase):
     def test_pressure_sampling_runs_off_the_caller_thread(self) -> None:
@@ -994,6 +1001,35 @@ class ResourceGovernorTests(unittest.TestCase):
         self.assertEqual(first.available, True)
         self.assertEqual(second.available, False)
         self.assertEqual(third.available, True)
+
+    def test_pressure_clock_never_moves_backwards(self) -> None:
+        clock_values = iter([10.0, 9.0, 8.0])
+        samples = iter(
+            [
+                PressureSnapshot(
+                    sampled_at=10.0,
+                    memory_percent=40.0,
+                    available=True,
+                ),
+                PressureSnapshot(
+                    sampled_at=9.0,
+                    memory_percent=40.0,
+                    available=True,
+                ),
+            ]
+        )
+        governor = ResourceGovernor(
+            clock=lambda: next(clock_values),
+            pressure_sampler=lambda: next(samples),
+            pressure_sample_seconds=0.0,
+        )
+
+        first = governor.refresh_pressure()
+        second = governor.refresh_pressure()
+
+        self.assertEqual(first.sampled_at, 10.0)
+        self.assertEqual(second.sampled_at, 10.0)
+        self.assertEqual(governor._last_pressure_sample, 10.0)
 
     def test_background_capacity_reserves_space_for_manual_work(self) -> None:
         governor = ResourceGovernor(max_active=2, max_periodic=1, manual_reserve=1)

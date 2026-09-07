@@ -13,6 +13,22 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 
+def _make_monotonic_clock(clock: Callable[[], float]) -> Callable[[], float]:
+    lock = threading.Lock()
+    last = float("-inf")
+
+    def wrapped() -> float:
+        nonlocal last
+        current = clock()
+        with lock:
+            if current < last:
+                return last
+            last = current
+            return current
+
+    return wrapped
+
+
 @dataclass(frozen=True, slots=True)
 class JobProfile:
     """Describe one unit of work for admission purposes."""
@@ -86,7 +102,6 @@ class ClockCoordinator:
         *,
         clock: Callable[[], float] | None = None,
     ) -> None:
-        self._clock = clock or time.monotonic
         self._records: dict[str, _ClockEntry] = {}
         self.intervals: dict[str, float] = {}
         self._next_due: dict[str, float] = {}
@@ -94,6 +109,7 @@ class ClockCoordinator:
         self._paused: set[str] = set()
         self._refresh_requested: set[str] = set()
         self._deferred_until: dict[str, float] = {}
+        self._clock = _make_monotonic_clock(clock or time.monotonic)
         if intervals is not None:
             for key, interval in intervals.items():
                 self.register(key, interval)
@@ -137,6 +153,7 @@ class ClockCoordinator:
         self._next_due[key] = record.next_due
 
     def begin(self, key: str, now: float, interval: float | None = None) -> bool:
+        now = self._clock() if now is None else now
         record = self._records.get(key)
         if record is None:
             if interval is None:
@@ -187,6 +204,7 @@ class ClockCoordinator:
         self.finish(key, now)
 
     def mark_all_refreshed(self, now: float) -> None:
+        now = self._clock() if now is None else now
         for key, record in self._records.items():
             record.next_due = now + record.interval
             record.refresh_requested = False
@@ -197,6 +215,7 @@ class ClockCoordinator:
         self._deferred_until.clear()
 
     def due_keys(self, now: float) -> tuple[str, ...]:
+        now = self._clock() if now is None else now
         return tuple(
             key for key, record in self._records.items() if self._is_due(record, now)
         )
@@ -296,7 +315,6 @@ class ResourceGovernor:
         rss_leave_fraction: float = 0.65,
         pressure_sampler: Callable[[], PressureSnapshot] | None = None,
     ) -> None:
-        self._clock = clock or time.monotonic
         self.max_active = max_active
         self.max_periodic = max_periodic
         self.max_per_node = max_per_node
@@ -317,6 +335,7 @@ class ResourceGovernor:
         self._active_by_node: dict[str, int] = {}
         self._active_periodic = 0
         self._defer_counts: dict[str, int] = {}
+        self._clock = _make_monotonic_clock(clock or time.monotonic)
         self._pressure = PressureSnapshot(sampled_at=self._clock(), available=False)
         self._pressure_degraded = False
         self._last_pressure_sample = float("-inf")
@@ -428,7 +447,7 @@ class ResourceGovernor:
             )
 
         if snapshot.sampled_at <= 0:
-            snapshot = PressureSnapshot(
+            return PressureSnapshot(
                 sampled_at=now,
                 memory_percent=snapshot.memory_percent,
                 swap_percent=snapshot.swap_percent,
@@ -439,7 +458,17 @@ class ResourceGovernor:
                 available=snapshot.available,
                 sample_error=snapshot.sample_error,
             )
-        return snapshot
+        return PressureSnapshot(
+            sampled_at=now,
+            memory_percent=snapshot.memory_percent,
+            swap_percent=snapshot.swap_percent,
+            rss_bytes=snapshot.rss_bytes,
+            memory_total_bytes=snapshot.memory_total_bytes,
+            cpu_percent=snapshot.cpu_percent,
+            degraded=snapshot.degraded,
+            available=snapshot.available,
+            sample_error=snapshot.sample_error,
+        )
 
     def _default_pressure_sampler(self) -> PressureSnapshot:
         now = self._clock()

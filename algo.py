@@ -74,9 +74,10 @@ class Analyzer:
         psutil_module = self._require_psutil()
         frequency = psutil_module.cpu_freq()
         frequency_text = f"{frequency.current:.0f} MHz" if frequency else "Unavailable"
+        cpu_percent_interval = 0.0 if platform.system() == "Darwin" else 0.1
 
         return [
-            f"CPU usage: {psutil_module.cpu_percent(interval=0.1):.1f}%",
+            f"CPU usage: {psutil_module.cpu_percent(interval=cpu_percent_interval):.1f}%",
             f"Physical cores: {psutil_module.cpu_count(logical=False) or 'Unknown'}",
             f"Logical cores: {psutil_module.cpu_count(logical=True) or 'Unknown'}",
             f"Current frequency: {frequency_text}",

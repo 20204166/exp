@@ -1270,6 +1270,31 @@ class SourceIntegrationTests(unittest.TestCase):
         self.assertTrue(callable(analyzer.process_candidates))
         self.assertTrue(callable(analyzer.storage_candidates))
 
+    def test_analyzer_cpu_info_uses_nonblocking_sampling_on_darwin(self) -> None:
+        from algo import Analyzer
+
+        analyzer = Analyzer()
+        fake_psutil = SimpleNamespace(
+            cpu_freq=lambda: SimpleNamespace(current=2400.0),
+            cpu_percent=Mock(return_value=12.3),
+            cpu_count=Mock(side_effect=[4, 8, 4, 8]),
+        )
+
+        with patch("algo.psutil", fake_psutil):
+            with patch("algo.platform.system", return_value="Darwin"):
+                darwin_lines = analyzer.cpu_info()
+            with patch("algo.platform.system", return_value="Linux"):
+                linux_lines = analyzer.cpu_info()
+
+        self.assertIn("CPU usage: 12.3%", darwin_lines[0])
+        self.assertIn("CPU usage: 12.3%", linux_lines[0])
+        self.assertEqual(
+            fake_psutil.cpu_percent.call_args_list[0].kwargs, {"interval": 0.0}
+        )
+        self.assertEqual(
+            fake_psutil.cpu_percent.call_args_list[1].kwargs, {"interval": 0.1}
+        )
+
     def test_call_with_cancel_passes_event_only_when_provided(self) -> None:
         from algo import Analyzer
 
