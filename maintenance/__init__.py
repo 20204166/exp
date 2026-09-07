@@ -22,6 +22,7 @@ from maintenance.nodes import (
     ProcessRef,
     local_node_descriptor,
     node_operation_key,
+    operation_key,
 )
 from maintenance.scanner import SystemScanner
 
@@ -49,4 +50,5 @@ __all__ = [
     "__version__",
     "local_node_descriptor",
     "node_operation_key",
+    "operation_key",
 ]

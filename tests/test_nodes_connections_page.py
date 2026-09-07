@@ -4,6 +4,7 @@ import unittest
 from typing import Any
 from unittest.mock import Mock
 
+from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.nodes_connections import (
     DiscoveredPeerSpec,
     NodesConnectionsCallbacks,
@@ -36,6 +37,7 @@ def make_page(
     discovered: list[DiscoveredPeerSpec] | None = None,
     trusted: list[TrustedNodeSpec] | None = None,
     manual: list[TrustedNodeSpec] | None = None,
+    button_coordinator: ButtonCoordinator | None = None,
 ) -> tuple[NodesConnectionsPage, RecordingWidget, WidgetRecorder]:
     recorder = WidgetRecorder()
     parent = recorder.parent()
@@ -82,6 +84,7 @@ def make_page(
         checkbutton_cls=recorder.checkbutton_cls(),
         combobox_cls=recorder.combobox_cls(),
         entry_cls=recorder.entry_cls(),
+        button_coordinator=button_coordinator,
         var_factory=lambda: FakeVar(""),
         boolean_var_factory=lambda: FakeVar(False),
     )
@@ -114,6 +117,18 @@ class NodesConnectionsPageTests(unittest.TestCase):
         toggle.kwargs["variable"].set(True)
         toggle.kwargs["command"]()
         callbacks.on_discovery_toggle.assert_called_once_with(True)
+
+    def test_stable_actions_are_registered_and_cleared_by_prefix(self) -> None:
+        coordinator = ButtonCoordinator()
+        _page, _parent, _recorder = make_page(button_coordinator=coordinator)
+
+        self.assertIn("nodes:discovery:toggle", coordinator.registered_ids())
+        self.assertIn("nodes:peer:peer-a:pair", coordinator.registered_ids())
+
+        coordinator.clear_prefix("nodes:peer:")
+
+        self.assertFalse(coordinator.dispatch("nodes:peer:peer-a:pair"))
+        self.assertTrue(coordinator.dispatch("nodes:discovery:toggle"))
 
     def test_pair_button_emits_peer_id(self) -> None:
         callbacks = make_callbacks()

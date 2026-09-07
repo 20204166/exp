@@ -4,6 +4,7 @@ import unittest
 from typing import Any
 from unittest.mock import Mock
 
+from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.cluster_page import (
     ClusterNodeSpec,
     ClusterPage,
@@ -38,6 +39,7 @@ def make_page(
     callbacks: ClusterPageCallbacks | None = None,
     *,
     nodes: list[ClusterNodeSpec] | None = None,
+    button_coordinator: ButtonCoordinator | None = None,
 ) -> tuple[ClusterPage, RecordingWidget, WidgetRecorder]:
     recorder = WidgetRecorder()
     parent = recorder.parent()
@@ -52,6 +54,7 @@ def make_page(
         button_cls=recorder.button_cls(),
         canvas_cls=recorder.canvas_cls(),
         scrollbar_cls=recorder.scrollbar_cls(),
+        button_coordinator=button_coordinator,
     )
     return page, parent, recorder
 
@@ -91,6 +94,17 @@ class ClusterPageTests(unittest.TestCase):
         )
         open_button(recorder).kwargs["command"]()
         callbacks.on_open_node.assert_called_once_with("dev")
+
+    def test_selectable_node_registers_stable_open_action(self) -> None:
+        coordinator = ButtonCoordinator()
+        callbacks = make_callbacks()
+        _page, _parent, _recorder = make_page(
+            callbacks,
+            nodes=[_spec("dev", selectable=True)],
+            button_coordinator=coordinator,
+        )
+
+        self.assertIn("cluster:node:dev:open", coordinator.registered_ids())
 
     def test_refresh_nodes_rebuilds_list(self) -> None:
         page, _parent, _recorder = make_page()

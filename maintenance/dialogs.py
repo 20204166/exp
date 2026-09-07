@@ -1,9 +1,9 @@
 import threading
 import tkinter as tk
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Any
+from typing import Any, TypeVar
 
 from maintenance.actions import FileManager, ProcessManager
 from maintenance.components import (
@@ -23,10 +23,11 @@ from maintenance.models import (
     ProcessCandidate,
     ResourceSummary,
 )
-from maintenance.nodes import NodeId, node_operation_key
+from maintenance.nodes import NodeId, operation_key
 from maintenance.scanner import ProgressCallback, SystemScanner
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
+from maintenance.ui.action_coordinator import ButtonCoordinator
 
 
 def _invoke_delivered(callback: Callable[[], None]) -> None:
@@ -121,6 +122,30 @@ def rebuild_tree_rows(
     tree.delete(*tree.get_children())
     for iid, values, tags in rows:
         tree.insert("", tk.END, iid=iid, values=values, tags=tags)
+
+
+T = TypeVar("T")
+
+
+def selected_items(
+    tree: Any,
+    lookup: Mapping[Any, T],
+    *,
+    key_transform: Callable[[str], Any] | None = None,
+) -> list[T]:
+    """Map the current Treeview selection to objects, skipping stale IDs."""
+
+    transform = key_transform or (lambda value: value)
+    selected: list[T] = []
+    for item in tree.selection():
+        try:
+            key = transform(item)
+        except (TypeError, ValueError):
+            continue
+        selected_item = lookup.get(key)
+        if selected_item is not None:
+            selected.append(selected_item)
+    return selected
 
 
 def action_label_text(actionable: bool) -> str:
@@ -328,6 +353,8 @@ class ResourceCard(tk.Frame):
         title: str,
         on_open: Callable[[str], None],
         colors: dict[str, str],
+        action_id: str | None = None,
+        button_coordinator: ButtonCoordinator | None = None,
     ) -> None:
         super().__init__(
             master,
@@ -341,6 +368,8 @@ class ResourceCard(tk.Frame):
         self.key = key
         self.on_open = on_open
         self.colors = colors
+        self._action_id = action_id
+        self._button_coordinator = button_coordinator
 
         self.title_label = tk.Label(
             self,
@@ -451,6 +480,10 @@ class ResourceCard(tk.Frame):
         self.configure(highlightbackground=self.colors["border"])
 
     def _open(self, _event: tk.Event | None = None) -> None:
+        coordinator = getattr(self, "_button_coordinator", None)
+        if coordinator is not None and self._action_id is not None:
+            coordinator.dispatch(self._action_id)
+            return
         self.on_open(self.key)
 
     def update_summary(self, summary: ResourceSummary) -> None:
@@ -680,9 +713,7 @@ class ProcessDialog(tk.Toplevel):
         self.on_changed = on_changed
         self.coordinator = coordinator or _standalone_coordinator(self)
         self.node_id = node_id
-        self._operation_key = (
-            node_operation_key(node_id, "process") if node_id is not None else "process"
-        )
+        self._operation_key = operation_key(node_id, "process")
         self._read_only = read_only
         self.processes: dict[int, ProcessCandidate] = {}
         self._displayed: list[ProcessCandidate] = []
@@ -970,12 +1001,8 @@ class ProcessDialog(tk.Toplevel):
         if self._read_only:
             self._show_error("This node is read-only; processes cannot be terminated.")
             return
-        selected = [int(item) for item in self.tree.selection()]
-        allowed = [
-            pid
-            for pid in selected
-            if self.processes.get(pid) and self.processes[pid].action_allowed
-        ]
+        selected = selected_items(self.tree, self.processes, key_transform=int)
+        allowed = [process.pid for process in selected if process.action_allowed]
         if not allowed:
             messagebox.showinfo(
                 "Nothing Selected",
@@ -1098,9 +1125,7 @@ class StorageDialog(tk.Toplevel):
         self.on_changed = on_changed
         self.coordinator = coordinator or _standalone_coordinator(self)
         self.node_id = node_id
-        self._operation_key = (
-            node_operation_key(node_id, "storage") if node_id is not None else "storage"
-        )
+        self._operation_key = operation_key(node_id, "storage")
         self._read_only = read_only
         self.candidates: dict[str, FileCandidate] = {}
         self._scan_active = False
@@ -1395,11 +1420,7 @@ class StorageDialog(tk.Toplevel):
         if self._read_only:
             self._show_error("This node is read-only; files cannot be moved to Trash.")
             return
-        selected = [
-            self.candidates[item]
-            for item in self.tree.selection()
-            if item in self.candidates
-        ]
+        selected = selected_items(self.tree, self.candidates)
         if not selected:
             messagebox.showinfo(
                 "Nothing Selected",

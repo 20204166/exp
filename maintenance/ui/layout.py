@@ -11,6 +11,7 @@ import tkinter as tk
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.styles import Font
 
 SCROLLBAR_GUTTER = 6
@@ -565,6 +566,51 @@ def setting_row(
             justify="left",
         )
         help_label.pack(anchor="w", pady=(2, 0))
+    return row, label, control
+
+
+def boolean_setting_row(
+    parent: Any,
+    label_text: str,
+    *,
+    variable: Any,
+    control_text: str,
+    on_change: Callable[[], None],
+    action_id: str | None = None,
+    button_coordinator: ButtonCoordinator | None = None,
+    frame_cls: Callable[..., Any],
+    label_cls: Callable[..., Any],
+    checkbutton_cls: Callable[..., Any],
+    colors: dict[str, str],
+    fonts: dict[str, Any],
+    help_text: str | None = None,
+) -> tuple[Any, Any, Any]:
+    """Build one boolean settings row with a right-aligned checkbutton."""
+
+    def control_factory(row: Any) -> Any:
+        check = checkbutton_cls(
+            row,
+            text=control_text,
+            variable=variable,
+            style="App.TCheckbutton",
+            command=on_change,
+        )
+        check.pack(side="right")
+        return check
+
+    row, label, control = setting_row(
+        parent,
+        label_text,
+        control_factory,
+        frame_cls=frame_cls,
+        label_cls=label_cls,
+        colors=colors,
+        fonts=fonts,
+        help_text=help_text,
+    )
+    if button_coordinator is not None and action_id is not None:
+        button_coordinator.register(action_id, on_change, replace=True)
+        button_coordinator.bind(control, action_id)
     return row, label, control
 
 

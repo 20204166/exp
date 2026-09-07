@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import Mock
 
 from maintenance.ui import scan_status
+from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.preferences_page import (
     CardControlSpec,
     IntervalControlSpec,
@@ -35,6 +36,7 @@ def make_callbacks() -> Any:
 
 def make_page(
     callbacks: PreferencesPageCallbacks | None = None,
+    button_coordinator: ButtonCoordinator | None = None,
 ) -> tuple[PreferencesPage, RecordingWidget, WidgetRecorder]:
     recorder = WidgetRecorder()
     parent = recorder.parent()
@@ -61,6 +63,7 @@ def make_page(
         checkbutton_cls=recorder.checkbutton_cls(),
         combobox_cls=recorder.combobox_cls(),
         progressbar_cls=recorder.progressbar_cls(),
+        button_coordinator=button_coordinator,
         var_factory=lambda: FakeVar(""),
         boolean_var_factory=lambda: FakeVar(False),
     )
@@ -245,6 +248,22 @@ class PreferencesPageTests(unittest.TestCase):
         page.reset_button.kwargs["command"]()
 
         callbacks.on_reset.assert_called_once_with()
+
+    def test_page_registers_stable_action_ids_when_coordinator_present(self) -> None:
+        coordinator = ButtonCoordinator()
+        page, _parent, _recorder = make_page(button_coordinator=coordinator)
+
+        self.assertTrue(
+            {
+                "preferences:scan",
+                "preferences:cancel-scan",
+                "preferences:reset",
+                "preferences:auto-hide",
+                "preferences:card:cpu:visibility",
+                "preferences:card:battery:visibility",
+            }.issubset(set(coordinator.registered_ids()))
+        )
+        self.assertEqual(page.cancel_button.config_options["state"], tk.DISABLED)
 
     def test_category_rail_is_removed(self) -> None:
         page, _parent, _recorder = make_page()

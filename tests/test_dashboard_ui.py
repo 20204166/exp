@@ -14,6 +14,7 @@ from maintenance.components.coordinator import (
 )
 from maintenance.dialogs import ResourceCard, action_label_text, metric_label_pairs
 from maintenance.models import DashboardSnapshot, ResourceSummary, unavailable_summary
+from maintenance.ui.action_coordinator import ButtonCoordinator
 from tests.support.models import make_snapshot, make_summary
 from tests.support.scheduling import TimerMaster
 from window import AppWindow
@@ -162,6 +163,19 @@ class ResourceCardContractTests(unittest.TestCase):
         self.assertEqual(card.details_label.options["text"], "View details  →")
         row.destroy.assert_called_once()
         self.assertEqual(card.metric_rows, [])
+
+    def test_open_uses_coordinator_action_id_when_present(self) -> None:
+        coordinator = ButtonCoordinator()
+        open_card: Any = object.__new__(ResourceCard)
+        open_card._button_coordinator = coordinator
+        open_card._action_id = "dashboard:resource:cpu"
+        open_card.on_open = Mock()
+        open_card.key = "cpu"
+        coordinator.register("dashboard:resource:cpu", lambda: open_card.on_open("cpu"))
+
+        open_card._open()
+
+        open_card.on_open.assert_called_once_with("cpu")
 
     def test_unavailable_summary_keeps_review_label_for_actionable_keys(self) -> None:
         self.assertEqual(

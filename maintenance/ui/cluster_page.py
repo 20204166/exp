@@ -15,6 +15,7 @@ from typing import Any
 
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
+from maintenance.ui.action_coordinator import ButtonCoordinator
 
 _DEFAULT_COLOR = "indigo"
 
@@ -72,6 +73,7 @@ class ClusterPage:
         button_cls: Callable[..., Any] = ttk.Button,
         canvas_cls: Callable[..., Any] = tk.Canvas,
         scrollbar_cls: Callable[..., Any] = ttk.Scrollbar,
+        button_coordinator: ButtonCoordinator | None = None,
         colors: dict[str, str] | None = None,
         fonts: dict[str, Any] | None = None,
     ) -> None:
@@ -86,6 +88,7 @@ class ClusterPage:
         self.button_cls = button_cls
         self.canvas_cls = canvas_cls
         self.scrollbar_cls = scrollbar_cls
+        self._button_coordinator = button_coordinator
 
         self._nodes = {spec.node_id: spec for spec in nodes}
         self._build(parent)
@@ -195,12 +198,22 @@ class ClusterPage:
         ).pack(anchor="w", pady=(2, 0))
 
         if spec.selectable:
-            self.button_cls(
+
+            def open_node(node_id: str = spec.node_id) -> None:
+                self.callbacks.on_open_node(node_id)
+
+            button = self.button_cls(
                 row,
                 text="Open",
-                command=lambda: self.callbacks.on_open_node(spec.node_id),
+                command=open_node,
                 style="Neutral.TButton",
-            ).pack(side="right")
+            )
+            button.pack(side="right")
+            coordinator = self._button_coordinator
+            if coordinator is not None:
+                action_id = f"cluster:node:{spec.node_id}:open"
+                coordinator.register(action_id, open_node, replace=True)
+                coordinator.bind(button, action_id)
 
     def focus_back(self) -> None:
         self.back_button.focus_set()

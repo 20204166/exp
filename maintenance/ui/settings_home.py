@@ -18,6 +18,7 @@ from typing import Any
 
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
+from maintenance.ui.action_coordinator import ButtonCoordinator
 
 _CARD_WRAP = 560
 
@@ -65,6 +66,7 @@ class SettingsHome:
         button_cls: Callable[..., Any] = ttk.Button,
         canvas_cls: Callable[..., Any] = tk.Canvas,
         scrollbar_cls: Callable[..., Any] = ttk.Scrollbar,
+        button_coordinator: ButtonCoordinator | None = None,
         colors: dict[str, str] | None = None,
         fonts: dict[str, Any] | None = None,
     ) -> None:
@@ -74,6 +76,7 @@ class SettingsHome:
         self.categories = list(categories)
         self.version = version
         self._category_buttons: dict[str, Any] = {}
+        self._button_coordinator = button_coordinator
 
         self.frame_cls = frame_cls
         self.label_cls = label_cls
@@ -163,6 +166,19 @@ class SettingsHome:
             cursor="hand2",
         )
         button.pack(side="right")
+        coordinator = self._button_coordinator
+        if coordinator is not None:
+            action_id = f"settings:category:{spec.key}"
+
+            def open_category(key: str = spec.key) -> None:
+                self.callbacks.on_select_category(key)
+
+            coordinator.register(
+                action_id,
+                open_category,
+                replace=True,
+            )
+            coordinator.bind(button, action_id)
         self._category_buttons[spec.key] = button
 
     def focus_back(self) -> None:

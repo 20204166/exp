@@ -19,6 +19,7 @@ from typing import Any
 
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
+from maintenance.ui.action_coordinator import ButtonCoordinator
 
 _DEFAULT_COLOR = "indigo"
 
@@ -96,6 +97,7 @@ class NodesConnectionsPage:
         entry_cls: Callable[..., Any] = tk.Entry,
         var_factory: Callable[[], Any] | None = None,
         boolean_var_factory: Callable[[], Any] | None = None,
+        button_coordinator: ButtonCoordinator | None = None,
         colors: dict[str, str] | None = None,
         fonts: dict[str, Any] | None = None,
     ) -> None:
@@ -115,6 +117,7 @@ class NodesConnectionsPage:
         self.checkbutton_cls = checkbutton_cls
         self.combobox_cls = combobox_cls
         self.entry_cls = entry_cls
+        self._button_coordinator = button_coordinator
 
         self._discovered = {spec.node_id: spec for spec in discovered}
         self._trusted = {spec.node_id: spec for spec in trusted}
@@ -177,26 +180,13 @@ class NodesConnectionsPage:
         var = self._boolean_var_factory()
         var.set(discovery_enabled)
         self._discovery_var = var
-
-        def control_factory(row: Any) -> Any:
-            check = self.checkbutton_cls(
-                row,
-                text="Enabled",
-                variable=var,
-                style="App.TCheckbutton",
-                command=lambda: self.callbacks.on_discovery_toggle(var.get()),
-            )
-            check.pack(side="right")
-            return check
-
-        ui_layout.setting_row(
+        self._discovery_toggle = self._boolean_row(
             body,
             "Local-network discovery",
-            control_factory,
-            frame_cls=self.frame_cls,
-            label_cls=self.label_cls,
-            colors=self.colors,
-            fonts=self.fonts,
+            variable=var,
+            control_text="Enabled",
+            on_change=lambda: self.callbacks.on_discovery_toggle(var.get()),
+            action_id="nodes:discovery:toggle",
         )
 
     def _build_discovered_section(self) -> None:
@@ -219,6 +209,7 @@ class NodesConnectionsPage:
 
     def refresh_discovered(self, specs: list[DiscoveredPeerSpec]) -> None:
         self._discovered = {spec.node_id: spec for spec in specs}
+        self._clear_actions("nodes:peer:")
         self._clear(self._discovered_body)
         if not specs:
             self._empty_hint(self._discovered_body, "No peers discovered yet.")
@@ -243,20 +234,27 @@ class NodesConnectionsPage:
             font=self.fonts["body"],
             anchor="w",
         ).pack(side="left", fill="x", expand=True)
-        button = self.button_cls(
+        pair_id = f"nodes:peer:{spec.node_id}:pair"
+        reject_id = f"nodes:peer:{spec.node_id}:reject"
+        pair_command = lambda: self.callbacks.on_pair(spec.node_id)
+        reject_command = lambda: self.callbacks.on_reject(spec.node_id)
+        pair_button = self.button_cls(
             row,
             text="Pair",
-            command=lambda: self.callbacks.on_pair(spec.node_id),
+            command=pair_command,
             style="Neutral.TButton",
             state=tk.NORMAL if spec.compatible else tk.DISABLED,
         )
-        button.pack(side="right")
-        self.button_cls(
+        pair_button.pack(side="right")
+        self._register_button(pair_id, pair_command, pair_button, spec.compatible)
+        reject_button = self.button_cls(
             row,
             text="Reject",
-            command=lambda: self.callbacks.on_reject(spec.node_id),
+            command=reject_command,
             style="Neutral.TButton",
-        ).pack(side="right", padx=(0, 8))
+        )
+        reject_button.pack(side="right", padx=(0, 8))
+        self._register_button(reject_id, reject_command, reject_button, True)
         return row
 
     def _build_trusted_section(self) -> None:
@@ -278,6 +276,7 @@ class NodesConnectionsPage:
 
     def refresh_trusted(self, specs: list[TrustedNodeSpec]) -> None:
         self._trusted = {spec.node_id: spec for spec in specs}
+        self._clear_actions("nodes:trusted:")
         self._clear(self._trusted_body)
         if not specs:
             self._empty_hint(self._trusted_body, "No trusted nodes yet.")
@@ -357,6 +356,7 @@ class NodesConnectionsPage:
                 "Danger.TButton",
             ),
         ):
+            action_id = f"nodes:trusted:{spec.node_id}:{text_.lower()}"
             button = self.button_cls(
                 actions,
                 text=text_,
@@ -365,6 +365,12 @@ class NodesConnectionsPage:
                 state=tk.NORMAL if text_ != "Open" or spec.selectable else tk.DISABLED,
             )
             button.pack(side="left", padx=(6, 0))
+            self._register_button(
+                action_id,
+                command,
+                button,
+                text_ != "Open" or spec.selectable,
+            )
         return row
 
     def _build_manual_hosts_section(self) -> None:
@@ -396,6 +402,12 @@ class NodesConnectionsPage:
             style="Neutral.TButton",
         )
         self.add_host_button.pack(side="right", padx=(8, 0), pady=(4, 0))
+        self._register_button(
+            "nodes:manual:add-host",
+            self._add_manual_host,
+            self.add_host_button,
+            True,
+        )
         self._manual_hosts_body = body
         self.refresh_manual(list(self._manual.values()))
 
@@ -425,6 +437,7 @@ class NodesConnectionsPage:
 
     def refresh_manual(self, specs: list[TrustedNodeSpec]) -> None:
         self._manual = {spec.node_id: spec for spec in specs}
+        self._clear_actions("nodes:manual:")
         self._clear(self._manual_hosts_body)
         if not specs:
             self._empty_hint(self._manual_hosts_body, "No manual hosts configured.")
@@ -446,14 +459,24 @@ class NodesConnectionsPage:
                 font=self.fonts["body"],
                 anchor="w",
             ).pack(side="left", fill="x", expand=True)
-            self.button_cls(
+
+            def remove_manual(node_id: str = spec.node_id) -> None:
+                self.callbacks.on_remove_manual(node_id)
+
+            remove_button = self.button_cls(
                 row,
                 text="Remove",
-                command=lambda node_id=spec.node_id: self.callbacks.on_remove_manual(
-                    node_id
-                ),
+                command=remove_manual,
                 style="Danger.TButton",
-            ).pack(side="right")
+            )
+            remove_button.pack(side="right")
+
+            self._register_button(
+                f"nodes:manual:{spec.node_id}:remove",
+                remove_manual,
+                remove_button,
+                True,
+            )
 
     def _add_manual_host(self) -> None:
         name = self._manual_name_var.get().strip()
@@ -475,6 +498,52 @@ class NodesConnectionsPage:
     def _clear(body: Any) -> None:
         for child in tuple(body.winfo_children()):
             child.destroy()
+
+    def _clear_actions(self, prefix: str) -> None:
+        coordinator = self._button_coordinator
+        if coordinator is not None:
+            coordinator.clear_prefix(prefix)
+
+    def _register_button(
+        self,
+        action_id: str,
+        callback: Callable[[], None],
+        widget: Any,
+        enabled: bool,
+    ) -> None:
+        coordinator = self._button_coordinator
+        if coordinator is None:
+            return
+        coordinator.register(action_id, callback, enabled=enabled, replace=True)
+        coordinator.bind(widget, action_id)
+
+    def _boolean_row(
+        self,
+        parent: Any,
+        label_text: str,
+        *,
+        variable: Any,
+        control_text: str,
+        on_change: Callable[[], None],
+        action_id: str | None = None,
+        help_text: str | None = None,
+    ) -> Any:
+        _, _label, control = ui_layout.boolean_setting_row(
+            parent,
+            label_text,
+            variable=variable,
+            control_text=control_text,
+            on_change=on_change,
+            action_id=action_id,
+            button_coordinator=self._button_coordinator,
+            frame_cls=self.frame_cls,
+            label_cls=self.label_cls,
+            checkbutton_cls=self.checkbutton_cls,
+            colors=self.colors,
+            fonts=self.fonts,
+            help_text=help_text,
+        )
+        return control
 
     def _empty_hint(self, body: Any, text: str) -> None:
         self.label_cls(

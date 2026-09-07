@@ -12,9 +12,11 @@ and importing it has no side effects (no Tk root is created).
   for smooth status transitions.
 """
 
+from .action_coordinator import ButtonCoordinator
 from .layout import (
     FOOTER_GUTTER,
     SCROLLBAR_GUTTER,
+    boolean_setting_row,
     dashboard_header,
     dialog_footer,
     dialog_heading,
@@ -99,6 +101,7 @@ __all__ = [
     "STYLE_STATUS_BUSY",
     "STYLE_STATUS_READY",
     "STYLE_TITLE",
+    "ButtonCoordinator",
     "PageBuilder",
     "PageRouter",
     "PageSpec",
@@ -109,6 +112,7 @@ __all__ = [
     "apply_reset",
     "apply_scanning",
     "apply_step",
+    "boolean_setting_row",
     "configure_app_styles",
     "dashboard_header",
     "dialog_footer",

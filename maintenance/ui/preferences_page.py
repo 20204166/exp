@@ -21,6 +21,7 @@ from typing import Any
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import scan_status
 from maintenance.ui import styles as ui_styles
+from maintenance.ui.action_coordinator import ButtonCoordinator
 
 _SECONDS_UNIT = "seconds"
 
@@ -95,6 +96,7 @@ class PreferencesPage:
         progressbar_cls: Callable[..., Any] = ttk.Progressbar,
         var_factory: Callable[[], Any] | None = None,
         boolean_var_factory: Callable[[], Any] | None = None,
+        button_coordinator: ButtonCoordinator | None = None,
         colors: dict[str, str] | None = None,
         fonts: dict[str, Any] | None = None,
     ) -> None:
@@ -110,6 +112,7 @@ class PreferencesPage:
         self._appearance_options = appearance_options or tuple(
             sorted(ui_styles.ACCENT_THEMES)
         )
+        self._button_coordinator = button_coordinator
 
         self.frame_cls = frame_cls
         self.label_cls = label_cls
@@ -269,27 +272,20 @@ class PreferencesPage:
             var.set(spec.enabled)
             self._card_vars[spec.key] = var
 
-            def control_factory(
-                row: Any,
-                key: str = spec.key,
-                variable: Any = var,
-            ) -> Any:
-                check = self.checkbutton_cls(
-                    row,
-                    text="Show card",
-                    variable=variable,
-                    style="App.TCheckbutton",
-                    command=lambda: self._on_card_toggle(key),
-                )
-                check.pack(side="right")
-                return check
+            def toggle_card(key: str = spec.key) -> None:
+                self._on_card_toggle(key)
 
-            ui_layout.setting_row(
+            ui_layout.boolean_setting_row(
                 body,
                 spec.title,
-                control_factory,
+                variable=var,
+                control_text="Show card",
+                on_change=toggle_card,
+                action_id=f"preferences:card:{spec.key}:visibility",
+                button_coordinator=self._button_coordinator,
                 frame_cls=self.frame_cls,
                 label_cls=self.label_cls,
+                checkbutton_cls=self.checkbutton_cls,
                 colors=self.colors,
                 fonts=self.fonts,
             )
@@ -330,6 +326,23 @@ class PreferencesPage:
             cursor="hand2",
         )
         self.analyze_button.pack(side="right", padx=(0, 10))
+        if self._button_coordinator is not None:
+            self._button_coordinator.register(
+                "preferences:scan",
+                self.callbacks.on_scan,
+                replace=True,
+            )
+            self._button_coordinator.bind(self.analyze_button, "preferences:scan")
+            self._button_coordinator.register(
+                "preferences:cancel-scan",
+                self.callbacks.on_cancel_scan,
+                enabled=False,
+                replace=True,
+            )
+            self._button_coordinator.bind(
+                self.cancel_button,
+                "preferences:cancel-scan",
+            )
         self.manual_status_label = self.style_label_cls(
             body,
             text=scan_status.READY_TEXT,
@@ -358,23 +371,17 @@ class PreferencesPage:
         var.set(hide_unavailable_cards)
         self._auto_hide_var = var
 
-        def control_factory(row: Any) -> Any:
-            check = self.checkbutton_cls(
-                row,
-                text="Enabled",
-                variable=var,
-                style="App.TCheckbutton",
-                command=lambda: self.callbacks.on_auto_hide_change(var.get()),
-            )
-            check.pack(side="right")
-            return check
-
-        ui_layout.setting_row(
+        ui_layout.boolean_setting_row(
             body,
             "Hide unavailable cards automatically",
-            control_factory,
+            variable=var,
+            control_text="Enabled",
+            on_change=lambda: self.callbacks.on_auto_hide_change(var.get()),
+            action_id="preferences:auto-hide",
+            button_coordinator=self._button_coordinator,
             frame_cls=self.frame_cls,
             label_cls=self.label_cls,
+            checkbutton_cls=self.checkbutton_cls,
             colors=self.colors,
             fonts=self.fonts,
             help_text=(
@@ -439,6 +446,13 @@ class PreferencesPage:
             style="Neutral.TButton",
         )
         self.reset_button.pack(anchor="w")
+        if self._button_coordinator is not None:
+            self._button_coordinator.register(
+                "preferences:reset",
+                self.callbacks.on_reset,
+                replace=True,
+            )
+            self._button_coordinator.bind(self.reset_button, "preferences:reset")
 
     def show_status(self, message: str) -> None:
         self.status_label.config(text=message, fg=self.colors["secondary"])

@@ -4,6 +4,7 @@ import unittest
 from typing import Any
 from unittest.mock import Mock
 
+from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.settings_home import (
     SettingsCategorySpec,
     SettingsHome,
@@ -23,6 +24,7 @@ def make_home(
     callbacks: SettingsHomeCallbacks | None = None,
     categories: list[SettingsCategorySpec] | None = None,
     version: str | None = None,
+    button_coordinator: ButtonCoordinator | None = None,
 ) -> tuple[SettingsHome, RecordingWidget, WidgetRecorder]:
     recorder = WidgetRecorder()
     parent = recorder.parent()
@@ -46,6 +48,7 @@ def make_home(
         button_cls=recorder.button_cls(),
         canvas_cls=recorder.canvas_cls(),
         scrollbar_cls=recorder.scrollbar_cls(),
+        button_coordinator=button_coordinator,
     )
     return home, parent, recorder
 
@@ -77,6 +80,17 @@ class SettingsHomeTests(unittest.TestCase):
         home.category_button("preferences").kwargs["command"]()
 
         callbacks.on_select_category.assert_called_once_with("preferences")
+
+    def test_category_button_registers_stable_action_id_when_coordinator_present(
+        self,
+    ) -> None:
+        coordinator = ButtonCoordinator()
+        callbacks = make_callbacks()
+        home, _parent, _recorder = make_home(callbacks, button_coordinator=coordinator)
+
+        self.assertIn("settings:category:preferences", coordinator.registered_ids())
+        home.category_button("preferences").config_options["command"]()
+        callbacks.on_select_category.assert_called_with("preferences")
 
     def test_back_button_invokes_on_back(self) -> None:
         callbacks = make_callbacks()

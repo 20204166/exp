@@ -217,6 +217,14 @@ def node_operation_key(node_id: NodeId, operation: str) -> str:
     return f"node:{node_id.value}:{operation}"
 
 
+def operation_key(node_id: NodeId | None, operation: str) -> str:
+    """Return the local or node-qualified operation key for one action."""
+
+    if node_id is None:
+        return operation
+    return node_operation_key(node_id, operation)
+
+
 @dataclass(frozen=True, slots=True)
 class ProcessRef:
     """A process reference bound to one node.

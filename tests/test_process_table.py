@@ -15,6 +15,7 @@ from maintenance.dialogs import (
     process_row_tags,
     process_sort_key,
     rebuild_tree_rows,
+    selected_items,
 )
 from maintenance.models import ProcessCandidate
 from maintenance.scanner import SystemScanner
@@ -143,6 +144,18 @@ class ProcessTableHelperTests(unittest.TestCase):
         rebuild_tree_rows(tree, [("3", ("gamma",), ())])
         self.assertEqual(len(tree.rows), 1)
         self.assertEqual(tree.rows[0][0], "3")
+
+    def test_selected_items_skips_stale_ids_and_transforms_keys(self) -> None:
+        class FakeTree:
+            def selection(self) -> tuple[str, ...]:
+                return ("10", "missing", "11")
+
+        lookup = {10: "alpha", 11: "beta"}
+
+        self.assertEqual(
+            selected_items(FakeTree(), lookup, key_transform=int),
+            ["alpha", "beta"],
+        )
 
     def test_finish_refresh_clears_active_state(self) -> None:
         dialog = object.__new__(ProcessDialog)

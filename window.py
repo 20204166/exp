@@ -86,6 +86,7 @@ from maintenance.ui import scan_status
 from maintenance.ui import settings_home as ui_settings_home
 from maintenance.ui import styles as ui_styles
 from maintenance.ui import transition as ui_transition
+from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.navigation import PageRouter, PageSpec
 
 LOGGER = logging.getLogger(__name__)
@@ -161,6 +162,7 @@ class AppWindow:
         self._component_scheduler = ComponentRefreshScheduler(
             self._preferences.refresh_intervals.as_dict()
         )
+        self._button_coordinator = ButtonCoordinator()
         self._feature_catalog = ResourceFeatureCatalog()
         self._component_poll_id: str | None = None
         self._capabilities: dict[str, CapabilityState] = {}
@@ -380,6 +382,18 @@ class AppWindow:
             style="Neutral.TButton",
             cursor="hand2",
         )
+        self._button_coordinator.register(
+            "dashboard:settings",
+            self._show_settings_page,
+            replace=True,
+        )
+        self._button_coordinator.bind(self.settings_button, "dashboard:settings")
+        self._button_coordinator.register(
+            "dashboard:cluster",
+            self._show_cluster_page,
+            replace=True,
+        )
+        self._button_coordinator.bind(self.cluster_button, "dashboard:cluster")
         self._build_node_selector(self.header_actions)
         self.settings_button.pack(anchor="e")
         self.cluster_button.pack(anchor="e", padx=(8, 0))
@@ -433,12 +447,24 @@ class AppWindow:
 
         self.cards: dict[str, ResourceCard] = {}
         for index, feature in enumerate(self._feature_catalog.all()):
+            action_id = f"dashboard:resource:{feature.key}"
+
+            def open_feature(key: str = feature.key) -> None:
+                self.open_resource(key)
+
+            self._button_coordinator.register(
+                action_id,
+                open_feature,
+                replace=True,
+            )
             card = ResourceCard(
                 self.cards_frame,
                 key=feature.key,
                 title=feature.title,
                 on_open=self.open_resource,
                 colors=self.colors,
+                action_id=action_id,
+                button_coordinator=self._button_coordinator,
             )
             self._grid_card(card, index, 3)
             self.cards[feature.key] = card
@@ -475,6 +501,7 @@ class AppWindow:
             ),
             categories=self._settings_categories(),
             version=__version__,
+            button_coordinator=self._button_coordinator,
         )
         return self.settings_frame
 
@@ -528,6 +555,7 @@ class AppWindow:
             cards=self._card_specs(),
             hide_unavailable_cards=self._preferences.hide_unavailable_cards,
             appearance=self._preferences.appearance,
+            button_coordinator=self._button_coordinator,
         )
         self.analyze_button = self.preferences_page.analyze_button
         self.cancel_button = self.preferences_page.cancel_button
@@ -624,6 +652,7 @@ class AppWindow:
             discovered=self._nodes_peer_specs(),
             trusted=self._nodes_trusted_specs(),
             manual=self._nodes_manual_specs(),
+            button_coordinator=self._button_coordinator,
         )
         return self.nodes_frame
 
@@ -739,6 +768,7 @@ class AppWindow:
                 on_open_node=self._open_cluster_node,
             ),
             nodes=self._cluster_specs(),
+            button_coordinator=self._button_coordinator,
         )
         return self.cluster_frame
 
@@ -1502,6 +1532,12 @@ class AppWindow:
     def _set_busy(self, is_busy: bool) -> None:
         self.analyze_button.config(state=tk.DISABLED if is_busy else tk.NORMAL)
         self.cancel_button.config(state=tk.NORMAL if is_busy else tk.DISABLED)
+        coordinator = getattr(self, "_button_coordinator", None)
+        if coordinator is not None:
+            if "preferences:scan" in coordinator.registered_ids():
+                coordinator.set_enabled("preferences:scan", not is_busy)
+            if "preferences:cancel-scan" in coordinator.registered_ids():
+                coordinator.set_enabled("preferences:cancel-scan", is_busy)
 
         if is_busy:
             self.__dict__["_scan_progress_count"] = 0
@@ -1533,6 +1569,12 @@ class AppWindow:
             return
         self._analysis_cancel_event.set()
         self.cancel_button.config(state=tk.DISABLED)
+        coordinator = getattr(self, "_button_coordinator", None)
+        if (
+            coordinator is not None
+            and "preferences:cancel-scan" in coordinator.registered_ids()
+        ):
+            coordinator.set_enabled("preferences:cancel-scan", False)
         self._for_each_presentation_target(
             lambda label, _bar: scan_status.apply_cancelling(label)
         )
