@@ -700,6 +700,16 @@ class AppWindowTests(unittest.TestCase):
         window.status_label.config.assert_called_with(text="x")
         window.progress_bar.stop.assert_called_once()
 
+    def test_render_visibility_tracks_active_page(self) -> None:
+        window = self.make_window()
+        window._ui_coordinator = Mock()
+
+        window._sync_render_visibility("nodes")
+
+        window._ui_coordinator.set_visible.assert_any_call("dashboard-snapshot", False)
+        window._ui_coordinator.set_visible.assert_any_call("scan-status", False)
+        window._ui_coordinator.set_visible.assert_any_call("discovery-pages", True)
+
     def test_cancelled_scan_keeps_previous_results_without_error_dialog(self) -> None:
         window = self.make_window()
         window._scan_coordinator.generation = 1

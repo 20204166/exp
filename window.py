@@ -82,6 +82,7 @@ from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import nodes_connections as ui_nodes
 from maintenance.ui import preferences_page as ui_preferences
+from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui import scan_status
 from maintenance.ui import settings_home as ui_settings_home
 from maintenance.ui import styles as ui_styles
@@ -163,6 +164,7 @@ class AppWindow:
             self._preferences.refresh_intervals.as_dict()
         )
         self._button_coordinator = ButtonCoordinator()
+        self._ui_coordinator = ui_render.UICoordinator()
         self._feature_catalog = ResourceFeatureCatalog()
         self._component_poll_id: str | None = None
         self._capabilities: dict[str, CapabilityState] = {}
@@ -326,7 +328,41 @@ class AppWindow:
         self._page_router.register(PageSpec(NODES_PAGE, self._build_nodes_page))
         self._page_router.register(PageSpec(CLUSTER_PAGE, self._build_cluster_page))
         self._page_router.show(DASHBOARD_PAGE)
+        self._sync_render_visibility(DASHBOARD_PAGE)
         self._reconcile_cards_and_polling()
+
+    def _render_coordinator(self) -> ui_render.UICoordinator | None:
+        return getattr(self, "_ui_coordinator", None)
+
+    def _request_render(
+        self,
+        intent: ui_render.RenderIntent,
+        apply: Callable[[ui_render.RenderIntent], None],
+    ) -> bool:
+        coordinator = self._render_coordinator()
+        if coordinator is None:
+            apply(intent)
+            return True
+        return coordinator.request(intent, apply)
+
+    def _sync_render_visibility(self, active_page: str | None) -> None:
+        coordinator = self._render_coordinator()
+        if coordinator is None:
+            return
+        dashboard_visible = active_page == DASHBOARD_PAGE
+        coordinator.set_visible("dashboard-snapshot", dashboard_visible)
+        coordinator.set_visible(
+            "scan-status",
+            active_page in {DASHBOARD_PAGE, PREFERENCES_PAGE},
+        )
+        coordinator.set_visible("dashboard-discovery", active_page == DASHBOARD_PAGE)
+        coordinator.set_visible(
+            "discovery-pages",
+            active_page in {NODES_PAGE, CLUSTER_PAGE},
+        )
+        coordinator.set_visible("nodes-status", active_page == NODES_PAGE)
+        for feature in self._feature_catalog.all():
+            coordinator.set_visible(f"component:{feature.key}", dashboard_visible)
 
     def _build_dashboard_page(self, parent: Any) -> Any:
         self.main_frame = ttk.Frame(
@@ -592,14 +628,17 @@ class AppWindow:
 
     def _show_settings_page(self) -> None:
         self._page_router.show(SETTINGS_PAGE)
+        self._sync_render_visibility(SETTINGS_PAGE)
         self.settings_home.focus_back()
 
     def _show_preferences_page(self) -> None:
         self._page_router.show(PREFERENCES_PAGE)
+        self._sync_render_visibility(PREFERENCES_PAGE)
         self.preferences_page.focus_back()
 
     def _show_dashboard_page(self) -> None:
         self._page_router.show(DASHBOARD_PAGE)
+        self._sync_render_visibility(DASHBOARD_PAGE)
         button = getattr(self, "settings_button", None)
         if button is not None:
             button.focus_set()
@@ -623,6 +662,7 @@ class AppWindow:
     def _show_nodes_page(self) -> None:
         self._refresh_nodes_page()
         self._page_router.show(NODES_PAGE)
+        self._sync_render_visibility(NODES_PAGE)
         page = getattr(self, "nodes_page", None)
         if page is not None:
             page.focus_back()
@@ -741,16 +781,31 @@ class AppWindow:
     def _nodes_status(self, message: str) -> None:
         page = getattr(self, "nodes_page", None)
         if page is not None:
-            page.show_status(message)
+            self._request_render(
+                ui_render.RenderIntent(
+                    target="nodes-status",
+                    payload=message,
+                    priority=1,
+                ),
+                lambda intent: page.show_status(cast(str, intent.payload)),
+            )
 
     def _nodes_error(self, message: str) -> None:
         page = getattr(self, "nodes_page", None)
         if page is not None:
-            page.show_error(message)
+            self._request_render(
+                ui_render.RenderIntent(
+                    target="nodes-status",
+                    payload=message,
+                    priority=1,
+                ),
+                lambda intent: page.show_error(cast(str, intent.payload)),
+            )
 
     def _show_cluster_page(self) -> None:
         self._refresh_cluster_page()
         self._page_router.show(CLUSTER_PAGE)
+        self._sync_render_visibility(CLUSTER_PAGE)
         page = getattr(self, "cluster_page", None)
         if page is not None:
             page.focus_back()
@@ -1226,6 +1281,11 @@ class AppWindow:
         self.__dict__["_selected_node_id"] = node_id
         context = registry.selected_context()
         self._cancel_active_scan()
+        coordinator = self._render_coordinator()
+        if coordinator is not None:
+            generation = self._scan_coordinator_state().generation
+            coordinator.invalidate(DASHBOARD_PAGE, generation)
+            coordinator.invalidate("scan-status", generation)
         self._sync_selected_context_mirrors(context)
         self._render_selected_node(context)
         self._schedule_timer(0, self.handle_analyze)
@@ -1355,14 +1415,24 @@ class AppWindow:
                 trusted_descriptor = context.descriptor
             trusted_updated = self._sync_trusted_node_endpoint(candidate)
             trusted_specs = self._nodes_trusted_specs() if trusted_descriptor else ()
-            ui_discovery_refresh.refresh_discovery_views(
-                page=getattr(self, "nodes_page", None),
-                peer_specs=self._nodes_peer_specs(),
-                trusted_specs=trusted_specs,
-                refresh_trusted=trusted_descriptor is not None,
-                refresh_cluster_page=self._refresh_cluster_page,
-                status_label=getattr(self, "discovery_status_label", None),
-                discovered_candidates=registry.discovered_candidates(),
+            self._request_render(
+                ui_render.RenderIntent(
+                    target="discovery-pages",
+                    node_id=self._selected_node_id,
+                    components=frozenset({"nodes", "cluster"}),
+                    layout_changed=True,
+                    payload=(trusted_descriptor, trusted_specs),
+                    priority=2,
+                ),
+                lambda _intent: ui_discovery_refresh.refresh_discovery_views(
+                    page=getattr(self, "nodes_page", None),
+                    peer_specs=self._nodes_peer_specs(),
+                    trusted_specs=trusted_specs,
+                    refresh_trusted=trusted_descriptor is not None,
+                    refresh_cluster_page=self._refresh_cluster_page,
+                    status_label=getattr(self, "discovery_status_label", None),
+                    discovered_candidates=registry.discovered_candidates(),
+                ),
             )
             if trusted_updated:
                 try:
@@ -1389,16 +1459,26 @@ class AppWindow:
                 context = None
             if context is not None and is_trusted_descriptor(context.descriptor):
                 trusted_descriptor = context.descriptor
-        ui_discovery_refresh.refresh_discovery_views(
-            page=getattr(self, "nodes_page", None),
-            peer_specs=self._nodes_peer_specs(),
-            trusted_specs=(),
-            refresh_trusted=trusted_descriptor is not None,
-            refresh_cluster_page=self._refresh_cluster_page,
-            status_label=getattr(self, "discovery_status_label", None),
-            discovered_candidates=registry.discovered_candidates()
-            if registry is not None
-            else (),
+        self._request_render(
+            ui_render.RenderIntent(
+                target="discovery-pages",
+                node_id=self._selected_node_id,
+                components=frozenset({"nodes", "cluster"}),
+                layout_changed=True,
+                payload=stable_id,
+                priority=2,
+            ),
+            lambda _intent: ui_discovery_refresh.refresh_discovery_views(
+                page=getattr(self, "nodes_page", None),
+                peer_specs=self._nodes_peer_specs(),
+                trusted_specs=(),
+                refresh_trusted=trusted_descriptor is not None,
+                refresh_cluster_page=self._refresh_cluster_page,
+                status_label=getattr(self, "discovery_status_label", None),
+                discovered_candidates=registry.discovered_candidates()
+                if registry is not None
+                else (),
+            ),
         )
 
     def _sync_trusted_node_endpoint(self, candidate: Any) -> bool:
@@ -1468,9 +1548,21 @@ class AppWindow:
     def _refresh_discovery_status(self) -> None:
         """Render untrusted peer presence without offering any interaction."""
 
-        ui_discovery_refresh.render_discovery_status(
-            getattr(self, "discovery_status_label", None),
-            self._node_registry.discovered_candidates(),
+        label = getattr(self, "discovery_status_label", None)
+        if label is None:
+            return
+        self._request_render(
+            ui_render.RenderIntent(
+                target="dashboard-discovery",
+                components=frozenset({"discovery"}),
+                layout_changed=True,
+                payload=self._node_registry.discovered_candidates(),
+                priority=1,
+            ),
+            lambda _intent: ui_discovery_refresh.render_discovery_status(
+                label,
+                self._node_registry.discovered_candidates(),
+            ),
         )
 
     def _stop_discovery(self) -> None:
@@ -1660,28 +1752,35 @@ class AppWindow:
     def _drain_background_queue(self) -> None:
         self._background_poll_id = None
 
-        while True:
-            try:
-                item = self._background_queue.get_nowait()
-            except Empty:
-                break
+        coordinator = self._render_coordinator()
+        if coordinator is not None:
+            coordinator.begin_batch()
+        try:
+            while True:
+                try:
+                    item = self._background_queue.get_nowait()
+                except Empty:
+                    break
 
-            if item is None:
-                self._background_tasks = max(0, self._background_tasks - 1)
-                self._resolve_completed_worker()
-                continue
+                if item is None:
+                    self._background_tasks = max(0, self._background_tasks - 1)
+                    self._resolve_completed_worker()
+                    continue
 
-            if isinstance(item, tuple) and len(item) == 2 and item[0] == "ui":
+                if isinstance(item, tuple) and len(item) == 2 and item[0] == "ui":
+                    if not self._is_closing:
+                        self._invoke_delivered(cast(Callable[[], None], item[1]))
+                    continue
+
+                callback, args = cast(
+                    tuple[Callable[..., None], tuple[object, ...]],
+                    item,
+                )
                 if not self._is_closing:
-                    self._invoke_delivered(cast(Callable[[], None], item[1]))
-                continue
-
-            callback, args = cast(
-                tuple[Callable[..., None], tuple[object, ...]],
-                item,
-            )
-            if not self._is_closing:
-                callback(*args)
+                    callback(*args)
+        finally:
+            if coordinator is not None:
+                coordinator.end_batch()
 
         coordinator = self.__dict__.get("_coordinator")
         pending = coordinator is not None and coordinator.has_pending_work
@@ -1701,6 +1800,10 @@ class AppWindow:
         generation, started = self._scan_coordinator_state().begin()
         if not started:
             return
+        coordinator = self._render_coordinator()
+        if coordinator is not None:
+            coordinator.invalidate("scan-status", generation)
+            coordinator.invalidate("dashboard-snapshot", generation)
 
         cancel_event = threading.Event()
         self._analysis_cancel_event = cancel_event
@@ -1716,7 +1819,17 @@ class AppWindow:
         )
 
         def report_progress(message: str) -> None:
-            self._background_queue.put((self._show_progress, (message,)))
+            self._request_render(
+                ui_render.RenderIntent(
+                    target="scan-status",
+                    generation=generation,
+                    node_id=source_node_id,
+                    components=frozenset({"progress"}),
+                    payload=message,
+                    priority=1,
+                ),
+                lambda intent: self._show_progress(cast(str, intent.payload)),
+            )
 
         def dashboard_task() -> DashboardSnapshot:
             return call_legacy_compatible(
@@ -1727,18 +1840,45 @@ class AppWindow:
                 lambda: source_provider.dashboard_snapshot(),
             )
 
+        def queue_snapshot(snapshot: DashboardSnapshot) -> None:
+            self._request_render(
+                ui_render.RenderIntent(
+                    target="dashboard-snapshot",
+                    generation=generation,
+                    node_id=source_node_id,
+                    components=frozenset({"snapshot"}),
+                    layout_changed=True,
+                    payload=snapshot,
+                    priority=3,
+                ),
+                lambda intent: self._show_snapshot_for_generation(
+                    generation,
+                    cast(DashboardSnapshot, intent.payload),
+                    node_id=source_node_id,
+                ),
+            )
+
+        def queue_error(message: str) -> None:
+            self._request_render(
+                ui_render.RenderIntent(
+                    target="scan-status",
+                    generation=generation,
+                    node_id=source_node_id,
+                    components=frozenset({"error"}),
+                    payload=message,
+                    priority=2,
+                ),
+                lambda intent: self._show_error_for_generation(
+                    generation,
+                    cast(str, intent.payload),
+                    node_id=source_node_id,
+                ),
+            )
+
         self._run_in_background(
             dashboard_task,
-            on_success=lambda snapshot: self._show_snapshot_for_generation(
-                generation,
-                snapshot,
-                node_id=source_node_id,
-            ),
-            on_error=lambda message: self._show_error_for_generation(
-                generation,
-                message,
-                node_id=source_node_id,
-            ),
+            on_success=queue_snapshot,
+            on_error=queue_error,
         )
 
     def _claim_scan_resolution(self, generation: int) -> tuple[bool, bool]:
@@ -2138,23 +2278,47 @@ class AppWindow:
         ) -> ResourceSummary:
             return source_provider.component_summary(key)
 
+        def queue_component_snapshot(resource: ResourceSummary) -> None:
+            self._request_render(
+                ui_render.RenderIntent(
+                    target=f"component:{key}",
+                    node_id=source_node_id,
+                    components=frozenset({key}),
+                    payload=resource,
+                    priority=2,
+                ),
+                lambda intent: self._queue_component_result(
+                    key,
+                    started_at,
+                    cast(ResourceSummary, intent.payload),
+                    node_id=source_node_id,
+                    scheduler=source_scheduler,
+                ),
+            )
+
+        def queue_component_error(message: str) -> None:
+            self._request_render(
+                ui_render.RenderIntent(
+                    target=f"component:{key}",
+                    node_id=source_node_id,
+                    components=frozenset({key}),
+                    payload=RuntimeError(message),
+                    priority=2,
+                ),
+                lambda intent: self._queue_component_result(
+                    key,
+                    started_at,
+                    cast(Exception, intent.payload),
+                    node_id=source_node_id,
+                    scheduler=source_scheduler,
+                ),
+            )
+
         self._coordinator.run(
             self._operation_key(f"component:{key}"),
             task_factory,
-            on_result=lambda _operation, resource: self._queue_component_result(
-                key,
-                started_at,
-                resource,
-                node_id=source_node_id,
-                scheduler=source_scheduler,
-            ),
-            on_error=lambda _operation, message: self._queue_component_result(
-                key,
-                started_at,
-                RuntimeError(message),
-                node_id=source_node_id,
-                scheduler=source_scheduler,
-            ),
+            on_result=lambda _operation, resource: queue_component_snapshot(resource),
+            on_error=lambda _operation, message: queue_component_error(message),
         )
 
     def _queue_component_result(
@@ -2554,6 +2718,9 @@ class AppWindow:
         self._component_poll_id = None
         self._background_poll_id = None
         self._scan_timeout_id = None
+        coordinator = self._render_coordinator()
+        if coordinator is not None:
+            coordinator.shutdown()
 
     def _stop_all_node_workers(self) -> None:
         """Stop every registered node's persistent scanner workers.
