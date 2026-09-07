@@ -3,8 +3,9 @@
 import threading
 import unittest
 from queue import Queue
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from maintenance.cluster import ClusterState, trusted_node_record
 from maintenance.components import ScanCoordinator
@@ -27,6 +28,7 @@ from maintenance.nodes import (
     NodeStatus,
     NodeTrustState,
     local_node_descriptor,
+    node_operation_key,
 )
 from tests.support.models import make_snapshot, make_summary
 from tests.support.scheduling import TimerMaster
@@ -370,6 +372,33 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window._node_registry.context(
             NodeId("dev")
         ).provider.component_summary.assert_not_called()
+
+    def test_cancel_node_operations_releases_governor_admissions(self) -> None:
+        window = _make_window(
+            _trusted_context("dev", "Dev Node", cpu_value="dev", host_label="dev")
+        )
+        dev = window._node_registry.context(NodeId("dev"))
+        window._feature_catalog.all = lambda: [
+            SimpleNamespace(key="cpu"),
+            SimpleNamespace(key="gpu"),
+        ]
+        window._coordinator = Mock()
+        window._resource_governor = Mock()
+
+        window._cancel_node_operations(dev)
+
+        window._coordinator.cancel.assert_has_calls(
+            [
+                call(node_operation_key(NodeId("dev"), "component:cpu")),
+                call(node_operation_key(NodeId("dev"), "component:gpu")),
+            ]
+        )
+        window._resource_governor.release.assert_has_calls(
+            [
+                call(node_operation_key(NodeId("dev"), "component:cpu")),
+                call(node_operation_key(NodeId("dev"), "component:gpu")),
+            ]
+        )
 
     def test_switch_to_unscanned_node_clears_dashboard_cards(self) -> None:
         window = _make_window(

@@ -39,11 +39,7 @@ class ButtonCoordinator:
         existing = self._actions.get(action_id)
         if existing is not None and not replace:
             raise ValueError(f"Action already registered: {action_id}")
-        widgets = [
-            widget
-            for widget in (existing.widgets if existing is not None else [])
-            if self._widget_exists(widget)
-        ]
+        widgets = self._live_widgets(existing.widgets if existing is not None else [])
         self._actions[action_id] = _ActionRecord(
             callback=callback,
             enabled=enabled,
@@ -69,7 +65,11 @@ class ButtonCoordinator:
                 config(command=self.command(action_id))
             except TypeError:
                 pass
-        self._apply_state(widget, record.enabled)
+            except tk.TclError:
+                record.widgets = [item for item in record.widgets if item is not widget]
+                return
+        if not self._apply_state(widget, record.enabled):
+            record.widgets = [item for item in record.widgets if item is not widget]
 
     def dispatch(self, action_id: str) -> bool:
         record = self._actions.get(action_id)
@@ -117,6 +117,12 @@ class ButtonCoordinator:
         except tk.TclError:
             return False
         return True
+
+    @staticmethod
+    def _live_widgets(widgets: list[Any]) -> list[Any]:
+        return [
+            widget for widget in widgets if ButtonCoordinator._widget_exists(widget)
+        ]
 
     @staticmethod
     def _widget_exists(widget: Any) -> bool:

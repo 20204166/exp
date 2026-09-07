@@ -1365,11 +1365,16 @@ class AppWindow:
         if context is None:
             return
         coordinator = self.__dict__.get("_coordinator")
+        governor = self.__dict__.get("_resource_governor")
         scheduler = getattr(context, "scheduler", None)
         node_id = getattr(context.descriptor, "id", None)
         for feature in self._feature_catalog.all():
             if coordinator is not None and node_id is not None:
                 coordinator.cancel(
+                    node_operation_key(node_id, f"component:{feature.key}")
+                )
+            if governor is not None and node_id is not None:
+                governor.release(
                     node_operation_key(node_id, f"component:{feature.key}")
                 )
             cancel = getattr(scheduler, "cancel", None)
@@ -2991,6 +2996,9 @@ class AppWindow:
         if coordinator is not None:
             coordinator.cancel_all()
         self._cancel_all_node_operations()
+        cluster_page = getattr(self, "cluster_page", None)
+        if cluster_page is not None:
+            cluster_page.dispose()
         self._cancel_pending_timers()
         self._component_poll_id = None
         self._background_poll_id = None

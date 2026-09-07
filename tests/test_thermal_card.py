@@ -113,6 +113,25 @@ class BatteryCardTests(unittest.TestCase):
             ("Charge: 75.0%", "Power: Charging"),
         )
 
+    def test_battery_card_includes_temperature_lines(self) -> None:
+        scanner = SystemScanner(Path("Downloads"))
+
+        summary = scanner._battery_resource(
+            _battery(75.0, True),
+            None,
+            ["CPU: 45°C", "NVMe: 38°C"],
+        )
+
+        self.assertEqual(
+            summary.details,
+            (
+                "Charge: 75.0%",
+                "Power: Charging",
+                "CPU: 45°C",
+                "NVMe: 38°C",
+            ),
+        )
+
     def test_no_battery_card_points_to_section_temperatures(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
 
@@ -123,7 +142,7 @@ class BatteryCardTests(unittest.TestCase):
         self.assertIsNone(summary.percent)
         self.assertEqual(
             summary.details,
-            ("Temperature readings are shown in the CPU, GPU and Storage sections.",),
+            ("CPU: 45°C", "NVMe: 38°C"),
         )
 
     def test_no_battery_without_sensors_is_clearly_marked(self) -> None:
@@ -216,7 +235,7 @@ class BatteryCardTests(unittest.TestCase):
         self.assertEqual(battery_card.subtitle, "Not present on this system")
         self.assertEqual(
             battery_card.details,
-            ("Temperature readings are shown in the CPU, GPU and Storage sections.",),
+            ("CPU: 45°C",),
         )
         self.assertIn("Temperature: 45°C", snapshot.get("cpu").details)
 
@@ -245,8 +264,9 @@ class SectionTemperatureTests(unittest.TestCase):
         self.assertIn("Temperature: 51°C", snapshot.get("gpu").details)
         self.assertIn("Drive temperature: 38°C", snapshot.get("storage").details)
         self.assertEqual(snapshot.get("cpu").temperatures[0].value_celsius, 45.0)
-        self.assertNotIn("45°C", snapshot.get("battery").details)
-        self.assertNotIn("51°C", snapshot.get("battery").details)
+        self.assertIn("CPU: 45°C", snapshot.get("battery").details)
+        self.assertIn("GPU: 51°C", snapshot.get("battery").details)
+        self.assertIn("NVMe: 38°C", snapshot.get("battery").details)
 
     def test_sections_omit_temperature_when_sensor_missing(self) -> None:
         scanner = SystemScanner(Path("Downloads"))

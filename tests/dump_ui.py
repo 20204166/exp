@@ -289,10 +289,8 @@ def main():
                     "Battery",
                     (
                         "Battery information is unavailable.",
-                        (
-                            "Temperature readings are shown in the CPU, GPU and "
-                            "Storage sections."
-                        ),
+                        "CPU: 45°C",
+                        "NVMe: 38°C",
                     ),
                     value="No battery",
                 ),

@@ -80,6 +80,7 @@ class ClusterPage:
         self.callbacks = callbacks
         self.colors = ui_styles.COLORS if colors is None else colors
         self.fonts = ui_styles.FONTS if fonts is None else fonts
+        self._disposed = False
 
         self.frame_cls = frame_cls
         self.label_cls = label_cls
@@ -132,7 +133,11 @@ class ClusterPage:
         self.refresh_nodes(list(self._nodes.values()))
 
     def refresh_nodes(self, nodes: list[ClusterNodeSpec]) -> None:
+        if self._disposed:
+            return
         self._nodes = {spec.node_id: spec for spec in nodes}
+        if self._button_coordinator is not None:
+            self._button_coordinator.clear_prefix("cluster:node:")
         for child in tuple(self._body.winfo_children()):
             child.destroy()
         if not nodes:
@@ -147,6 +152,15 @@ class ClusterPage:
             return
         for spec in nodes:
             self._node_row(self._body, spec)
+
+    def dispose(self) -> None:
+        if self._disposed:
+            return
+        self._disposed = True
+        if self._button_coordinator is not None:
+            self._button_coordinator.clear_prefix("cluster:node:")
+        for child in tuple(self._body.winfo_children()):
+            child.destroy()
 
     def _node_row(self, body: Any, spec: ClusterNodeSpec) -> None:
         row = self.frame_cls(body, bg=self.colors["card"])

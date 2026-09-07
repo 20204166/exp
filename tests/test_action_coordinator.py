@@ -1,5 +1,6 @@
 """Tests for the reusable direct-action coordinator."""
 
+import tkinter as tk
 import unittest
 from unittest.mock import Mock
 
@@ -90,6 +91,29 @@ class ButtonCoordinatorTests(unittest.TestCase):
 
         with self.assertRaises(KeyError):
             coordinator.bind(RecordingWidget(), "missing")
+
+    def test_bind_tcl_error_drops_dead_widget(self) -> None:
+        coordinator = ButtonCoordinator()
+        callback = Mock()
+
+        class RaisingWidget:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def winfo_exists(self) -> bool:
+                return True
+
+            def config(self, **options: object) -> None:
+                raise tk.TclError("invalid command name")
+
+        widget = RaisingWidget()
+
+        coordinator.register("dashboard:settings", callback)
+        coordinator.bind(widget, "dashboard:settings")
+
+        self.assertEqual(coordinator._actions["dashboard:settings"].widgets, [])
+        self.assertTrue(coordinator.dispatch("dashboard:settings"))
+        callback.assert_called_once_with()
 
 
 if __name__ == "__main__":

@@ -193,7 +193,20 @@ _INFO_SECTION_RULES: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ),
         ("Interface", ("Active interface", "VPN")),
     ),
-    "battery": (("Battery", ("Charge", "Power", "Time remaining")),),
+    "battery": (
+        (
+            "Battery",
+            (
+                "Charge",
+                "Power",
+                "Time remaining",
+                "Battery",
+                "CPU",
+                "GPU",
+                "NVMe",
+            ),
+        ),
+    ),
 }
 
 

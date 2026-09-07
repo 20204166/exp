@@ -107,9 +107,22 @@ class ClusterPageTests(unittest.TestCase):
         self.assertIn("cluster:node:dev:open", coordinator.registered_ids())
 
     def test_refresh_nodes_rebuilds_list(self) -> None:
-        page, _parent, _recorder = make_page()
+        coordinator = ButtonCoordinator()
+        page, _parent, _recorder = make_page(button_coordinator=coordinator)
         page.refresh_nodes([_spec("dev", selectable=True)])
         self.assertEqual(len(page._nodes), 1)
+        page.refresh_nodes([_spec("peer", selectable=False)])
+        self.assertEqual(coordinator.registered_ids(), ())
+
+    def test_dispose_clears_cluster_actions(self) -> None:
+        coordinator = ButtonCoordinator()
+        page, _parent, _recorder = make_page(button_coordinator=coordinator)
+
+        page.dispose()
+
+        self.assertEqual(coordinator.registered_ids(), ())
+        page.refresh_nodes([_spec("peer", selectable=True)])
+        self.assertEqual(coordinator.registered_ids(), ())
 
 
 if __name__ == "__main__":

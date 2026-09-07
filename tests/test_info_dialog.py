@@ -152,14 +152,14 @@ class DetailSectionsTests(unittest.TestCase):
             ),
         )
 
-    def test_battery_no_battery_guidance_uses_first_section(self) -> None:
+    def test_battery_temperature_lines_use_first_section(self) -> None:
         sections = detail_sections(
             "battery",
-            ("Temperature readings are shown in the CPU, GPU and Storage sections.",),
+            ("CPU: 45°C", "NVMe: 38°C"),
         )
 
         self.assertEqual(sections[0][0], "Battery")
-        self.assertEqual(len(sections[0][1]), 1)
+        self.assertEqual(sections[0][1], (("CPU", "45°C"), ("NVMe", "38°C")))
 
     def test_battery_unavailable_line_is_kept(self) -> None:
         sections = detail_sections("battery", ("Battery information is unavailable.",))

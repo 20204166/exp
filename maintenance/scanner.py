@@ -1323,6 +1323,8 @@ class SystemScanner:
             remaining = self._battery_time_remaining(battery)
             if remaining is not None:
                 details.append(f"Time remaining: {remaining}")
+            if temperature_lines:
+                details.extend(temperature_lines)
             return ResourceSummary(
                 key="battery",
                 title="Battery",
@@ -1348,16 +1350,13 @@ class SystemScanner:
             )
 
         if temperature_lines:
-            detail = (
-                "Temperature readings are shown in the CPU, GPU and Storage sections."
-            )
             return ResourceSummary(
                 key="battery",
                 title="Battery",
                 value="No battery",
                 subtitle="Not present on this system",
                 percent=None,
-                details=(detail,),
+                details=tuple(temperature_lines),
                 capability=CapabilityState.UNSUPPORTED,
                 temperatures=temperature_samples,
             )
