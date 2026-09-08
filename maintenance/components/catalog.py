@@ -8,25 +8,18 @@ from dataclasses import dataclass
 class ResourceFeature:
     """Immutable metadata for one dashboard resource category.
 
-    ``loader_name`` names an existing analyzer detail method for future
-    wiring. The catalog describes metadata only; it never imports or calls
-    scanners, handlers, widgets, or destructive actions.
+    The catalog describes metadata only; it never imports or calls scanners,
+    handlers, widgets, or destructive actions.
     """
 
     key: str
     title: str
     order: int
     action_kind: str
-    loader_name: str
     platforms: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
-        if (
-            not self.key
-            or not self.title
-            or not self.action_kind
-            or not self.loader_name
-        ):
+        if not self.key or not self.title or not self.action_kind:
             raise ValueError("Resource feature metadata fields cannot be empty")
         if self.order < 0:
             raise ValueError("Resource feature order cannot be negative")
@@ -57,12 +50,12 @@ class ResourceFeatureCatalog:
     """
 
     DEFAULT_FEATURES: tuple[ResourceFeature, ...] = (
-        ResourceFeature("cpu", "CPU", 0, "process", "cpu_info"),
-        ResourceFeature("memory", "Memory", 1, "process", "memory_info"),
-        ResourceFeature("storage", "Storage", 2, "storage", "storage_info"),
-        ResourceFeature("gpu", "GPU", 3, "informational", "gpu_info"),
-        ResourceFeature("network", "Network", 4, "informational", "network_info"),
-        ResourceFeature("battery", "Battery", 5, "informational", "battery_info"),
+        ResourceFeature("cpu", "CPU", 0, "process"),
+        ResourceFeature("memory", "Memory", 1, "process"),
+        ResourceFeature("storage", "Storage", 2, "storage"),
+        ResourceFeature("gpu", "GPU", 3, "informational"),
+        ResourceFeature("network", "Network", 4, "informational"),
+        ResourceFeature("battery", "Battery", 5, "informational"),
     )
 
     def __init__(

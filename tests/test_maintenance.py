@@ -10,7 +10,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import maintenance.components.scan_support as scan_support_module
@@ -1267,38 +1267,30 @@ class SourceIntegrationTests(unittest.TestCase):
 
         analyzer = module.Analyzer()
         self.assertTrue(callable(analyzer.dashboard_snapshot))
+        self.assertTrue(callable(analyzer.component_summary))
         self.assertTrue(callable(analyzer.process_candidates))
         self.assertTrue(callable(analyzer.storage_candidates))
+        self.assertTrue(callable(analyzer.reset_component_sample))
+        self.assertTrue(callable(analyzer.stop_background_workers))
 
-    def test_analyzer_cpu_info_uses_nonblocking_sampling_on_darwin(self) -> None:
+    def test_legacy_report_methods_are_removed(self) -> None:
         from algo import Analyzer
 
-        analyzer = Analyzer()
-        fake_psutil = SimpleNamespace(
-            cpu_freq=lambda: SimpleNamespace(current=2400.0),
-            cpu_percent=Mock(return_value=12.3),
-            cpu_count=Mock(side_effect=[4, 8, 4, 8]),
-        )
-
-        with patch("algo.psutil", fake_psutil):
-            with patch("algo.platform.system", return_value="Darwin"):
-                darwin_lines = analyzer.cpu_info()
-            with patch("algo.platform.system", return_value="Linux"):
-                linux_lines = analyzer.cpu_info()
-
-        self.assertIn("CPU usage: 12.3%", darwin_lines[0])
-        self.assertIn("CPU usage: 12.3%", linux_lines[0])
-        self.assertEqual(
-            fake_psutil.cpu_percent.call_args_list[0].kwargs, {"interval": 0.0}
-        )
-        self.assertEqual(
-            fake_psutil.cpu_percent.call_args_list[1].kwargs, {"interval": 0.1}
-        )
+        for name in (
+            "cpu_info",
+            "memory_info",
+            "storage_info",
+            "gpu_info",
+            "network_info",
+            "battery_info",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(Analyzer, name))
 
     def test_call_with_cancel_passes_event_only_when_provided(self) -> None:
         from algo import Analyzer
 
-        analyzer = Analyzer(memory_test_percent=1.0)
+        analyzer = Analyzer()
         func = Mock(return_value="ok")
 
         self.assertEqual(analyzer._call_with_cancel(func, None), "ok")
@@ -1308,52 +1300,12 @@ class SourceIntegrationTests(unittest.TestCase):
         self.assertEqual(analyzer._call_with_cancel(func, cancel_event), "ok")
         func.assert_called_with(cancel_event=cancel_event)
 
-    def test_analyzer_nvidia_lines_keep_compat_format_through_shared_helper(
-        self,
-    ) -> None:
+    def test_analyzer_constructor_rejects_removed_compatibility_args(self) -> None:
         from algo import Analyzer
 
-        analyzer = Analyzer()
-        fake_pynvml = SimpleNamespace(
-            nvmlDeviceGetCount=lambda: 2,
-            nvmlDeviceGetHandleByIndex=lambda index: ("handle", index),
-            nvmlDeviceGetName=lambda _handle: b"GeForce RTX 4080",
-            nvmlDeviceGetMemoryInfo=lambda _handle: SimpleNamespace(
-                used=8 * 1024**3,
-                total=16 * 1024**3,
-            ),
-            nvmlDeviceGetUtilizationRates=lambda _handle: SimpleNamespace(gpu=35),
-            nvmlDeviceGetTemperature=lambda _handle, _kind: 62,
-            NVML_TEMPERATURE_GPU=0,
-        )
-
-        with patch("algo.pynvml", fake_pynvml):
-            lines = analyzer._nvidia_gpu_lines()
-
-        self.assertEqual(
-            lines,
-            [
-                "GPU 0: GeForce RTX 4080",
-                "GPU usage: 35%",
-                "GPU memory used: 8.00 GiB of 16.00 GiB",
-                "GPU temperature: 62°C",
-                "GPU 1: GeForce RTX 4080",
-                "GPU usage: 35%",
-                "GPU memory used: 8.00 GiB of 16.00 GiB",
-                "GPU temperature: 62°C",
-            ],
-        )
-
-    def test_analyzer_nvidia_lines_fall_back_when_no_devices(self) -> None:
-        from algo import Analyzer
-
-        analyzer = Analyzer()
-        fake_pynvml = SimpleNamespace(nvmlDeviceGetCount=lambda: 0)
-
-        with patch("algo.pynvml", fake_pynvml):
-            lines = analyzer._nvidia_gpu_lines()
-
-        self.assertEqual(lines, ["No NVIDIA GPU was detected."])
+        analyzer = cast(Any, Analyzer)
+        with self.assertRaises(TypeError):
+            analyzer(memory_test_percent=1.0)
 
 
 if __name__ == "__main__":

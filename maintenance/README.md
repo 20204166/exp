@@ -129,16 +129,14 @@ Re-exports: `DashboardSnapshot`, `FileActionResult`, `FileCandidate`,
 `ResourceSummary`, `DashboardSnapshot`, `ProcessCandidate`, `FileCandidate`,
 `ProcessActionResult`, `FileActionResult` (frozen dataclasses).
 
-### Legacy/compatibility surfaces (`algo.Analyzer`)
-`cpu_info`, `memory_info`, `storage_info`, `gpu_info`, `network_info` and
-`battery_info` are retained as compatibility surfaces: the
-`ResourceFeatureCatalog` `loader_name` metadata anchors them for future
-wiring, and the interactive dashboard does not call them. The retired
-text-report and RAM-test methods (`full_report`, `analyze_all`,
-`test_memory`, `system_info`) have been removed. The NVIDIA detail path
-shares its per-device enumeration with the dashboard scanner via
-`components.gpu.nvidia_device_readings` (`include_temperature=True` here,
-`False` on the active dashboard path).
+### `algo.Analyzer` facade
+The active facade methods are `dashboard_snapshot`, `component_summary`,
+`process_candidates`, `storage_candidates`, `reset_component_sample`,
+`stop_background_workers`, and `_call_with_cancel`. The retired text-report
+and RAM-test methods (`cpu_info`, `memory_info`, `storage_info`, `gpu_info`,
+`network_info`, `battery_info`, `full_report`, `analyze_all`, `test_memory`,
+`system_info`) are removed. `maintenance/snapshot.py` reuses
+`Analyzer.dashboard_snapshot()` for the read-only CLI.
 
 ### Static hardware caching (scanner.py)
 `scan_dashboard` separates mostly-static identity from live metrics. Cached

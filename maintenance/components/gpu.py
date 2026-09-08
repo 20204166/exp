@@ -67,10 +67,9 @@ def nvidia_device_readings(
     Each tuple is ``(name, memory_used, memory_total, gpu_usage_percent,
     temperature_or_None)``. ``pynvml_module`` is injected so this module
     stays free of the optional ``pynvml`` import; callers own ``nvmlInit``/
-    ``nvmlShutdown`` and their own failure handling. Shared by the active
-    dashboard scanner (``include_temperature=False``, which never issues the
-    temperature query) and the legacy ``Analyzer._nvidia_gpu_lines``
-    compatibility surface (``include_temperature=True``).
+    ``nvmlShutdown`` and their own failure handling. The active dashboard
+    scanner uses ``include_temperature=False`` so the temperature query is
+    skipped there.
     """
 
     readings: list[tuple[str, int, int, int, int | None]] = []

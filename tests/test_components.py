@@ -395,17 +395,6 @@ class ResourceFeatureCatalogTests(unittest.TestCase):
             tuple(feature.title for feature in catalog.all()),
             ("CPU", "Memory", "Storage", "GPU", "Network", "Battery"),
         )
-        self.assertEqual(
-            tuple(feature.loader_name for feature in catalog.all()),
-            (
-                "cpu_info",
-                "memory_info",
-                "storage_info",
-                "gpu_info",
-                "network_info",
-                "battery_info",
-            ),
-        )
 
     def test_action_categories_match_current_resource_handlers(self) -> None:
         catalog = ResourceFeatureCatalog()
@@ -439,15 +428,15 @@ class ResourceFeatureCatalogTests(unittest.TestCase):
         catalog = ResourceFeatureCatalog()
 
         with self.assertRaisesRegex(ValueError, "already registered"):
-            catalog.register(ResourceFeature("cpu", "Other CPU", 9, "info", "other"))
+            catalog.register(ResourceFeature("cpu", "Other CPU", 9, "info"))
 
     def test_ordering_is_deterministic_for_custom_features(self) -> None:
         catalog = ResourceFeatureCatalog(
             (
-                ResourceFeature("later", "Later", 4, "info", "later_info"),
-                ResourceFeature("same-b", "Same B", 2, "info", "b_info"),
-                ResourceFeature("first", "First", 1, "info", "first_info"),
-                ResourceFeature("same-a", "Same A", 2, "info", "a_info"),
+                ResourceFeature("later", "Later", 4, "info"),
+                ResourceFeature("same-b", "Same B", 2, "info"),
+                ResourceFeature("first", "First", 1, "info"),
+                ResourceFeature("same-a", "Same A", 2, "info"),
             )
         )
 
@@ -462,7 +451,6 @@ class ResourceFeatureCatalogTests(unittest.TestCase):
             "Windows Only",
             6,
             "informational",
-            "windows_info",
             platforms=("Windows", "Darwin"),
         )
         catalog = ResourceFeatureCatalog(features=(feature,))
@@ -475,7 +463,7 @@ class ResourceFeatureCatalogTests(unittest.TestCase):
     def test_separate_catalog_instances_are_isolated(self) -> None:
         first = ResourceFeatureCatalog()
         second = ResourceFeatureCatalog()
-        extra = ResourceFeature("extra", "Extra", 6, "informational", "extra_info")
+        extra = ResourceFeature("extra", "Extra", 6, "informational")
 
         first.register(extra)
 
@@ -484,7 +472,7 @@ class ResourceFeatureCatalogTests(unittest.TestCase):
             second.get("extra")
 
     def test_feature_definitions_are_immutable_and_all_returns_tuple(self) -> None:
-        feature = ResourceFeature("test", "Test", 0, "informational", "test_info")
+        feature = ResourceFeature("test", "Test", 0, "informational")
         catalog = ResourceFeatureCatalog(features=(feature,))
 
         with self.assertRaises(FrozenInstanceError):
@@ -646,13 +634,6 @@ class ResourceFeatureCatalogParityTests(unittest.TestCase):
                     feature.action_kind != "informational",
                     unavailable_summary(feature.key, feature.title).actionable,
                 )
-
-    def test_loader_names_exist_on_analyzer(self) -> None:
-        import algo
-
-        for feature in ResourceFeatureCatalog().all():
-            with self.subTest(key=feature.key):
-                self.assertTrue(callable(getattr(algo.Analyzer, feature.loader_name)))
 
     def test_component_titles_match_catalog(self) -> None:
         from maintenance.scanner import SystemScanner

@@ -135,7 +135,7 @@ class AppWindow:
         preferences_store: PreferencesStore | None = None,
         cluster_store: ClusterStore | None = None,
     ) -> None:
-        self.analyzer = algo.Analyzer(memory_test_percent=1.0)
+        self.analyzer = algo.Analyzer()
         self.process_manager = ProcessManager()
         self.file_manager = FileManager(self.analyzer.scanner.downloads_path)
         self._preferences_store = preferences_store or PreferencesStore(
