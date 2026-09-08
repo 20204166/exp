@@ -1080,6 +1080,21 @@ class ResourceGovernorTests(unittest.TestCase):
         self.assertFalse(periodic.admitted)
         self.assertTrue(manual.admitted)
 
+    def test_telemetry_remains_live_under_pressure(self) -> None:
+        governor = ResourceGovernor(max_active=2, max_periodic=2, manual_reserve=1)
+        governor._pressure_degraded = True
+        governor._pressure = PressureSnapshot(
+            sampled_at=0.0,
+            degraded=True,
+            available=True,
+        )
+
+        telemetry = governor.admit(
+            JobProfile(key="component:gpu", kind="telemetry"), 0.0
+        )
+
+        self.assertTrue(telemetry.admitted)
+
 
 class SharedScanHelperTests(unittest.TestCase):
     def test_check_cancelled_is_quiet_without_event_or_unset_event(self) -> None:

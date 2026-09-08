@@ -2550,7 +2550,9 @@ class AppWindow:
             governor.admit(
                 JobProfile(
                     key=operation_key,
-                    kind="periodic",
+                    # Card telemetry remains live under pressure; the governor
+                    # still applies its active-job and per-node capacity limits.
+                    kind="telemetry",
                     node_id=str(source_node_id) if source_node_id is not None else None,
                     priority=1,
                 ),

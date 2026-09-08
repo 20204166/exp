@@ -352,7 +352,7 @@ class ResourceGovernor:
         if profile.key in self._active:
             return self._defer(profile, now, "already running")
 
-        if profile.kind != "manual" and pressure.degraded:
+        if profile.kind == "periodic" and pressure.degraded:
             return self._defer(profile, now, "resource pressure")
 
         if self._active_total() >= self.max_active:
