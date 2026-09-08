@@ -2,11 +2,13 @@ import hashlib
 import os
 import tempfile
 import threading
+import time
+import tkinter as tk
 import unittest
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import Mock, patch
 
 from maintenance.components import (
@@ -230,6 +232,41 @@ class BackgroundTaskRunnerTests(unittest.TestCase):
         self.assertTrue(completed.wait(1))
         success.assert_called_once_with("done")
         self.assertEqual(progress_messages, ["working"])
+
+    def test_real_tk_delivery_queue_never_calls_after_from_worker(self) -> None:
+        class FakeTkWidget(tk.Misc):
+            def __init__(self) -> None:
+                self.after_threads: list[threading.Thread] = []
+                self.callbacks: list[Callable[..., Any]] = []
+
+            def winfo_exists(self) -> bool:
+                return True
+
+            def after(
+                self,
+                ms: int | Literal["idle"],
+                func: Callable[..., object],
+                *args: object,
+            ) -> str:
+                self.after_threads.append(threading.current_thread())
+                self.callbacks.append(lambda: func(*args))
+                return f"after-{ms}-{len(self.callbacks)}"
+
+        widget = FakeTkWidget()
+        runner = BackgroundTaskRunner()
+        completed = threading.Event()
+        runner.run_in_thread(widget, lambda: "done", lambda _value: completed.set())
+        deadline = time.monotonic() + 1.0
+        while not completed.is_set() and time.monotonic() < deadline:
+            if widget.callbacks:
+                widget.callbacks.pop(0)()
+            else:
+                time.sleep(0.001)
+        self.assertTrue(completed.wait(1))
+        self.assertTrue(widget.after_threads)
+        self.assertTrue(
+            all(thread is threading.main_thread() for thread in widget.after_threads)
+        )
 
     def test_run_ignores_runtime_error_during_widget_teardown(self) -> None:
         widget: Any = FailingAfterWidget()

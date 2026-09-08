@@ -48,6 +48,33 @@ class GovernorIntegrationTests(unittest.TestCase):
             window._launch_component_scan("cpu")
             self.assertEqual(runner.pending, 1)
 
+    def test_all_component_cards_complete_one_coordinated_cycle(self) -> None:
+        window = test_window_nodes._make_window(start_discovery=False)
+        context = window._node_registry.context(NodeId(LOCAL_NODE_ID))
+        keys = tuple(context.scheduler.intervals)
+        context.provider = Mock()
+        context.provider.component_summary.side_effect = lambda key, **_kwargs: (
+            make_summary(key, key.upper())
+        )
+        context.scheduler.mark_all_refreshed(0.0)
+        for key in keys:
+            context.scheduler.request_refresh(key)
+        runner = DeferredRunner()
+        window._coordinator = AppCoordinator(runner=runner, deliver=window._submit_ui)
+        window._component_scheduler = context.scheduler
+        window._apply_component = Mock()
+        window._schedule_component_poll = Mock()
+
+        for key in keys:
+            window._launch_component_scan(key)
+        self.assertEqual(runner.pending, len(keys))
+        while runner.pending:
+            runner.run_next()
+        window._drain_background_queue()
+
+        self.assertEqual(tuple(context.scheduler._in_flight), ())
+        self.assertEqual(window._apply_component.call_count, len(keys))
+
     def test_hidden_component_render_cannot_finish_new_worker(self) -> None:
         window = test_window.AppWindowTests.make_window()
         window.analyzer = Mock()

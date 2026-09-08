@@ -11,6 +11,7 @@ from maintenance.components import (
     BackgroundTaskRunner,
     ProgressTask,
 )
+from maintenance.components.background import TkDeliveryQueue
 from maintenance.components.coordinator import AppCoordinator
 from maintenance.components.scan_support import (
     SCAN_CANCELLED_NOTICE,
@@ -51,13 +52,14 @@ def _standalone_coordinator(widget: tk.Misc) -> AppCoordinator:
     thread-safety contract holds either way.
     """
 
-    def deliver(callback: Callable[[], None]) -> None:
-        try:
-            widget.after(0, lambda: _invoke_delivered(callback))
-        except (RuntimeError, tk.TclError):
-            pass
+    delivery = TkDeliveryQueue(widget)
+    return AppCoordinator(
+        deliver=lambda callback: delivery(_invoke_delivered_wrapper(callback))
+    )
 
-    return AppCoordinator(deliver=deliver)
+
+def _invoke_delivered_wrapper(callback: Callable[[], None]) -> Callable[[], None]:
+    return lambda: _invoke_delivered(callback)
 
 
 def run_in_thread(
