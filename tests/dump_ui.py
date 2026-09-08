@@ -13,8 +13,10 @@ from tkinter import ttk
 from unittest.mock import Mock, patch
 
 from maintenance import dialogs
+from maintenance.models import CapabilityState
 from tests.support.live_tk import TEST_COLORS, pump
 from tests.support.models import make_summary
+from tests.support.temperature import make_temperature_sample
 from window import AppWindow
 
 
@@ -193,6 +195,45 @@ def build_preferences(root):
     return extra
 
 
+def build_thermals(root):
+    window = AppWindow(master=root)
+    for identifier in tuple(window._pending_after_ids):
+        window._cancel_timer(identifier)
+    context = window._selected_context()
+    assert context is not None
+    context.capabilities.update(
+        {
+            "cpu": CapabilityState.SUPPORTED,
+            "gpu": CapabilityState.SUPPORTED,
+            "storage": CapabilityState.SUPPORTED,
+            "battery": CapabilityState.UNSUPPORTED,
+        }
+    )
+    for component, value in (("cpu", 42.0), ("gpu", 44.0), ("storage", 38.0)):
+        context.telemetry.record_summary(
+            component,
+            make_summary(
+                component,
+                component.upper(),
+                capability=CapabilityState.SUPPORTED,
+                temperatures=(make_temperature_sample(component, value),),
+            ),
+        )
+    window._show_thermals_page()
+    pump(window.master)
+    page = window.thermals_page
+    return {
+        "geometry": normalize_geometry(window.master.geometry()),
+        "active_page": window._page_router.active_key,
+        "mapped": {
+            key: window._page_router.is_mapped(key)
+            for key in window._page_router.registered_keys
+        },
+        "graph_components": list(page.graph_components),
+        "back_button_text": page.back_button.cget("text"),
+    }
+
+
 def build_info(root, info_summary):
     dialog = dialogs.InfoDialog(root, summary=info_summary, colors=colors())
     pump(dialog)
@@ -280,6 +321,7 @@ def main():
         run("dashboard", build_window),
         run("settings", build_settings_home),
         run("preferences", build_preferences),
+        run("thermals", build_thermals),
         run(
             "info-dialog-no-battery",
             lambda root: build_info(

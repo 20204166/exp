@@ -30,6 +30,7 @@ from maintenance.nodes import (
     local_node_descriptor,
     node_operation_key,
 )
+from maintenance.ui.render_coordinator import UICoordinator
 from tests.support.models import make_snapshot, make_summary
 from tests.support.scheduling import TimerMaster
 from window import AppWindow
@@ -100,7 +101,6 @@ def _make_window(
     window._background_queue = Queue()
     window._feature_catalog = Mock()
     window._feature_catalog.all = list
-    window._thermal_dialogs = {}
     window._component_poll_id = None
     window._component_queue = Queue()
     window._coordinator = AppCoordinator(deliver=lambda callback: None)
@@ -223,12 +223,40 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         self.assertIs(window.snapshot, dev.snapshot)
         self.assertIs(window._component_scheduler, dev.scheduler)
 
+    def test_switching_refreshes_thermals_from_selected_node_context(self) -> None:
+        window = _make_window(
+            _trusted_context("dev", "Dev Node", cpu_value="dev-cpu", host_label="dev")
+        )
+        window.thermals_page = Mock()
+        window._page_router = Mock()
+        window._page_router.is_mapped.return_value = True
+
+        window._switch_selected_node(NodeId("dev"))
+
+        window.thermals_page.refresh_from_telemetry.assert_called_once_with(
+            window._node_registry.context(NodeId("dev")).telemetry,
+            window._node_registry.context(NodeId("dev")).capabilities,
+        )
+
     def test_switching_same_node_is_a_noop(self) -> None:
         window = _make_window()
         handle = Mock()
         window.handle_analyze = handle
         window._switch_selected_node(NodeId(LOCAL_NODE_ID))
         handle.assert_not_called()
+
+    def test_hidden_thermals_page_defers_render_until_visible(self) -> None:
+        window = _make_window()
+        window._ui_coordinator = UICoordinator()
+        window._ui_coordinator.set_visible("thermals", False)
+        window.thermals_page = Mock()
+
+        window._refresh_thermals_page()
+
+        window.thermals_page.refresh_from_telemetry.assert_not_called()
+        self.assertEqual(window._ui_coordinator.pending_count, 1)
+        window._ui_coordinator.set_visible("thermals", True)
+        window.thermals_page.refresh_from_telemetry.assert_called_once()
 
     def test_switching_ignores_unknown_node(self) -> None:
         window = _make_window()

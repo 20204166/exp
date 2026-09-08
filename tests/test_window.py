@@ -58,7 +58,6 @@ class AppWindowTests(unittest.TestCase):
         window._background_queue = Queue()
         window._component_scheduler = ComponentRefreshScheduler()
         window._feature_catalog = ResourceFeatureCatalog()
-        window._thermal_dialogs = {}
         window._component_poll_id = None
         window._component_queue = Queue()
         window._preferences = AppPreferences.defaults()
@@ -788,6 +787,7 @@ class AppWindowTests(unittest.TestCase):
 
         window._ui_coordinator.set_visible.assert_any_call("dashboard-snapshot", False)
         window._ui_coordinator.set_visible.assert_any_call("scan-status", False)
+        window._ui_coordinator.set_visible.assert_any_call("thermals", False)
         window._ui_coordinator.set_visible.assert_any_call("discovery-pages", True)
 
     def test_cancelled_scan_keeps_previous_results_without_error_dialog(self) -> None:

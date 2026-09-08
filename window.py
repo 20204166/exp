@@ -88,6 +88,7 @@ from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui import scan_status
 from maintenance.ui import settings_home as ui_settings_home
 from maintenance.ui import styles as ui_styles
+from maintenance.ui import thermals_page as ui_thermals
 from maintenance.ui import transition as ui_transition
 from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.navigation import PageRouter, PageSpec
@@ -99,6 +100,7 @@ SETTINGS_PAGE = "settings"
 PREFERENCES_PAGE = "preferences"
 NODES_PAGE = "nodes"
 CLUSTER_PAGE = "cluster"
+THERMALS_PAGE = "thermals"
 
 
 class AppWindow:
@@ -170,7 +172,6 @@ class AppWindow:
         self._button_coordinator = ButtonCoordinator()
         self._ui_coordinator = ui_render.UICoordinator()
         self._feature_catalog = ResourceFeatureCatalog()
-        self._thermal_dialogs: dict[tuple[str | None, str], Any] = {}
         self._component_poll_id: str | None = None
         self._capabilities: dict[str, CapabilityState] = {}
         self._node_registry = NodeRegistry()
@@ -332,6 +333,7 @@ class AppWindow:
         )
         self._page_router.register(PageSpec(NODES_PAGE, self._build_nodes_page))
         self._page_router.register(PageSpec(CLUSTER_PAGE, self._build_cluster_page))
+        self._page_router.register(PageSpec(THERMALS_PAGE, self._build_thermals_page))
         self._page_router.show(DASHBOARD_PAGE)
         self._sync_render_visibility(DASHBOARD_PAGE)
         self._reconcile_cards_and_polling()
@@ -361,6 +363,7 @@ class AppWindow:
             active_page in {DASHBOARD_PAGE, PREFERENCES_PAGE},
         )
         coordinator.set_visible("dashboard-discovery", active_page == DASHBOARD_PAGE)
+        coordinator.set_visible(THERMALS_PAGE, active_page == THERMALS_PAGE)
         coordinator.set_visible(
             "discovery-pages",
             active_page in {NODES_PAGE, CLUSTER_PAGE},
@@ -368,55 +371,6 @@ class AppWindow:
         coordinator.set_visible("nodes-status", active_page == NODES_PAGE)
         for feature in self._feature_catalog.all():
             coordinator.set_visible(f"component:{feature.key}", dashboard_visible)
-
-    def _thermal_dialog_key(
-        self, node_id: NodeId | None, key: str
-    ) -> tuple[str | None, str]:
-        return (node_id.value if node_id is not None else None, key)
-
-    def _thermal_render_target(self, node_id: NodeId | None, key: str) -> str:
-        return f"thermal:{node_id.value if node_id is not None else 'local'}:{key}"
-
-    def _register_thermal_dialog(
-        self, node_id: NodeId | None, key: str, dialog: Any
-    ) -> None:
-        self._thermal_dialogs[self._thermal_dialog_key(node_id, key)] = dialog
-        coordinator = self._render_coordinator()
-        if coordinator is not None:
-            coordinator.set_visible(self._thermal_render_target(node_id, key), True)
-
-    def _unregister_thermal_dialog(self, node_id: NodeId | None, key: str) -> None:
-        self._thermal_dialogs.pop(self._thermal_dialog_key(node_id, key), None)
-        coordinator = self._render_coordinator()
-        if coordinator is not None:
-            coordinator.clear(self._thermal_render_target(node_id, key))
-
-    def _refresh_thermal_dialog(
-        self, node_id: NodeId | None, key: str, resource: ResourceSummary
-    ) -> None:
-        dialog = self._thermal_dialogs.get(self._thermal_dialog_key(node_id, key))
-        if dialog is None:
-            return
-        refresher = getattr(dialog, "refresh_thermal_view", None)
-        if not callable(refresher):
-            return
-        exists = getattr(dialog, "winfo_exists", None)
-        if callable(exists) and not exists():
-            self._unregister_thermal_dialog(node_id, key)
-            return
-        intent = ui_render.RenderIntent(
-            target=self._thermal_render_target(node_id, key),
-            node_id=node_id,
-            components=frozenset({key}),
-            payload=resource,
-            payload_set=True,
-            priority=2,
-        )
-
-        def apply_thermal(_intent: ui_render.RenderIntent) -> None:
-            refresher(resource)
-
-        self._request_render(intent, apply_thermal)
 
     def _build_dashboard_page(self, parent: Any) -> Any:
         self.main_frame = ttk.Frame(
@@ -472,6 +426,13 @@ class AppWindow:
             style="Neutral.TButton",
             cursor="hand2",
         )
+        self.thermals_button = ttk.Button(
+            self.header_actions,
+            text="Thermals",
+            command=self._show_thermals_page,
+            style="Neutral.TButton",
+            cursor="hand2",
+        )
         self._button_coordinator.register(
             "dashboard:settings",
             self._show_settings_page,
@@ -484,9 +445,16 @@ class AppWindow:
             replace=True,
         )
         self._button_coordinator.bind(self.cluster_button, "dashboard:cluster")
+        self._button_coordinator.register(
+            "dashboard:thermals",
+            self._show_thermals_page,
+            replace=True,
+        )
+        self._button_coordinator.bind(self.thermals_button, "dashboard:thermals")
         self._build_node_selector(self.header_actions)
         self.settings_button.pack(anchor="e")
         self.cluster_button.pack(anchor="e", padx=(8, 0))
+        self.thermals_button.pack(anchor="e", padx=(8, 0))
 
         self.status_label = ttk.Label(
             self.header_actions,
@@ -706,6 +674,34 @@ class AppWindow:
         button = getattr(self, "settings_button", None)
         if button is not None:
             button.focus_set()
+
+    def _show_thermals_page(self) -> None:
+        page = getattr(self, "thermals_page", None)
+        context = self._selected_context()
+        if page is not None:
+            page.refresh_from_telemetry(
+                getattr(context, "telemetry", None) if context is not None else None,
+                getattr(context, "capabilities", None) if context is not None else None,
+            )
+        self._page_router.show(THERMALS_PAGE)
+        self._sync_render_visibility(THERMALS_PAGE)
+        if page is not None:
+            page.focus_back()
+
+    def _build_thermals_page(self, parent: Any) -> Any:
+        self.thermals_frame = ttk.Frame(
+            parent,
+            padding=(30, 26),
+            style="App.TFrame",
+        )
+        self.thermals_page = ui_thermals.ThermalsPage(
+            self.thermals_frame,
+            callbacks=ui_thermals.ThermalsPageCallbacks(
+                on_back=self._show_dashboard_page,
+            ),
+            colors=self.colors,
+        )
+        return self.thermals_frame
 
     def _on_select_settings_category(self, key: str) -> None:
         """Route one Settings category card to its dedicated page.
@@ -1354,6 +1350,7 @@ class AppWindow:
             coordinator.invalidate(DASHBOARD_PAGE, generation, node_id=node_id)
             coordinator.invalidate("scan-status", generation, node_id=node_id)
             coordinator.invalidate("discovery-pages", 0, node_id=node_id)
+            coordinator.invalidate(THERMALS_PAGE, 0, node_id=node_id)
             for feature in self._feature_catalog.all():
                 coordinator.invalidate(
                     f"component:{feature.key}",
@@ -1363,6 +1360,17 @@ class AppWindow:
         self._cancel_node_operations(old_context)
         self._sync_selected_context_mirrors(context)
         self._render_selected_node(context)
+        thermals_page = getattr(self, "thermals_page", None)
+        router = getattr(self, "_page_router", None)
+        if (
+            thermals_page is not None
+            and router is not None
+            and router.is_mapped(THERMALS_PAGE)
+        ):
+            thermals_page.refresh_from_telemetry(
+                context.telemetry,
+                context.capabilities,
+            )
         self._schedule_timer(0, self.handle_analyze)
 
     def _cancel_active_scan(self) -> None:
@@ -2277,7 +2285,6 @@ class AppWindow:
         merged = self._merge_snapshot(snapshot)
         self.snapshot = merged
         context = self._selected_context()
-        source_node_id = context.node_id if context is not None else None
         if context is not None:
             context.snapshot = merged
             context.full_snapshot_applied_at = time.monotonic()
@@ -2287,7 +2294,6 @@ class AppWindow:
         for resource in snapshot.resources:
             self._observe_capability(resource.key, resource)
             self._record_thermal_summary(resource.key, resource)
-            self._refresh_thermal_dialog(source_node_id, resource.key, resource)
         for resource in merged.resources:
             self.cards[resource.key].update_summary(resource)
         self._full_snapshot_applied_at = time.monotonic()
@@ -2310,6 +2316,7 @@ class AppWindow:
             self._show_ready_after_completion_hold,
         )
         self._refresh_health()
+        self._refresh_thermals_page()
         self._component_scheduler.mark_all_refreshed(time.monotonic())
         self._schedule_component_poll(force=True)
 
@@ -2406,7 +2413,6 @@ class AppWindow:
         feature = self._feature_catalog.get(resource_key)
         context = self._selected_context()
         node_id = context.node_id if context is not None else None
-        telemetry = getattr(context, "telemetry", None) if context is not None else None
         node_title = (
             context.descriptor.display_name
             if context is not None and self._multi_node_selectable()
@@ -2432,18 +2438,7 @@ class AppWindow:
             read_only = context is not None and not context.descriptor.has(
                 NodeCapability.CLEANUP
             )
-            dialog_holder: dict[str, Any] = {}
-
-            def close_dialog() -> None:
-                self._unregister_thermal_dialog(node_id, resource_key)
-                dialog = dialog_holder.get("dialog")
-                if dialog is not None:
-                    try:
-                        dialog.destroy()
-                    except Exception:
-                        LOGGER.debug("Ignored dialog destroy failure", exc_info=True)
-
-            storage_dialog = StorageDialog(
+            StorageDialog(
                 self.master,
                 analyzer=self.analyzer,
                 manager=self.file_manager,
@@ -2453,35 +2448,13 @@ class AppWindow:
                 node_id=node_id,
                 node_title=node_title,
                 read_only=read_only,
-                telemetry=telemetry,
-                thermal_summary=summary,
-                on_close=close_dialog,
             )
-            dialog_holder["dialog"] = storage_dialog
-            self._register_thermal_dialog(node_id, resource_key, storage_dialog)
         else:
-            info_dialog_holder: dict[str, Any] = {}
-
-            def close_dialog() -> None:
-                self._unregister_thermal_dialog(node_id, resource_key)
-                dialog = info_dialog_holder.get("dialog")
-                if dialog is not None:
-                    try:
-                        dialog.destroy()
-                    except Exception:
-                        LOGGER.debug("Ignored dialog destroy failure", exc_info=True)
-
-            info_dialog = InfoDialog(
+            InfoDialog(
                 self.master,
                 summary=summary,
                 colors=self.colors,
-                telemetry=telemetry,
-                node_id=node_id,
-                render_coordinator=self._render_coordinator(),
-                on_close=close_dialog,
             )
-            info_dialog_holder["dialog"] = info_dialog
-            self._register_thermal_dialog(node_id, resource_key, info_dialog)
 
     def _rescan_after_change(self) -> None:
         self._schedule_timer(500, self.handle_analyze)
@@ -2699,6 +2672,29 @@ class AppWindow:
         if telemetry is not None:
             telemetry.record_summary(key, resource)
 
+    def _refresh_thermals_page(self) -> None:
+        page = getattr(self, "thermals_page", None)
+        context = self._selected_context()
+        if page is None or context is None:
+            return
+        node_id = context.node_id
+        intent = ui_render.RenderIntent(
+            target=THERMALS_PAGE,
+            node_id=node_id,
+            components=frozenset({"temperature"}),
+            payload=context.telemetry,
+            payload_set=True,
+            priority=2,
+        )
+
+        def apply_thermals(_intent: ui_render.RenderIntent) -> None:
+            page.refresh_from_telemetry(
+                context.telemetry,
+                context.capabilities,
+            )
+
+        self._request_render(intent, apply_thermals)
+
     def _fallback_component_title(self, key: str) -> str:
         """Return one card title from the feature catalog, falling back to key."""
 
@@ -2716,9 +2712,7 @@ class AppWindow:
         if key in self.cards:
             self.cards[key].update_summary(displayed)
         self._update_snapshot_resource(key, displayed)
-        self._refresh_thermal_dialog(
-            self.__dict__.get("_selected_node_id"), key, resource
-        )
+        self._refresh_thermals_page()
         self._refresh_health()
 
     def _observe_capability(
@@ -3083,7 +3077,6 @@ class AppWindow:
         render_coordinator = self._render_coordinator()
         if render_coordinator is not None:
             render_coordinator.shutdown()
-        self._thermal_dialogs.clear()
 
     def _stop_all_node_workers(self) -> None:
         """Stop every registered node's persistent scanner workers.

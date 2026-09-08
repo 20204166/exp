@@ -8,7 +8,7 @@ and importing it has no side effects (no Tk root is created).
 - ``layout``: reusable widget construction (scrollable areas, metric rows,
   dialog shells, footers).
 - ``telemetry_graph``: the lightweight thermal graph widget used in detail
-  views.
+  views and the Thermals page.
 - ``scan_status``: the shared global scan-presentation state (wording and styles).
 - ``transition``: the latest-wins cancellable delayed state-change rule used
   for smooth status transitions.
@@ -73,6 +73,7 @@ from .styles import (
     configure_app_styles,
 )
 from .telemetry_graph import TelemetryMiniGraph
+from .thermals_page import ThermalsPage, ThermalsPageCallbacks
 from .transition import PendingTransition
 
 __all__ = [
@@ -110,6 +111,8 @@ __all__ = [
     "PageSpec",
     "PendingTransition",
     "TelemetryMiniGraph",
+    "ThermalsPage",
+    "ThermalsPageCallbacks",
     "apply_cancelling",
     "apply_complete",
     "apply_ready",

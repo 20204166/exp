@@ -245,6 +245,21 @@ class LiveResizeTests(unittest.TestCase):
             self.assertEqual(window._page_router.active_key, "dashboard")
             self.assertTrue(window._page_router.is_mapped("dashboard"))
 
+            # Dashboard -> Thermals -> Dashboard uses the retained page.
+            window._show_thermals_page()
+            self._pump()
+            self.assertEqual(window._page_router.active_key, "thermals")
+            thermals = window.thermals_page
+            self.assertIsNotNone(thermals.canvas)
+            thermals.back_button.invoke()
+            self._pump()
+            self.assertEqual(window._page_router.active_key, "dashboard")
+            window._show_thermals_page()
+            self._pump()
+            self.assertIs(window.thermals_page, thermals)
+            thermals.back_button.invoke()
+            self._pump()
+
             # Repeated navigation retains page instances and state
             first_preferences = window.preferences_page
             first_home = window.settings_home
@@ -255,7 +270,14 @@ class LiveResizeTests(unittest.TestCase):
             self.assertIs(window.settings_home, first_home)
             self.assertEqual(
                 window._page_router.registered_keys,
-                ("dashboard", "settings", "preferences", "nodes", "cluster"),
+                (
+                    "dashboard",
+                    "settings",
+                    "preferences",
+                    "nodes",
+                    "cluster",
+                    "thermals",
+                ),
             )
 
             # Navigation alone starts no scans. Active mDNS discovery keeps the
