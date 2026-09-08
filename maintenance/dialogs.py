@@ -646,6 +646,7 @@ class InfoDialog(tk.Toplevel):
         self._graph_keys = _thermal_components_for(summary.key)
         self._thermal_graphs: dict[str, TelemetryMiniGraph] = {}
         self._event_rows: list[Any] = []
+        self._last_event_signature: tuple[Any, ...] | None = None
 
         container = ui_layout.dialog_shell(
             self,
@@ -818,14 +819,27 @@ class InfoDialog(tk.Toplevel):
         self._refresh_events()
 
     def _refresh_events(self) -> None:
-        for row in self._event_rows:
-            row.destroy()
-        self._event_rows.clear()
         events = (
             _recent_events(self.telemetry, self._graph_keys)
             if self.telemetry is not None
             else ()
         )
+        signature = tuple(
+            (
+                event.component,
+                event.sensor_id,
+                event.started_monotonic,
+                event.ended_monotonic,
+                event.peak_celsius,
+            )
+            for event in events
+        )
+        if signature == self._last_event_signature:
+            return
+        self._last_event_signature = signature
+        for row in self._event_rows:
+            row.destroy()
+        self._event_rows.clear()
         if not events:
             row, _label, _value = ui_layout.metric_row(
                 self._events_body,
@@ -1322,6 +1336,7 @@ class StorageDialog(tk.Toplevel):
         self._on_close = on_close or self._default_close
         self._thermal_graph: TelemetryMiniGraph | None = None
         self._thermal_event_rows: list[Any] = []
+        self._last_thermal_event_signature: tuple[Any, ...] | None = None
         self.candidates: dict[str, FileCandidate] = {}
         self._scan_active = False
         self._waiting_for_shared = False
@@ -1500,10 +1515,23 @@ class StorageDialog(tk.Toplevel):
         self._thermal_graph.render(
             self.telemetry.series_snapshot("storage", title="Storage Temperature")
         )
+        events = self.telemetry.recent_events("storage")
+        signature = tuple(
+            (
+                event.component,
+                event.sensor_id,
+                event.started_monotonic,
+                event.ended_monotonic,
+                event.peak_celsius,
+            )
+            for event in events
+        )
+        if signature == self._last_thermal_event_signature:
+            return
+        self._last_thermal_event_signature = signature
         for row in self._thermal_event_rows:
             row.destroy()
         self._thermal_event_rows.clear()
-        events = self.telemetry.recent_events("storage")
         if not events:
             row, _label, _value = ui_layout.metric_row(
                 self._thermal_events_body,

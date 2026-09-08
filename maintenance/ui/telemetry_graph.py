@@ -11,6 +11,7 @@ from maintenance.components.temperature import (
     TemperatureState,
 )
 from maintenance.ui import styles as ui_styles
+from maintenance.ui.layout import build_telemetry_graph_layout
 
 
 class TelemetryMiniGraph(tk.Frame):
@@ -105,48 +106,35 @@ class TelemetryMiniGraph(tk.Frame):
             self._draw_empty(canvas, width, height, "Waiting for the first sample")
             return
 
-        values = [sample.value_celsius for sample in snapshot.samples]
-        if not values:
+        layout = build_telemetry_graph_layout(
+            snapshot,
+            width,
+            height,
+            max_points=self.MAX_PLOT_POINTS,
+        )
+        if layout is None:
             self._draw_empty(canvas, width, height, "No temperature data")
             return
 
-        left = 14
-        top = 14
-        bottom = height - 18
-        right = width - 14
-        plot_height = max(bottom - top, 1)
-        plot_width = max(right - left, 1)
-        lowest = min(values)
-        highest = max(values)
-        if lowest == highest:
-            lowest -= 1.0
-            highest += 1.0
-
-        warning = snapshot.warning_celsius
-        critical = snapshot.critical_celsius
-        if warning is not None:
-            self._draw_threshold_line(
-                canvas, left, right, top, bottom, warning, lowest, highest, "#f5a623"
-            )
-        if critical is not None:
+        if layout.warning_y is not None:
             self._draw_threshold_line(
                 canvas,
-                left,
-                right,
-                top,
-                bottom,
-                critical,
-                lowest,
-                highest,
+                layout.left,
+                layout.right,
+                layout.warning_y,
+                "#f5a623",
+            )
+        if layout.critical_y is not None:
+            self._draw_threshold_line(
+                canvas,
+                layout.left,
+                layout.right,
+                layout.critical_y,
                 self.colors["accent"],
             )
 
-        values = self._bounded_values(values)
         points: list[float] = []
-        count = len(values)
-        for index, value in enumerate(values):
-            x = left if count == 1 else left + (plot_width * index / (count - 1))
-            y = bottom - ((value - lowest) / (highest - lowest) * plot_height)
+        for x, y in layout.points:
             points.extend((x, y))
         if len(points) >= 4:
             canvas.create_line(
@@ -160,7 +148,7 @@ class TelemetryMiniGraph(tk.Frame):
 
         if current is not None and isfinite(current):
             canvas.create_text(
-                left,
+                layout.left,
                 2,
                 text=f"Current {current:.0f}°C",
                 anchor="nw",
@@ -169,23 +157,13 @@ class TelemetryMiniGraph(tk.Frame):
             )
         if minimum is not None and maximum is not None:
             canvas.create_text(
-                right,
+                layout.right,
                 2,
                 text=f"Min {minimum:.0f}°C  Max {maximum:.0f}°C",
                 anchor="ne",
                 fill=self.colors["secondary"],
                 font=ui_styles.FONTS["body"],
             )
-
-    @classmethod
-    def _bounded_values(cls, values: list[float]) -> list[float]:
-        """Keep canvas work bounded while preserving the first and last sample."""
-
-        if len(values) <= cls.MAX_PLOT_POINTS:
-            return values
-        last = len(values) - 1
-        step = last / (cls.MAX_PLOT_POINTS - 1)
-        return [values[round(index * step)] for index in range(cls.MAX_PLOT_POINTS)]
 
     def _draw_empty(
         self, canvas: tk.Canvas, width: int, height: int, message: str
@@ -205,17 +183,9 @@ class TelemetryMiniGraph(tk.Frame):
     @staticmethod
     def _draw_threshold_line(
         canvas: tk.Canvas,
-        left: int,
-        right: int,
-        top: int,
-        bottom: int,
-        threshold: float,
-        minimum: float,
-        maximum: float,
+        left: float,
+        right: float,
+        y: float,
         color: str,
     ) -> None:
-        span = maximum - minimum
-        if span <= 0:
-            return
-        y = bottom - ((threshold - minimum) / span * (bottom - top))
         canvas.create_line(left, y, right, y, fill=color, dash=(4, 4))

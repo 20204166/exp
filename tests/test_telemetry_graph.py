@@ -10,6 +10,7 @@ from maintenance.components.temperature import (
     TemperatureSeriesSnapshot,
     TemperatureState,
 )
+from maintenance.ui.layout import build_telemetry_graph_layout
 from maintenance.ui.telemetry_graph import TelemetryMiniGraph
 from tests.support.temperature import make_temperature_sample
 
@@ -113,6 +114,32 @@ class TelemetryGraphTests(unittest.TestCase):
         line_args = graph._canvas.create_line.call_args.args
         self.assertLessEqual(len(line_args) // 2, graph.MAX_PLOT_POINTS)
         self.assertEqual(line_args[1], 90.0)
+
+    def test_layout_builder_is_tk_free_and_preserves_endpoints(self) -> None:
+        graph = self._graph()
+        graph._snapshot = TemperatureSeriesSnapshot(
+            component="gpu",
+            title="GPU Temperature",
+            state=TemperatureState.VALID,
+            current_celsius=46.0,
+            minimum_celsius=42.0,
+            maximum_celsius=46.0,
+            warning_celsius=90.0,
+            critical_celsius=95.0,
+            samples=(
+                make_temperature_sample("gpu", 42.0, sampled_monotonic=1.0),
+                make_temperature_sample("gpu", 46.0, sampled_monotonic=2.0),
+            ),
+            events=(),
+        )
+
+        layout = build_telemetry_graph_layout(graph._snapshot, 520, 108)
+
+        self.assertIsNotNone(layout)
+        assert layout is not None
+        self.assertEqual(layout.points[0][0], layout.left)
+        self.assertEqual(layout.points[-1][0], layout.right)
+        self.assertIsNotNone(layout.warning_y)
 
 
 if __name__ == "__main__":

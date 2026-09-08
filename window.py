@@ -374,13 +374,22 @@ class AppWindow:
     ) -> tuple[str | None, str]:
         return (node_id.value if node_id is not None else None, key)
 
+    def _thermal_render_target(self, node_id: NodeId | None, key: str) -> str:
+        return f"thermal:{node_id.value if node_id is not None else 'local'}:{key}"
+
     def _register_thermal_dialog(
         self, node_id: NodeId | None, key: str, dialog: Any
     ) -> None:
         self._thermal_dialogs[self._thermal_dialog_key(node_id, key)] = dialog
+        coordinator = self._render_coordinator()
+        if coordinator is not None:
+            coordinator.set_visible(self._thermal_render_target(node_id, key), True)
 
     def _unregister_thermal_dialog(self, node_id: NodeId | None, key: str) -> None:
         self._thermal_dialogs.pop(self._thermal_dialog_key(node_id, key), None)
+        coordinator = self._render_coordinator()
+        if coordinator is not None:
+            coordinator.clear(self._thermal_render_target(node_id, key))
 
     def _refresh_thermal_dialog(
         self, node_id: NodeId | None, key: str, resource: ResourceSummary
@@ -396,7 +405,7 @@ class AppWindow:
             self._unregister_thermal_dialog(node_id, key)
             return
         intent = ui_render.RenderIntent(
-            target=f"thermal:{node_id.value if node_id is not None else 'local'}:{key}",
+            target=self._thermal_render_target(node_id, key),
             node_id=node_id,
             components=frozenset({key}),
             payload=resource,

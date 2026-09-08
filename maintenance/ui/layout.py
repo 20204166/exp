@@ -9,6 +9,8 @@ creation. Importing this module creates no widgets and no Tk root.
 
 import tkinter as tk
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from math import isfinite
 from typing import Any
 
 from maintenance.ui.action_coordinator import ButtonCoordinator
@@ -16,6 +18,78 @@ from maintenance.ui.styles import Font
 
 SCROLLBAR_GUTTER = 6
 FOOTER_GUTTER = 16
+
+
+@dataclass(frozen=True, slots=True)
+class TelemetryGraphLayout:
+    """Tk-free geometry for one thermal graph render."""
+
+    points: tuple[tuple[float, float], ...]
+    left: float
+    right: float
+    top: float
+    bottom: float
+    warning_y: float | None = None
+    critical_y: float | None = None
+
+
+def build_telemetry_graph_layout(
+    snapshot: Any,
+    width: int,
+    height: int,
+    *,
+    max_points: int = 240,
+) -> TelemetryGraphLayout | None:
+    """Build bounded thermal plot geometry without touching Tk widgets."""
+
+    values = tuple(
+        sample.value_celsius
+        for sample in snapshot.samples
+        if isfinite(sample.value_celsius)
+    )
+    if not values:
+        return None
+    if len(values) > max_points:
+        last = len(values) - 1
+        step = last / (max_points - 1)
+        values = tuple(values[round(index * step)] for index in range(max_points))
+
+    left = 14.0
+    top = 14.0
+    bottom = float(max(height, 1) - 18)
+    right = float(max(width, 1) - 14)
+    lowest = min(values)
+    highest = max(values)
+    if lowest == highest:
+        lowest -= 1.0
+        highest += 1.0
+    plot_height = max(bottom - top, 1.0)
+    plot_width = max(right - left, 1.0)
+
+    def y_for(value: float) -> float:
+        return bottom - ((value - lowest) / (highest - lowest) * plot_height)
+
+    count = len(values)
+    points = tuple(
+        (
+            left if count == 1 else left + (plot_width * index / (count - 1)),
+            y_for(value),
+        )
+        for index, value in enumerate(values)
+    )
+
+    def threshold_y(value: float | None) -> float | None:
+        return None if value is None else y_for(value)
+
+    return TelemetryGraphLayout(
+        points=points,
+        left=left,
+        right=right,
+        top=top,
+        bottom=bottom,
+        warning_y=threshold_y(snapshot.warning_celsius),
+        critical_y=threshold_y(snapshot.critical_celsius),
+    )
 
 
 def resize_aware(widget: Any, handler: Callable[[Any], None]) -> Callable[[Any], None]:
