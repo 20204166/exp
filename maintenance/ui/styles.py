@@ -32,6 +32,22 @@ COLORS: dict[str, str] = {
     "button_bg": "#E3E4E8",
     "button_bg_active": "#D4D8E0",
     "muted_text": "#98A2B3",
+    "graph_grid": "#D9E0EC",
+    "graph_empty_border": "#CBD5E1",
+}
+
+SPACING: dict[str, int] = {
+    "page_x": 30,
+    "page_y": 26,
+    "section_gap": 14,
+    "row_gap": 10,
+    "control_gap": 12,
+}
+
+GRAPH: dict[str, int] = {
+    "height": 108,
+    "width": 520,
+    "max_points": 240,
 }
 
 FONTS: dict[str, Font] = {

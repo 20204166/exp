@@ -48,6 +48,30 @@ class TemperatureTelemetryTests(unittest.TestCase):
         self.assertEqual(len(snapshot.samples), 1)
         self.assertEqual(snapshot.samples[0].value_celsius, 45.0)
 
+    def test_record_returns_update_and_render_state_is_cached_data(self) -> None:
+        telemetry = TemperatureTelemetry()
+        update = telemetry.record_summary(
+            "cpu",
+            make_summary(
+                "cpu",
+                "CPU",
+                capability=CapabilityState.SUPPORTED,
+                temperatures=(make_temperature_sample("cpu", 45.0),),
+            ),
+        )
+
+        state = telemetry.render_state(("cpu", "battery"))
+
+        self.assertEqual(update.component, "cpu")
+        self.assertEqual(update.snapshot.current_celsius, 45.0)
+        cpu = state.series_for("cpu")
+        battery = state.series_for("battery")
+        assert cpu is not None
+        assert battery is not None
+        self.assertEqual(cpu.current_celsius, 45.0)
+        self.assertEqual(battery.samples, ())
+        self.assertEqual(state.events, ())
+
     def test_history_is_bounded_and_oldest_sample_is_discarded(self) -> None:
         telemetry = TemperatureTelemetry(
             policies={

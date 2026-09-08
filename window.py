@@ -40,6 +40,10 @@ from maintenance.components.scan_support import (
     SCAN_CANCELLED_NOTICE,
     call_legacy_compatible,
 )
+from maintenance.components.temperature import (
+    TemperatureRenderState,
+    TemperatureTelemetryUpdate,
+)
 from maintenance.dialogs import (
     InfoDialog,
     ProcessDialog,
@@ -375,7 +379,7 @@ class AppWindow:
     def _build_dashboard_page(self, parent: Any) -> Any:
         self.main_frame = ttk.Frame(
             parent,
-            padding=(30, 26),
+            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
             style="App.TFrame",
         )
 
@@ -548,7 +552,7 @@ class AppWindow:
     def _build_settings_home_page(self, parent: Any) -> Any:
         self.settings_frame = ttk.Frame(
             parent,
-            padding=(30, 26),
+            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
             style="App.TFrame",
         )
         self.settings_home = ui_settings_home.SettingsHome(
@@ -604,7 +608,7 @@ class AppWindow:
     def _build_preferences_page(self, parent: Any) -> Any:
         self.preferences_frame = ttk.Frame(
             parent,
-            padding=(30, 26),
+            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
             style="App.TFrame",
         )
         self.preferences_page = ui_preferences.PreferencesPage(
@@ -679,8 +683,8 @@ class AppWindow:
         page = getattr(self, "thermals_page", None)
         context = self._selected_context()
         if page is not None:
-            page.refresh_from_telemetry(
-                getattr(context, "telemetry", None) if context is not None else None,
+            page.render(
+                self._thermal_render_state(context) if context is not None else None,
                 getattr(context, "capabilities", None) if context is not None else None,
             )
         self._page_router.show(THERMALS_PAGE)
@@ -691,7 +695,7 @@ class AppWindow:
     def _build_thermals_page(self, parent: Any) -> Any:
         self.thermals_frame = ttk.Frame(
             parent,
-            padding=(30, 26),
+            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
             style="App.TFrame",
         )
         self.thermals_page = ui_thermals.ThermalsPage(
@@ -730,7 +734,7 @@ class AppWindow:
     def _build_nodes_page(self, parent: Any) -> Any:
         self.nodes_frame = ttk.Frame(
             parent,
-            padding=(30, 26),
+            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
             style="App.TFrame",
         )
         self.nodes_page = ui_nodes.NodesConnectionsPage(
@@ -875,7 +879,7 @@ class AppWindow:
     def _build_cluster_page(self, parent: Any) -> Any:
         self.cluster_frame = ttk.Frame(
             parent,
-            padding=(30, 26),
+            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
             style="App.TFrame",
         )
         self.cluster_page = ui_cluster.ClusterPage(
@@ -1367,8 +1371,8 @@ class AppWindow:
             and router is not None
             and router.is_mapped(THERMALS_PAGE)
         ):
-            thermals_page.refresh_from_telemetry(
-                context.telemetry,
+            thermals_page.render(
+                self._thermal_render_state(context),
                 context.capabilities,
             )
         self._schedule_timer(0, self.handle_analyze)
@@ -2316,7 +2320,9 @@ class AppWindow:
             self._show_ready_after_completion_hold,
         )
         self._refresh_health()
-        self._refresh_thermals_page()
+        self._refresh_thermals_page(
+            self._thermal_render_state(context) if context is not None else None
+        )
         self._component_scheduler.mark_all_refreshed(time.monotonic())
         self._schedule_component_poll(force=True)
 
@@ -2666,30 +2672,42 @@ class AppWindow:
         title = self._fallback_component_title(key)
         return unavailable_summary(key, title)
 
-    def _record_thermal_summary(self, key: str, resource: ResourceSummary) -> None:
+    def _record_thermal_summary(
+        self,
+        key: str,
+        resource: ResourceSummary,
+    ) -> TemperatureTelemetryUpdate | None:
         context = self._selected_context()
         telemetry = getattr(context, "telemetry", None) if context is not None else None
         if telemetry is not None:
-            telemetry.record_summary(key, resource)
+            return telemetry.record_summary(key, resource)
+        return None
 
-    def _refresh_thermals_page(self) -> None:
+    def _thermal_render_state(self, context: Any) -> TemperatureRenderState:
+        return context.telemetry.render_state(("cpu", "gpu", "storage", "battery"))
+
+    def _refresh_thermals_page(
+        self,
+        state: TemperatureRenderState | None = None,
+    ) -> None:
         page = getattr(self, "thermals_page", None)
         context = self._selected_context()
         if page is None or context is None:
             return
+        state = state or self._thermal_render_state(context)
         node_id = context.node_id
         intent = ui_render.RenderIntent(
             target=THERMALS_PAGE,
             node_id=node_id,
             components=frozenset({"temperature"}),
-            payload=context.telemetry,
+            payload=state,
             payload_set=True,
             priority=2,
         )
 
         def apply_thermals(_intent: ui_render.RenderIntent) -> None:
-            page.refresh_from_telemetry(
-                context.telemetry,
+            page.render(
+                state,
                 context.capabilities,
             )
 
@@ -2712,7 +2730,11 @@ class AppWindow:
         if key in self.cards:
             self.cards[key].update_summary(displayed)
         self._update_snapshot_resource(key, displayed)
-        self._refresh_thermals_page()
+        self._refresh_thermals_page(
+            self._thermal_render_state(self._selected_context())
+            if self._selected_context() is not None
+            else None
+        )
         self._refresh_health()
 
     def _observe_capability(

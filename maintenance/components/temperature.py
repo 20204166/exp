@@ -110,6 +110,29 @@ class TemperatureSeriesSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class TemperatureTelemetryUpdate:
+    """Immutable result for one newly recorded component summary."""
+
+    component: str
+    snapshot: TemperatureSeriesSnapshot
+
+
+@dataclass(frozen=True, slots=True)
+class TemperatureRenderState:
+    """Immutable multi-component state prepared for a UI render."""
+
+    series: tuple[TemperatureSeriesSnapshot, ...]
+    events: tuple[TemperatureEvent, ...]
+
+    def series_for(self, component: str) -> TemperatureSeriesSnapshot | None:
+        component = component.casefold()
+        return next(
+            (snapshot for snapshot in self.series if snapshot.component == component),
+            None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TemperatureScan:
     captured_at: datetime
     captured_monotonic: float
@@ -163,7 +186,9 @@ class TemperatureTelemetry:
     def policy_for(self, component: str) -> TemperaturePolicy:
         return self._policies.get(component, TemperaturePolicy())
 
-    def record_summary(self, component: str, summary: ResourceSummary) -> None:
+    def record_summary(
+        self, component: str, summary: ResourceSummary
+    ) -> TemperatureTelemetryUpdate:
         component = component.casefold()
         telemetry = self._component(component)
         telemetry.last_error = None
@@ -175,14 +200,30 @@ class TemperatureTelemetry:
             self._record_samples(telemetry, samples)
             telemetry.state = TemperatureState.VALID
             telemetry.current = samples[-1]
-            return
-
-        if summary.capability == CapabilityState.UNSUPPORTED:
+        elif summary.capability == CapabilityState.UNSUPPORTED:
             telemetry.state = TemperatureState.UNSUPPORTED
         elif summary.failed:
             telemetry.state = TemperatureState.ERROR
         else:
             telemetry.state = TemperatureState.NO_DATA
+        return TemperatureTelemetryUpdate(
+            component=component,
+            snapshot=self.series_snapshot(component, title=summary.title),
+        )
+
+    def render_state(self, components: tuple[str, ...]) -> TemperatureRenderState:
+        """Return the latest cached state for a UI render without scanning."""
+
+        series = tuple(
+            self.series_snapshot(
+                component, title=f"{component.capitalize()} Temperature"
+            )
+            for component in components
+        )
+        events = tuple(
+            event for component in components for event in self.recent_events(component)
+        )
+        return TemperatureRenderState(series=series, events=events)
 
     def series_snapshot(
         self, component: str, *, title: str | None = None

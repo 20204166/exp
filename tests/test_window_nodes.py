@@ -233,9 +233,10 @@ class WindowNodeSwitchingTests(unittest.TestCase):
 
         window._switch_selected_node(NodeId("dev"))
 
-        window.thermals_page.refresh_from_telemetry.assert_called_once_with(
-            window._node_registry.context(NodeId("dev")).telemetry,
-            window._node_registry.context(NodeId("dev")).capabilities,
+        dev = window._node_registry.context(NodeId("dev"))
+        window.thermals_page.render.assert_called_once_with(
+            dev.telemetry.render_state(("cpu", "gpu", "storage", "battery")),
+            dev.capabilities,
         )
 
     def test_switching_same_node_is_a_noop(self) -> None:
@@ -253,10 +254,10 @@ class WindowNodeSwitchingTests(unittest.TestCase):
 
         window._refresh_thermals_page()
 
-        window.thermals_page.refresh_from_telemetry.assert_not_called()
+        window.thermals_page.render.assert_not_called()
         self.assertEqual(window._ui_coordinator.pending_count, 1)
         window._ui_coordinator.set_visible("thermals", True)
-        window.thermals_page.refresh_from_telemetry.assert_called_once()
+        window.thermals_page.render.assert_called_once()
 
     def test_switching_ignores_unknown_node(self) -> None:
         window = _make_window()

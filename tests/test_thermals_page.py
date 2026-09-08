@@ -51,7 +51,7 @@ class ThermalsPageStateTests(unittest.TestCase):
         page._events_card = None
         page._events_body = None
         page._last_event_signature = None
-        page._telemetry = None
+        page._state = None
         page._capabilities = {}
         page.status_label = Mock()
         page._refresh_scrollbar = Mock()
@@ -70,8 +70,8 @@ class ThermalsPageStateTests(unittest.TestCase):
         page._ensure_component = ensure
         telemetry = _telemetry("cpu", "gpu", "storage")
 
-        page.refresh_from_telemetry(
-            telemetry,
+        page.render(
+            telemetry.render_state(("cpu", "gpu", "storage", "battery")),
             {
                 "cpu": CapabilityState.SUPPORTED,
                 "gpu": CapabilityState.SUPPORTED,
@@ -93,8 +93,8 @@ class ThermalsPageStateTests(unittest.TestCase):
         page._ensure_component = Mock()
         telemetry = _telemetry("battery")
 
-        page.refresh_from_telemetry(
-            telemetry,
+        page.render(
+            telemetry.render_state(("cpu", "gpu", "storage", "battery")),
             {"battery": CapabilityState.UNSUPPORTED},
         )
 
@@ -116,12 +116,12 @@ class ThermalsPageStateTests(unittest.TestCase):
         page._ensure_component = ensure
         telemetry = _telemetry("cpu")
 
-        page.refresh_from_telemetry(
-            telemetry,
+        page.render(
+            telemetry.render_state(("cpu", "gpu", "storage", "battery")),
             {"cpu": CapabilityState.SUPPORTED},
         )
-        page.refresh_from_telemetry(
-            telemetry,
+        page.render(
+            telemetry.render_state(("cpu", "gpu", "storage", "battery")),
             {"cpu": CapabilityState.SUPPORTED},
         )
 
@@ -157,7 +157,7 @@ class ThermalsPageStateTests(unittest.TestCase):
                     ),
                 ),
             )
-        page._telemetry = telemetry
+        page._state = telemetry.render_state(("cpu",))
 
         events = page._events()
 

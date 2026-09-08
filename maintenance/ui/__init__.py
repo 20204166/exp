@@ -9,6 +9,7 @@ and importing it has no side effects (no Tk root is created).
   dialog shells, footers).
 - ``telemetry_graph``: the lightweight thermal graph widget used in detail
   views and the Thermals page.
+- ``thermal_graph``: pure thermal graph geometry and Canvas rendering.
 - ``scan_status``: the shared global scan-presentation state (wording and styles).
 - ``transition``: the latest-wins cancellable delayed state-change rule used
   for smooth status transitions.
@@ -23,9 +24,11 @@ from .layout import (
     dialog_footer,
     dialog_heading,
     dialog_shell,
+    event_row,
     fit_wrap_to_width,
     metric_row,
     metric_value_wrap,
+    navigation_card,
     next_wrap_width,
     pack_action_buttons,
     resize_aware,
@@ -54,6 +57,8 @@ from .scan_status import (
 from .styles import (
     COLORS,
     FONTS,
+    GRAPH,
+    SPACING,
     STYLE_APP_FRAME,
     STYLE_BAR_ANALYSIS,
     STYLE_BAR_CARD,
@@ -85,10 +90,12 @@ __all__ = [
     "COMPLETE_TEXT",
     "FONTS",
     "FOOTER_GUTTER",
+    "GRAPH",
     "READY_STYLE",
     "READY_TEXT",
     "SCANNING_TEXT",
     "SCROLLBAR_GUTTER",
+    "SPACING",
     "STYLE_APP_FRAME",
     "STYLE_BAR_ANALYSIS",
     "STYLE_BAR_CARD",
@@ -125,9 +132,11 @@ __all__ = [
     "dialog_footer",
     "dialog_heading",
     "dialog_shell",
+    "event_row",
     "fit_wrap_to_width",
     "metric_row",
     "metric_value_wrap",
+    "navigation_card",
     "next_wrap_width",
     "pack_action_buttons",
     "progress_text",

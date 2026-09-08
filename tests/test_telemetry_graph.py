@@ -87,7 +87,12 @@ class TelemetryGraphTests(unittest.TestCase):
 
         graph._redraw()
 
-        graph._canvas.create_line.assert_not_called()
+        graph_lines = [
+            call
+            for call in graph._canvas.create_line.call_args_list
+            if call.kwargs.get("smooth")
+        ]
+        self.assertEqual(graph_lines, [])
         graph._canvas.create_oval.assert_called_once()
 
     def test_large_series_is_bounded_before_canvas_render(self) -> None:

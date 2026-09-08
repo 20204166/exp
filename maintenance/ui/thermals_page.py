@@ -10,8 +10,8 @@ from typing import Any
 
 from maintenance.components.temperature import (
     TemperatureEvent,
+    TemperatureRenderState,
     TemperatureState,
-    TemperatureTelemetry,
 )
 from maintenance.models import CapabilityState
 from maintenance.ui import layout as ui_layout
@@ -58,7 +58,7 @@ class ThermalsPage:
         self._events_card: Any | None = None
         self._events_body: Any | None = None
         self._last_event_signature: tuple[Any, ...] | None = None
-        self._telemetry: TemperatureTelemetry | None = None
+        self._state: TemperatureRenderState | None = None
         self._capabilities: Mapping[str, CapabilityState] = {}
         self._build(parent)
 
@@ -86,33 +86,37 @@ class ThermalsPage:
             colors=self.colors,
         )
 
-        self.status_label = self.label_cls(
+        self.status_label = ui_layout.page_status(
             self.content,
-            text="Waiting for thermal telemetry.",
+            "Waiting for thermal telemetry.",
+            label_cls=self.label_cls,
+            colors=self.colors,
+            fonts=self.fonts,
+            pady=(0, 14),
             style="Description.TLabel",
         )
-        self.status_label.pack(anchor="w", pady=(0, 14))
 
     def focus_back(self) -> None:
         self.back_button.focus_set()
 
-    def refresh_from_telemetry(
+    def render(
         self,
-        telemetry: TemperatureTelemetry | None,
+        state: TemperatureRenderState | None,
         capabilities: Mapping[str, CapabilityState] | None = None,
     ) -> None:
-        """Render cached telemetry without triggering a scan."""
+        """Render prepared thermal state without reading or scanning telemetry."""
 
-        self._telemetry = telemetry
+        self._state = state
         self._capabilities = capabilities or {}
-        if telemetry is None:
+        if state is None:
             self.status_label.config(text="Thermal telemetry is unavailable.")
             return
 
         for component in THERMAL_COMPONENTS:
-            snapshot = telemetry.series_snapshot(
-                component, title=self._title(component)
-            )
+            snapshot = state.series_for(component)
+            if snapshot is None:
+                self._remove_component(component)
+                continue
             if not self._should_show(component, snapshot.state):
                 self._remove_component(component)
                 continue
@@ -124,25 +128,6 @@ class ThermalsPage:
             self.status_label.config(text="Live history from shared node telemetry.")
         else:
             self.status_label.config(text="No supported temperature sensors detected.")
-        self._refresh_scrollbar()
-
-    def refresh_component(self, component: str) -> None:
-        """Refresh one component from already-recorded telemetry."""
-
-        if self._telemetry is None:
-            return
-        component = component.casefold()
-        if component not in THERMAL_COMPONENTS:
-            return
-        snapshot = self._telemetry.series_snapshot(
-            component,
-            title=self._title(component),
-        )
-        if not self._should_show(component, snapshot.state):
-            self._remove_component(component)
-        else:
-            self._ensure_component(component).render(snapshot)
-        self._refresh_events()
         self._refresh_scrollbar()
 
     def _should_show(self, component: str, state: TemperatureState) -> bool:
@@ -237,25 +222,22 @@ class ThermalsPage:
             return
 
         for event in events:
-            row, _label, _value = ui_layout.metric_row(
+
+            def show_event(event: TemperatureEvent = event) -> None:
+                self._show_event(event)
+
+            row, _button = ui_layout.event_row(
                 body,
                 event.component.upper(),
                 f"{event.started_at.strftime('%H:%M')} · {event.summary()}",
+                "View event",
+                show_event,
                 frame_cls=tk.Frame,
                 label_cls=tk.Label,
-                bg=self.colors["card"],
-                label_fg=self.colors["secondary"],
-                value_fg=self.colors["text"],
-                font=self.fonts["detail_row"],
-                justify="left",
+                button_cls=self.button_cls,
+                colors=self.colors,
+                fonts=self.fonts,
             )
-            button = self.button_cls(
-                row,
-                text="View event",
-                style=ui_styles.STYLE_NEUTRAL_BUTTON,
-                command=lambda event=event: self._show_event(event),
-            )
-            button.pack(side=tk.RIGHT, padx=(12, 0))
             self._event_rows.append(row)
 
     def _show_event(self, event: TemperatureEvent) -> None:
@@ -264,11 +246,10 @@ class ThermalsPage:
             graph.render(event.snapshot(title=self._title(event.component)))
 
     def _events(self) -> tuple[TemperatureEvent, ...]:
-        if self._telemetry is None:
+        if self._state is None:
             return ()
-        events: list[TemperatureEvent] = []
-        for component in self._graphs:
-            events.extend(self._telemetry.recent_events(component))
+        visible = set(self._graphs)
+        events = [event for event in self._state.events if event.component in visible]
         events.sort(key=lambda event: event.started_monotonic)
         return tuple(events[-6:])
 

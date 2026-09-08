@@ -153,14 +153,13 @@ class NodesConnectionsPage:
         self._build_trusted_section()
         self._build_manual_hosts_section()
 
-        self.status_label = self.label_cls(
+        self.status_label = ui_layout.page_status(
             parent,
-            text="",
-            bg=self.colors["background"],
-            fg=self.colors["secondary"],
-            font=self.fonts["body"],
+            "",
+            label_cls=self.label_cls,
+            colors=self.colors,
+            fonts=self.fonts,
         )
-        self.status_label.pack(anchor="w", pady=(6, 0))
 
     def _build_discovery_section(self, discovery_enabled: bool) -> None:
         _, body = ui_layout.section_card(

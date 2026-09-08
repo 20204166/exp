@@ -9,87 +9,18 @@ creation. Importing this module creates no widgets and no Tk root.
 
 import tkinter as tk
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from math import isfinite
 from typing import Any
 
+from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.styles import Font
+from maintenance.ui.thermal_graph import (  # noqa: F401
+    TelemetryGraphLayout,
+    build_telemetry_graph_layout,
+)
 
 SCROLLBAR_GUTTER = 6
 FOOTER_GUTTER = 16
-
-
-@dataclass(frozen=True, slots=True)
-class TelemetryGraphLayout:
-    """Tk-free geometry for one thermal graph render."""
-
-    points: tuple[tuple[float, float], ...]
-    left: float
-    right: float
-    top: float
-    bottom: float
-    warning_y: float | None = None
-    critical_y: float | None = None
-
-
-def build_telemetry_graph_layout(
-    snapshot: Any,
-    width: int,
-    height: int,
-    *,
-    max_points: int = 240,
-) -> TelemetryGraphLayout | None:
-    """Build bounded thermal plot geometry without touching Tk widgets."""
-
-    values = tuple(
-        sample.value_celsius
-        for sample in snapshot.samples
-        if isfinite(sample.value_celsius)
-    )
-    if not values:
-        return None
-    if len(values) > max_points:
-        last = len(values) - 1
-        step = last / (max_points - 1)
-        values = tuple(values[round(index * step)] for index in range(max_points))
-
-    left = 14.0
-    top = 14.0
-    bottom = float(max(height, 1) - 18)
-    right = float(max(width, 1) - 14)
-    lowest = min(values)
-    highest = max(values)
-    if lowest == highest:
-        lowest -= 1.0
-        highest += 1.0
-    plot_height = max(bottom - top, 1.0)
-    plot_width = max(right - left, 1.0)
-
-    def y_for(value: float) -> float:
-        return bottom - ((value - lowest) / (highest - lowest) * plot_height)
-
-    count = len(values)
-    points = tuple(
-        (
-            left if count == 1 else left + (plot_width * index / (count - 1)),
-            y_for(value),
-        )
-        for index, value in enumerate(values)
-    )
-
-    def threshold_y(value: float | None) -> float | None:
-        return None if value is None else y_for(value)
-
-    return TelemetryGraphLayout(
-        points=points,
-        left=left,
-        right=right,
-        top=top,
-        bottom=bottom,
-        warning_y=threshold_y(snapshot.warning_celsius),
-        critical_y=threshold_y(snapshot.critical_celsius),
-    )
 
 
 def resize_aware(widget: Any, handler: Callable[[Any], None]) -> Callable[[Any], None]:
@@ -523,7 +454,7 @@ def page_shell(
         header_actions,
         text=back_text,
         command=on_back,
-        style="Neutral.TButton",
+        style=ui_styles.STYLE_NEUTRAL_BUTTON,
     )
     back_button.pack(anchor="e")
 
@@ -591,6 +522,127 @@ def section_card(
     body = frame_cls(card, bg=colors["card"])
     body.pack(fill="x", pady=(10, 0))
     return card, body
+
+
+def navigation_card(
+    parent: Any,
+    title: str,
+    description: str,
+    button_text: str,
+    command: Callable[[], None],
+    *,
+    frame_cls: Callable[..., Any],
+    label_cls: Callable[..., Any],
+    button_cls: Callable[..., Any],
+    colors: dict[str, str],
+    fonts: dict[str, Font],
+    wraplength: int = 560,
+    action_id: str | None = None,
+    button_coordinator: ButtonCoordinator | None = None,
+) -> tuple[Any, Any]:
+    """Build a shared page-navigation card with one coordinated action."""
+
+    card = frame_cls(
+        parent,
+        bg=colors["card"],
+        highlightthickness=1,
+        highlightbackground=colors["border"],
+        highlightcolor=colors["border"],
+    )
+    card.pack(fill="x", pady=(0, 14))
+    text_column = frame_cls(card, bg=colors["card"])
+    text_column.pack(side="left", fill="x", expand=True)
+    label_cls(
+        text_column,
+        text=title,
+        bg=colors["card"],
+        fg=colors["text"],
+        font=fonts["section"],
+    ).pack(anchor="w")
+    label_cls(
+        text_column,
+        text=description,
+        bg=colors["card"],
+        fg=colors["secondary"],
+        font=fonts["body"],
+        wraplength=wraplength,
+        justify="left",
+    ).pack(anchor="w", pady=(4, 0))
+    button = button_cls(
+        card,
+        text=button_text,
+        command=command,
+        style=ui_styles.STYLE_NEUTRAL_BUTTON,
+        cursor="hand2",
+    )
+    button.pack(side="right", padx=(16, 0), anchor="center")
+    if button_coordinator is not None and action_id is not None:
+        button_coordinator.register(action_id, command, replace=True)
+        button_coordinator.bind(button, action_id)
+    return card, button
+
+
+def page_status(
+    parent: Any,
+    text: str,
+    *,
+    label_cls: Callable[..., Any],
+    colors: dict[str, str],
+    fonts: dict[str, Font],
+    pady: tuple[int, int] = (6, 0),
+    style: str | None = None,
+) -> Any:
+    """Build the shared muted status line used below page content."""
+
+    options: dict[str, Any] = {"text": text}
+    if style is None:
+        options.update(
+            bg=colors["background"],
+            fg=colors["secondary"],
+            font=fonts["body"],
+        )
+    else:
+        options["style"] = style
+    label = label_cls(parent, **options)
+    label.pack(anchor="w", pady=pady)
+    return label
+
+
+def event_row(
+    parent: Any,
+    label_text: str,
+    value_text: str,
+    action_text: str,
+    command: Callable[[], None],
+    *,
+    frame_cls: Callable[..., Any],
+    label_cls: Callable[..., Any],
+    button_cls: Callable[..., Any],
+    colors: dict[str, str],
+    fonts: dict[str, Font],
+) -> tuple[Any, Any]:
+    """Build a metric row with the shared trailing action treatment."""
+
+    row, _label, _value = metric_row(
+        parent,
+        label_text,
+        value_text,
+        frame_cls=frame_cls,
+        label_cls=label_cls,
+        bg=colors["card"],
+        label_fg=colors["secondary"],
+        value_fg=colors["text"],
+        font=fonts["detail_row"],
+        justify="left",
+    )
+    button = button_cls(
+        row,
+        text=action_text,
+        command=command,
+        style="Neutral.TButton",
+    )
+    button.pack(side="right", padx=(12, 0))
+    return row, button
 
 
 def setting_row(
