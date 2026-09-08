@@ -69,6 +69,26 @@ class TelemetryGraphTests(unittest.TestCase):
             "Current 46°C", graph._canvas.create_text.call_args_list[0].kwargs["text"]
         )
 
+    def test_single_sample_draws_point_without_invalid_line(self) -> None:
+        graph = self._graph()
+        graph._snapshot = TemperatureSeriesSnapshot(
+            component="storage",
+            title="Storage Temperature",
+            state=TemperatureState.VALID,
+            current_celsius=40.0,
+            minimum_celsius=40.0,
+            maximum_celsius=40.0,
+            warning_celsius=None,
+            critical_celsius=None,
+            samples=(make_temperature_sample("storage", 40.0, sampled_monotonic=1.0),),
+            events=(),
+        )
+
+        graph._redraw()
+
+        graph._canvas.create_line.assert_not_called()
+        graph._canvas.create_oval.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

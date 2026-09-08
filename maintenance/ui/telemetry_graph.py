@@ -145,7 +145,10 @@ class TelemetryMiniGraph(tk.Frame):
             x = left if count == 1 else left + (plot_width * index / (count - 1))
             y = bottom - ((value - lowest) / (highest - lowest) * plot_height)
             points.extend((x, y))
-        canvas.create_line(*points, fill=self.colors["accent"], width=2, smooth=True)
+        if len(points) >= 4:
+            canvas.create_line(
+                *points, fill=self.colors["accent"], width=2, smooth=True
+            )
         for x, y in zip(points[::2], points[1::2], strict=False):
             canvas.create_oval(
                 x - 2, y - 2, x + 2, y + 2, fill=self.colors["accent"], outline=""
