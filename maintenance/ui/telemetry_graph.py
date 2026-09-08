@@ -16,6 +16,8 @@ from maintenance.ui import styles as ui_styles
 class TelemetryMiniGraph(tk.Frame):
     """A tiny stable Canvas graph for one thermal series."""
 
+    MAX_PLOT_POINTS = 240
+
     def __init__(
         self,
         master: tk.Misc,
@@ -139,6 +141,7 @@ class TelemetryMiniGraph(tk.Frame):
                 self.colors["accent"],
             )
 
+        values = self._bounded_values(values)
         points: list[float] = []
         count = len(values)
         for index, value in enumerate(values):
@@ -149,6 +152,7 @@ class TelemetryMiniGraph(tk.Frame):
             canvas.create_line(
                 *points, fill=self.colors["accent"], width=2, smooth=True
             )
+
         for x, y in zip(points[::2], points[1::2], strict=False):
             canvas.create_oval(
                 x - 2, y - 2, x + 2, y + 2, fill=self.colors["accent"], outline=""
@@ -172,6 +176,16 @@ class TelemetryMiniGraph(tk.Frame):
                 fill=self.colors["secondary"],
                 font=ui_styles.FONTS["body"],
             )
+
+    @classmethod
+    def _bounded_values(cls, values: list[float]) -> list[float]:
+        """Keep canvas work bounded while preserving the first and last sample."""
+
+        if len(values) <= cls.MAX_PLOT_POINTS:
+            return values
+        last = len(values) - 1
+        step = last / (cls.MAX_PLOT_POINTS - 1)
+        return [values[round(index * step)] for index in range(cls.MAX_PLOT_POINTS)]
 
     def _draw_empty(
         self, canvas: tk.Canvas, width: int, height: int, message: str

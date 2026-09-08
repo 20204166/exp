@@ -89,6 +89,31 @@ class TelemetryGraphTests(unittest.TestCase):
         graph._canvas.create_line.assert_not_called()
         graph._canvas.create_oval.assert_called_once()
 
+    def test_large_series_is_bounded_before_canvas_render(self) -> None:
+        graph = self._graph()
+        values = tuple(float(index) for index in range(600))
+        graph._snapshot = TemperatureSeriesSnapshot(
+            component="cpu",
+            title="CPU Temperature",
+            state=TemperatureState.VALID,
+            current_celsius=599.0,
+            minimum_celsius=0.0,
+            maximum_celsius=599.0,
+            warning_celsius=None,
+            critical_celsius=None,
+            samples=tuple(
+                make_temperature_sample("cpu", value, sampled_monotonic=float(index))
+                for index, value in enumerate(values)
+            ),
+            events=(),
+        )
+
+        graph._redraw()
+
+        line_args = graph._canvas.create_line.call_args.args
+        self.assertLessEqual(len(line_args) // 2, graph.MAX_PLOT_POINTS)
+        self.assertEqual(line_args[1], 90.0)
+
 
 if __name__ == "__main__":
     unittest.main()

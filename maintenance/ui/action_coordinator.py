@@ -67,7 +67,7 @@ class ButtonCoordinator:
                 config(command=self.command(action_id))
             except TypeError:
                 pass
-            except tk.TclError:
+            except (RuntimeError, tk.TclError):
                 record.widgets = [item for item in record.widgets if item is not widget]
                 return
         if not self._apply_state(widget, record.enabled):
@@ -116,7 +116,7 @@ class ButtonCoordinator:
         except TypeError:
             # Non-button widgets may reject state updates; ignore them.
             return True
-        except tk.TclError:
+        except (RuntimeError, tk.TclError):
             return False
         return True
 
@@ -127,5 +127,5 @@ class ButtonCoordinator:
             return True
         try:
             return bool(exists())
-        except tk.TclError:
+        except (RuntimeError, tk.TclError):
             return False

@@ -1,6 +1,6 @@
 import threading
 import tkinter as tk
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any, TypeVar
@@ -800,7 +800,15 @@ class InfoDialog(tk.Toplevel):
             return
         if summary is not None:
             self.summary = summary
-        for component, graph in self._thermal_graphs.items():
+        changed = summary.key.casefold() if summary is not None else None
+        graphs: Iterable[tuple[str, TelemetryMiniGraph]] = self._thermal_graphs.items()
+        if changed is not None:
+            graphs = (
+                (component, graph)
+                for component, graph in graphs
+                if component == changed
+            )
+        for component, graph in graphs:
             graph.render(
                 self.telemetry.series_snapshot(
                     component,
@@ -1486,6 +1494,8 @@ class StorageDialog(tk.Toplevel):
 
     def refresh_thermal_view(self, _summary: ResourceSummary | None = None) -> None:
         if self.telemetry is None or self._thermal_graph is None:
+            return
+        if _summary is not None and _summary.key.casefold() != "storage":
             return
         self._thermal_graph.render(
             self.telemetry.series_snapshot("storage", title="Storage Temperature")

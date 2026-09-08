@@ -16,17 +16,40 @@ class TkDeliveryQueue:
     def __init__(self, widget: tk.Misc) -> None:
         self._widget = widget
         self._callbacks: Queue[Callable[[], None]] = Queue()
+        self._closed = False
+        self._after_id: str | None = None
         try:
-            widget.after(0, self._drain)
+            widget.bind("<Destroy>", self._on_destroy, add="+")
+            self._after_id = widget.after(0, self._drain)
         except (RuntimeError, tk.TclError):
             pass
 
     def __call__(self, callback: Callable[[], None]) -> None:
-        self._callbacks.put(callback)
+        if not self._closed:
+            self._callbacks.put(callback)
+
+    def _on_destroy(self, event: Any = None) -> None:
+        if (
+            event is not None
+            and getattr(event, "widget", self._widget) is not self._widget
+        ):
+            return
+        self._closed = True
+        after_id = self._after_id
+        self._after_id = None
+        if after_id is not None:
+            try:
+                self._widget.after_cancel(after_id)
+            except (RuntimeError, tk.TclError):
+                pass
 
     def _drain(self) -> None:
+        self._after_id = None
+        if self._closed:
+            return
         try:
             if not self._widget.winfo_exists():
+                self._closed = True
                 return
         except (RuntimeError, tk.TclError):
             return
@@ -40,9 +63,9 @@ class TkDeliveryQueue:
             except (RuntimeError, tk.TclError):
                 pass
         try:
-            self._widget.after(25, self._drain)
+            self._after_id = self._widget.after(25, self._drain)
         except (RuntimeError, tk.TclError):
-            pass
+            self._closed = True
 
 
 class BackgroundTaskRunner:
