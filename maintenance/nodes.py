@@ -23,6 +23,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -45,12 +46,26 @@ def generate_node_secret() -> str:
     return secrets.token_hex(32)
 
 
+def generate_stable_node_id() -> str:
+    """Return a fresh installation identity for local discovery."""
+
+    return f"node-{secrets.token_hex(16)}"
+
+
 class NodeStatus(str, Enum):
     """Connectivity state of a registered node."""
 
     ONLINE = "online"
     OFFLINE = "offline"
     UNKNOWN = "unknown"
+
+
+class NodeIdentityStatus(str, Enum):
+    """Continuity of the stable node identity presented by a peer."""
+
+    UNVERIFIED = "unverified"
+    VERIFIED = "verified"
+    MISMATCH = "mismatch"
 
 
 class NodeTrustState(str, Enum):
@@ -86,6 +101,28 @@ class NodeCapability(str, Enum):
     REMOTE_MANAGEMENT = "remote_management"
 
 
+class NodePermission(str, Enum):
+    """Explicit operations a trusted caller may request from a node."""
+
+    DASHBOARD_READ = "dashboard_read"
+    COMPONENT_READ = "component_read"
+    PROCESS_REVIEW = "process_review"
+    PROCESS_TERMINATION = "process_termination"
+    PROCESS_FORCE_TERMINATION = "process_force_termination"
+    STORAGE_REVIEW = "storage_review"
+    CLEANUP = "cleanup"
+
+
+READ_PERMISSIONS = frozenset(
+    {
+        NodePermission.DASHBOARD_READ,
+        NodePermission.COMPONENT_READ,
+        NodePermission.PROCESS_REVIEW,
+        NodePermission.STORAGE_REVIEW,
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class NodeId:
     """Stable opaque identity for one node.
@@ -113,6 +150,9 @@ class NodeDescriptor:
     capabilities: frozenset[NodeCapability]
     platform: str | None = None
     color: str | None = None
+    identity_fingerprint: str | None = None
+    identity_status: NodeIdentityStatus = NodeIdentityStatus.UNVERIFIED
+    permissions: frozenset[NodePermission] = frozenset()
 
     def has(self, capability: NodeCapability) -> bool:
         return capability in self.capabilities
@@ -205,7 +245,22 @@ def local_node_descriptor(
         status=NodeStatus.ONLINE,
         capabilities=local_capabilities(),
         platform=platform_name,
+        identity_fingerprint=node_identity_fingerprint(LOCAL_NODE_ID),
+        identity_status=NodeIdentityStatus.VERIFIED,
+        permissions=frozenset(NodePermission),
     )
+
+
+def node_identity_fingerprint(node_id: NodeId | str) -> str:
+    """Return a display fingerprint for a stable node identity.
+
+    This is a verification aid, not a credential. Authentication remains the
+    existing HMAC transport using the separately paired secret.
+    """
+
+    value = node_id.value if isinstance(node_id, NodeId) else node_id
+    digest = sha256(f"system-analyzer-node:{value}".encode()).hexdigest()
+    return ":".join(digest[index : index + 4] for index in range(0, len(digest), 4))
 
 
 def node_operation_key(node_id: NodeId, operation: str) -> str:
@@ -269,6 +324,7 @@ class DiscoveredNodeCandidate:
     connectable: bool
     compatible: bool
     last_seen: float
+    identity_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -448,6 +504,7 @@ class NodeRegistry:
                 NodeTrustState.TRUSTED,
                 NodeTrustState.AUTHORISED,
             )
+            and context.descriptor.identity_status is not NodeIdentityStatus.MISMATCH
             and (context.descriptor.is_local or self._is_operational(context))
         )
 
@@ -502,6 +559,16 @@ class NodeRegistry:
         known_context = self._contexts.get(node_id)
         if known_context is not None:
             descriptor = known_context.descriptor
+            identity_status = descriptor.identity_status
+            if (
+                descriptor.identity_fingerprint is not None
+                and identity_status is not NodeIdentityStatus.MISMATCH
+            ):
+                identity_status = (
+                    NodeIdentityStatus.VERIFIED
+                    if candidate.identity_fingerprint == descriptor.identity_fingerprint
+                    else NodeIdentityStatus.MISMATCH
+                )
             display_name = descriptor.display_name
             if display_name == descriptor.hostname:
                 display_name = candidate.hostname
@@ -511,7 +578,13 @@ class NodeRegistry:
                 hostname=candidate.hostname,
                 status=NodeStatus.ONLINE,
                 platform=candidate.platform,
+                identity_fingerprint=descriptor.identity_fingerprint,
+                identity_status=identity_status,
             )
+            if identity_status is NodeIdentityStatus.MISMATCH:
+                self._discovered[node_id] = candidate
+                if self._selected_id == node_id:
+                    self._selected_id = self._local_id
             return known_context.descriptor
         self._discovered[node_id] = candidate
         descriptor = NodeDescriptor(
@@ -523,8 +596,29 @@ class NodeRegistry:
             status=NodeStatus.ONLINE if candidate.last_seen else NodeStatus.UNKNOWN,
             capabilities=frozenset(),
             platform=candidate.platform,
+            identity_fingerprint=candidate.identity_fingerprint,
+            identity_status=NodeIdentityStatus.UNVERIFIED,
         )
         return descriptor
+
+    def confirm_identity(
+        self, node_id: NodeId, identity_fingerprint: str
+    ) -> NodeDescriptor:
+        """Mark a trusted node verified after authenticated rediscovery."""
+
+        context = self.context(node_id)
+        descriptor = context.descriptor
+        if (
+            descriptor.identity_fingerprint is not None
+            and descriptor.identity_fingerprint != identity_fingerprint
+        ):
+            raise ValueError(f"Identity fingerprint mismatch: {node_id}")
+        context.descriptor = replace(
+            descriptor,
+            identity_fingerprint=identity_fingerprint,
+            identity_status=NodeIdentityStatus.VERIFIED,
+        )
+        return context.descriptor
 
     def discovered_candidates(self) -> tuple[DiscoveredNodeCandidate, ...]:
         return tuple(self._discovered.values())
@@ -557,6 +651,11 @@ class NodeRegistry:
         if candidate is None:
             raise KeyError(f"No discovered node: {node_id}")
         requested_capabilities = frozenset(capabilities)
+        if not candidate.identity_fingerprint:
+            raise ValueError(
+                "Peer identity fingerprint is unavailable; re-pair manually"
+            )
+        identity_fingerprint = candidate.identity_fingerprint
         read_capabilities = frozenset(
             {
                 NodeCapability.DASHBOARD_READ,
@@ -579,6 +678,8 @@ class NodeRegistry:
             status=NodeStatus.ONLINE,
             capabilities=frozenset(capabilities),
             platform=candidate.platform,
+            identity_fingerprint=identity_fingerprint,
+            identity_status=NodeIdentityStatus.VERIFIED,
         )
         context = NodeContext(
             descriptor=descriptor,

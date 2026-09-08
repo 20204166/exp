@@ -2,6 +2,7 @@
 
 import json
 import socket
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,12 +11,14 @@ from maintenance.models import (
     CapabilityState,
     DashboardSnapshot,
     FileCandidate,
+    ProcessActionResult,
     ProcessCandidate,
     ResourceSummary,
 )
 from maintenance.nodes import (
     NodeCapability,
     NodeId,
+    NodePermission,
     NodeStatus,
 )
 from maintenance.remote import (
@@ -296,6 +299,79 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
         client = _client(service)
         with self.assertRaises(RemoteAuthorizationError):
             client.component_summary("cpu")
+
+    def test_permission_is_enforced_below_the_ui(self) -> None:
+        service = _service(
+            capabilities=READ_CAPABILITIES,
+        )
+        service = RemoteService(
+            node_id=NodeId("peer"),
+            display_name="Peer",
+            hostname="peer-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=READ_CAPABILITIES,
+            permissions=frozenset({NodePermission.DASHBOARD_READ}),
+            provider=FakeProvider(),
+            secret=SECRET,
+        )
+        client = _client(service)
+        with self.assertRaises(RemoteAuthorizationError):
+            client.process_candidates()
+
+    def test_process_action_is_target_bound_and_permission_checked(self) -> None:
+        class FakeProcessManager:
+            def request_quit(self, pids, create_times):
+                self.called = (pids, create_times)
+                return ProcessActionResult(1, (pids[0],), (), ())
+
+        manager = FakeProcessManager()
+        service = RemoteService(
+            node_id=NodeId("peer"),
+            display_name="Peer",
+            hostname="peer-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=frozenset(
+                {NodeCapability.DASHBOARD_READ, NodeCapability.PROCESS_TERMINATION}
+            ),
+            permissions=frozenset(
+                {NodePermission.DASHBOARD_READ, NodePermission.PROCESS_TERMINATION}
+            ),
+            provider=FakeProvider(),
+            process_manager=manager,
+            secret=SECRET,
+        )
+        client = _client(service)
+        result = client.request_quit([{"pid": 42, "create_time": 10.5}])
+        self.assertEqual(result.stopped, (42,))
+        self.assertEqual(manager.called, ([42], {42: 10.5}))
+
+    def test_target_can_bind_authenticated_secret_to_caller_identity(self) -> None:
+        service = RemoteService(
+            node_id=NodeId("target"),
+            expected_caller_id=NodeId("caller"),
+            display_name="Target",
+            hostname="target-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=frozenset({NodeCapability.DASHBOARD_READ}),
+            permissions=frozenset({NodePermission.DASHBOARD_READ}),
+            provider=FakeProvider(),
+            secret=SECRET,
+        )
+        request = sign_request(
+            node_id="target",
+            caller_node_id="wrong-caller",
+            op="hello",
+            params={},
+            request_id="caller-test",
+            nonce="caller-test-nonce",
+            timestamp=time.time(),
+            secret=SECRET,
+        )
+        with self.assertRaises(RemoteAuthError):
+            service.handle(json.dumps(request))
 
     def test_unknown_operation_is_rejected(self) -> None:
         service = _service()

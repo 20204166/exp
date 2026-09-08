@@ -38,16 +38,20 @@ def _info(
     connectable: str = "false",
     port: int = 5000,
     addresses: list[str] | None = None,
+    fingerprint: str | None = None,
 ) -> dict[str, Any]:
+    properties: dict[str, str] = {
+        "id": stable_id,
+        "name": name or f"host-{stable_id}",
+        "app_version": app_version,
+        "protocol_version": protocol,
+        "platform": platform,
+        "connectable": connectable,
+    }
+    if fingerprint is not None:
+        properties["fingerprint"] = fingerprint
     return {
-        "properties": {
-            "id": stable_id,
-            "name": name or f"host-{stable_id}",
-            "app_version": app_version,
-            "protocol_version": protocol,
-            "platform": platform,
-            "connectable": connectable,
-        },
+        "properties": properties,
         "port": port,
         "addresses": addresses or ["192.168.1.10"],
     }
@@ -260,6 +264,14 @@ class NetworkDiscoveryTests(unittest.TestCase):
         discovery.start()
         backend.add(f"local.{SERVICE_TYPE}", _info("local"))
         self.assertEqual(events, [])
+
+    def test_self_advertisement_without_txt_id_is_ignored(self) -> None:
+        discovery, backend, events, _clock = _discovery()
+        discovery.start()
+
+        backend.add(f"local.{SERVICE_TYPE}", {"properties": {}, "port": 5000})
+
+        self.assertEqual(events, [])
         self.assertEqual(discovery.peers(), ())
 
     def test_duplicate_peer_is_deduplicated(self) -> None:
@@ -355,6 +367,18 @@ class NetworkDiscoveryTests(unittest.TestCase):
         self.assertEqual(backend.last_advertisement.stable_id, "local")
         self.assertEqual(backend.last_advertisement.app_version, "1.2.2.0")
         self.assertFalse(backend.last_advertisement.connectable)
+
+    def test_peer_identity_fingerprint_is_carried_without_becoming_trust(self) -> None:
+        discovery, backend, _events, _clock = _discovery()
+        discovery.start()
+        backend.add(
+            f"a.{SERVICE_TYPE}",
+            _info("a", fingerprint="aaaa:bbbb"),
+        )
+
+        candidate = discovery.peers()[0]
+
+        self.assertEqual(candidate.identity_fingerprint, "aaaa:bbbb")
 
     def test_repeated_start_stop_leaves_no_duplicate_peers(self) -> None:
         discovery, backend, _events, _clock = _discovery()

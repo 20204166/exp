@@ -60,15 +60,20 @@ from maintenance.models import (
 )
 from maintenance.nodes import (
     LOCAL_NODE_ID,
+    READ_PERMISSIONS,
     NodeCapability,
     NodeContext,
     NodeDescriptor,
     NodeId,
+    NodeIdentityStatus,
+    NodePermission,
     NodeRegistry,
     NodeStatus,
     NodeTrustState,
+    generate_stable_node_id,
     is_trusted_descriptor,
     local_node_descriptor,
+    node_identity_fingerprint,
     node_operation_key,
 )
 from maintenance.preferences import (
@@ -81,6 +86,7 @@ from maintenance.preferences import (
 from maintenance.remote import (
     READ_CAPABILITIES,
     AuthenticatedNodeProvider,
+    RemoteProcessActionBackend,
     SocketRemoteTransport,
 )
 from maintenance.ui import cluster_page as ui_cluster
@@ -211,6 +217,13 @@ class AppWindow:
             display_name="This System",
             platform_name=platform.system(),
         )
+        descriptor = replace(
+            descriptor,
+            id=NodeId(self._cluster_state.local_node_id or generate_stable_node_id()),
+            identity_fingerprint=node_identity_fingerprint(
+                self._cluster_state.local_node_id
+            ),
+        )
         context = NodeContext(
             descriptor=descriptor,
             provider=self.analyzer,
@@ -239,7 +252,7 @@ class AppWindow:
         if registry is None or state is None:
             return
         for record in state.trusted_nodes:
-            if record.node_id == LOCAL_NODE_ID:
+            if record.node_id in {LOCAL_NODE_ID, self._cluster_state.local_node_id}:
                 continue
             node_id = NodeId(record.node_id)
             try:
@@ -257,6 +270,13 @@ class AppWindow:
                 capabilities=record.capabilities,
                 platform=record.platform,
                 color=record.color,
+                identity_fingerprint=record.identity_fingerprint,
+                identity_status=(
+                    NodeIdentityStatus.VERIFIED
+                    if record.identity_fingerprint
+                    else NodeIdentityStatus.UNVERIFIED
+                ),
+                permissions=record.permissions,
             )
             context = NodeContext(
                 descriptor=descriptor,
@@ -751,6 +771,7 @@ class AppWindow:
                 on_open_node=self._open_cluster_node,
                 on_add_manual_host=self._add_manual_host,
                 on_remove_manual=self._remove_manual_host,
+                on_permissions=self._set_node_permissions,
             ),
             discovery_enabled=self._cluster_state.discovery_enabled,
             discovered=self._nodes_peer_specs(),
@@ -772,6 +793,7 @@ class AppWindow:
                 compatible=candidate.compatible,
                 connectable=candidate.connectable,
                 port=candidate.port,
+                identity_fingerprint=candidate.identity_fingerprint,
             )
             for candidate in registry.discovered_candidates()
         ]
@@ -802,6 +824,14 @@ class AppWindow:
                     host=record.host if record is not None else descriptor.hostname,
                     port=record.port if record is not None else None,
                     selectable=descriptor.id in selectable,
+                    openable=record is not None and record.port is not None,
+                    identity_fingerprint=descriptor.identity_fingerprint,
+                    identity_status=descriptor.identity_status.value,
+                    permissions=tuple(
+                        sorted(
+                            permission.value for permission in descriptor.permissions
+                        )
+                    ),
                 )
             )
         return specs
@@ -828,7 +858,15 @@ class AppWindow:
                     host=record.host if record is not None else descriptor.hostname,
                     port=record.port if record is not None else None,
                     selectable=False,
+                    openable=record is not None and record.port is not None,
                     is_manual=True,
+                    identity_fingerprint=descriptor.identity_fingerprint,
+                    identity_status=descriptor.identity_status.value,
+                    permissions=tuple(
+                        sorted(
+                            permission.value for permission in descriptor.permissions
+                        )
+                    ),
                 )
             )
         return specs
@@ -956,6 +994,8 @@ class AppWindow:
         candidate = ClusterState(
             discovery_enabled=enabled,
             trusted_nodes=self._cluster_state.trusted_nodes,
+            local_node_id=self._cluster_state.local_node_id,
+            local_identity_persisted=self._cluster_state.local_identity_persisted,
         )
         if not self._save_cluster_state(candidate):
             page = getattr(self, "nodes_page", None)
@@ -984,7 +1024,29 @@ class AppWindow:
         if candidate is None:
             self._nodes_error("That peer is no longer visible on the network")
             return
+        if not candidate.identity_fingerprint:
+            self._nodes_error("That peer did not provide an identity fingerprint")
+            return
+        if not messagebox.askyesno(
+            "Confirm peer fingerprint",
+            (
+                f"Pair {candidate.hostname}?\n\n"
+                f"Stable node ID: {candidate.stable_id}\n"
+                f"Identity fingerprint:\n{candidate.identity_fingerprint}\n\n"
+                "Confirm this fingerprint through a trusted channel before pairing."
+            ),
+            parent=self.master,
+        ):
+            self._nodes_status(f"Pairing cancelled for {candidate.hostname}")
+            return
         node = NodeId(node_id)
+        previous_context = None
+        previous_selected = False
+        try:
+            previous_context = registry.context(node)
+            previous_selected = registry.selected_id() == node
+        except KeyError:
+            pass
         try:
             descriptor = registry.promote_to_trusted(
                 node, capabilities=READ_CAPABILITIES
@@ -992,6 +1054,8 @@ class AppWindow:
         except (KeyError, ValueError) as error:
             self._nodes_error(str(error))
             return
+        descriptor = replace(descriptor, permissions=READ_PERMISSIONS)
+        registry.context(node).descriptor = descriptor
         host = candidate.addresses[0] if candidate.addresses else candidate.hostname
         record = trusted_node_record(
             node_id=node_id,
@@ -1001,13 +1065,29 @@ class AppWindow:
             platform=descriptor.platform,
             port=candidate.port,
             capabilities=READ_CAPABILITIES,
+            permissions=READ_PERMISSIONS,
+            identity_fingerprint=candidate.identity_fingerprint,
         )
+        existing_record = self._cluster_state.record(node_id)
+        trusted_nodes = tuple(
+            record if item.node_id == node_id else item
+            for item in self._cluster_state.trusted_nodes
+        )
+        if existing_record is None:
+            trusted_nodes = (*trusted_nodes, record)
         state = ClusterState(
             discovery_enabled=self._cluster_state.discovery_enabled,
-            trusted_nodes=self._cluster_state.trusted_nodes + (record,),
+            trusted_nodes=trusted_nodes,
+            local_node_id=self._cluster_state.local_node_id,
+            local_identity_persisted=self._cluster_state.local_identity_persisted,
         )
         if not self._save_cluster_state(state):
             registry.revoke_trusted(node)
+            if previous_context is not None:
+                registry.register_context(previous_context)
+                registry.update_discovered(candidate)
+                if previous_selected:
+                    registry.select(node)
             self._nodes_error("Cluster settings could not be saved")
             return
         self._cluster_state = state
@@ -1060,6 +1140,8 @@ class AppWindow:
         state = ClusterState(
             discovery_enabled=self._cluster_state.discovery_enabled,
             trusted_nodes=tuple(records),
+            local_node_id=self._cluster_state.local_node_id,
+            local_identity_persisted=self._cluster_state.local_identity_persisted,
         )
         if not self._save_cluster_state(state):
             registry.set_display_name(NodeId(node_id), current)
@@ -1070,6 +1152,41 @@ class AppWindow:
         self._refresh_cluster_page()
         self._rebuild_node_selector()
         self._nodes_status(f"Renamed node to {descriptor.display_name}")
+
+    def _set_node_permissions(
+        self, node_id: str, raw_permissions: frozenset[str]
+    ) -> None:
+        registry = self.__dict__.get("_node_registry")
+        if registry is None:
+            return
+        try:
+            context = registry.context(NodeId(node_id))
+        except KeyError:
+            return
+        allowed = {permission.value for permission in NodePermission}
+        permissions = frozenset(
+            NodePermission(value) for value in raw_permissions if value in allowed
+        )
+        previous = context.descriptor.permissions
+        context.descriptor = replace(context.descriptor, permissions=permissions)
+        records = [
+            replace(record, permissions=permissions)
+            if record.node_id == node_id
+            else record
+            for record in self._cluster_state.trusted_nodes
+        ]
+        state = ClusterState(
+            discovery_enabled=self._cluster_state.discovery_enabled,
+            trusted_nodes=tuple(records),
+            local_node_id=self._cluster_state.local_node_id,
+            local_identity_persisted=self._cluster_state.local_identity_persisted,
+        )
+        if not self._save_cluster_state(state):
+            context.descriptor = replace(context.descriptor, permissions=previous)
+            self._nodes_error("Cluster settings could not be saved")
+            return
+        self._cluster_state = state
+        self._refresh_nodes_page()
 
     def _set_node_color(self, node_id: str, color: str) -> None:
         registry = self.__dict__.get("_node_registry")
@@ -1087,6 +1204,8 @@ class AppWindow:
         state = ClusterState(
             discovery_enabled=self._cluster_state.discovery_enabled,
             trusted_nodes=tuple(records),
+            local_node_id=self._cluster_state.local_node_id,
+            local_identity_persisted=self._cluster_state.local_identity_persisted,
         )
         if not self._save_cluster_state(state):
             registry.set_color(NodeId(node_id), None)
@@ -1113,6 +1232,8 @@ class AppWindow:
                 for record in self._cluster_state.trusted_nodes
                 if record.node_id != node_id
             ),
+            local_node_id=self._cluster_state.local_node_id,
+            local_identity_persisted=self._cluster_state.local_identity_persisted,
         )
         if not self._save_cluster_state(state):
             self._nodes_error("Cluster settings could not be saved")
@@ -1156,6 +1277,7 @@ class AppWindow:
             capabilities=READ_CAPABILITIES,
             platform=None,
             color=None,
+            permissions=READ_PERMISSIONS,
         )
         context = NodeContext(
             descriptor=descriptor,
@@ -1172,10 +1294,13 @@ class AppWindow:
             host=host,
             port=port,
             capabilities=READ_CAPABILITIES,
+            permissions=READ_PERMISSIONS,
         )
         state = ClusterState(
             discovery_enabled=self._cluster_state.discovery_enabled,
             trusted_nodes=self._cluster_state.trusted_nodes + (record,),
+            local_node_id=self._cluster_state.local_node_id,
+            local_identity_persisted=self._cluster_state.local_identity_persisted,
         )
         try:
             registry.register_context(context)
@@ -1243,8 +1368,81 @@ class AppWindow:
             registry.context(NodeId(node_id))
         except KeyError:
             return
-        self._switch_selected_node(NodeId(node_id))
+        node = NodeId(node_id)
+        context = registry.context(node)
+        if context.provider is None:
+            self._activate_remote_node(node)
+            return
+        self._switch_selected_node(node)
         self._show_dashboard_page()
+
+    def _activate_remote_node(self, node_id: NodeId) -> None:
+        """Authenticate and attach one remote context without blocking Tk."""
+
+        registry = self.__dict__.get("_node_registry")
+        state = self.__dict__.get("_cluster_state")
+        if registry is None or state is None:
+            return
+        record = state.record(node_id.value)
+        if record is None or record.port is None:
+            self._nodes_error("That trusted node has no authenticated remote port")
+            return
+        key = node_operation_key(node_id, "connect")
+
+        def task(
+            _cancel_event: threading.Event,
+            _progress: Callable[[str], None],
+        ) -> tuple[AuthenticatedNodeProvider, frozenset[NodeCapability]]:
+            provider = AuthenticatedNodeProvider(
+                node_id=node_id,
+                secret=record.secret,
+                caller_node_id=NodeId(state.local_node_id),
+                transport=SocketRemoteTransport(record.host, record.port),
+            )
+            result = provider.hello()
+            if result.get("node_id") != node_id.value:
+                raise RuntimeError("authenticated peer returned the wrong node ID")
+            capabilities = frozenset(
+                NodeCapability(raw)
+                for raw in result.get("capabilities", [])
+                if isinstance(raw, str)
+                and raw in {capability.value for capability in NodeCapability}
+            )
+            return provider, capabilities
+
+        def on_result(
+            _key: str,
+            result: tuple[AuthenticatedNodeProvider, frozenset[NodeCapability]],
+        ) -> None:
+            context = registry.context(node_id)
+            provider, capabilities = result
+            context.descriptor = replace(
+                context.descriptor,
+                capabilities=capabilities,
+                status=NodeStatus.ONLINE,
+                identity_status=NodeIdentityStatus.VERIFIED,
+                permissions=record.permissions,
+            )
+            context.provider = provider
+            context.process_manager = RemoteProcessActionBackend(provider)
+            context.scheduler = ComponentRefreshScheduler()
+            context.coordinator = self._coordinator
+            self._refresh_nodes_page()
+            self._rebuild_node_selector()
+            self._switch_selected_node(node_id)
+            self._show_dashboard_page()
+
+        def on_error(_key: str, message: str) -> None:
+            self._nodes_error(
+                f"Could not authenticate {record.display_name}: {message}"
+            )
+
+        self._coordinator.run(
+            key,
+            task,
+            on_result=on_result,
+            on_error=on_error,
+        )
 
     def _rebuild_node_selector(self) -> None:
         frame = getattr(self, "_node_selector_frame", None)
@@ -1480,8 +1678,20 @@ class AppWindow:
         state = self.__dict__.get("_cluster_state")
         if state is not None and not state.discovery_enabled:
             return
+        if state is not None and not state.local_identity_persisted:
+            try:
+                self._cluster_store.save(state)
+            except ClusterSaveError as error:
+                LOGGER.warning(
+                    "Discovery waiting for durable local identity: %s", error
+                )
+                return
+            state = replace(state, local_identity_persisted=True)
+            self._cluster_state = state
         try:
-            local_context = registry.context(NodeId(LOCAL_NODE_ID))
+            local_context = registry.context(
+                registry.local_id() or NodeId(LOCAL_NODE_ID)
+            )
         except KeyError:
             return
         descriptor = local_context.descriptor
@@ -1494,6 +1704,8 @@ class AppWindow:
             platform=descriptor.platform,
             connectable=False,
             port=None,
+            identity_fingerprint=local_context.descriptor.identity_fingerprint
+            or node_identity_fingerprint(descriptor.id),
         )
         discovery = NetworkDiscovery(
             descriptor.id,
@@ -1529,6 +1741,8 @@ class AppWindow:
         trusted_updated = False
         if registry is not None:
             registry.update_discovered(candidate)
+            if self._selected_node_id != registry.selected_id():
+                self._switch_selected_node(registry.selected_id())
             try:
                 context = registry.context(NodeId(candidate.stable_id))
             except KeyError:
@@ -1620,9 +1834,36 @@ class AppWindow:
         record = state.record(descriptor.id.value)
         if record is None:
             return False
+        if (
+            record.identity_fingerprint is not None
+            and candidate.identity_fingerprint != record.identity_fingerprint
+        ):
+            context.descriptor = replace(
+                descriptor,
+                identity_fingerprint=record.identity_fingerprint,
+                identity_status=NodeIdentityStatus.MISMATCH,
+            )
+            self._nodes_error(
+                f"Identity mismatch for {descriptor.display_name}; re-pair required"
+            )
+            return False
+        needs_identity_hydration = (
+            record.identity_fingerprint is None
+            and candidate.identity_fingerprint is not None
+            and candidate.identity_fingerprint
+            == node_identity_fingerprint(descriptor.id)
+        )
+        needs_identity_recovery = (
+            descriptor.identity_status is NodeIdentityStatus.MISMATCH
+            and record.identity_fingerprint is not None
+            and candidate.identity_fingerprint == record.identity_fingerprint
+        )
         address = candidate.addresses[0] if candidate.addresses else record.host
         port = candidate.port if candidate.port is not None else record.port
-        if address == record.host and port == record.port:
+        endpoint_changed = address != record.host or port != record.port
+        if not endpoint_changed and not (
+            needs_identity_hydration or needs_identity_recovery
+        ):
             return False
         if port is None:
             return False
@@ -1652,8 +1893,16 @@ class AppWindow:
             host=address,
             port=port,
             platform=descriptor.platform,
+            identity_fingerprint=(
+                candidate.identity_fingerprint
+                if needs_identity_hydration
+                else record.identity_fingerprint
+            ),
         )
         if updated_record == record:
+            if needs_identity_recovery:
+                registry.confirm_identity(descriptor.id, candidate.identity_fingerprint)
+                return True
             return False
         updated_records = tuple(
             updated_record if item.node_id == record.node_id else item
@@ -1662,11 +1911,15 @@ class AppWindow:
         updated_state = ClusterState(
             discovery_enabled=state.discovery_enabled,
             trusted_nodes=updated_records,
+            local_node_id=state.local_node_id,
+            local_identity_persisted=state.local_identity_persisted,
         )
         if not self._save_cluster_state(updated_state):
             self._nodes_error("Cluster settings could not be saved")
             return False
         self._cluster_state = updated_state
+        if needs_identity_hydration or needs_identity_recovery:
+            registry.confirm_identity(descriptor.id, candidate.identity_fingerprint)
         return True
 
     def _refresh_discovery_status(self) -> None:
@@ -2425,13 +2678,24 @@ class AppWindow:
             else None
         )
         if feature.action_kind == "process":
-            read_only = context is not None and not context.descriptor.has(
-                NodeCapability.PROCESS_TERMINATION
+            if context is not None and not (
+                context.descriptor.has(NodeCapability.PROCESS_REVIEW)
+                and NodePermission.PROCESS_REVIEW in context.descriptor.permissions
+            ):
+                self._nodes_error("This node is not authorised for process review")
+                return
+            read_only = context is not None and not (
+                context.descriptor.has(NodeCapability.PROCESS_TERMINATION)
+                and NodePermission.PROCESS_TERMINATION in context.descriptor.permissions
             )
             ProcessDialog(
                 self.master,
-                analyzer=self.analyzer,
-                manager=self.process_manager,
+                analyzer=context.provider if context is not None else self.analyzer,
+                manager=(
+                    context.process_manager
+                    if context is not None
+                    else self.process_manager
+                ),
                 resource_key=resource_key,
                 colors=self.colors,
                 on_changed=lambda: self._rescan_node_after_change(node_id),
@@ -2441,13 +2705,22 @@ class AppWindow:
                 read_only=read_only,
             )
         elif feature.action_kind == "storage":
-            read_only = context is not None and not context.descriptor.has(
-                NodeCapability.CLEANUP
+            if context is not None and not (
+                context.descriptor.has(NodeCapability.STORAGE_REVIEW)
+                and NodePermission.STORAGE_REVIEW in context.descriptor.permissions
+            ):
+                self._nodes_error("This node is not authorised for storage review")
+                return
+            read_only = context is not None and not (
+                context.descriptor.has(NodeCapability.CLEANUP)
+                and NodePermission.CLEANUP in context.descriptor.permissions
             )
             StorageDialog(
                 self.master,
-                analyzer=self.analyzer,
-                manager=self.file_manager,
+                analyzer=context.provider if context is not None else self.analyzer,
+                manager=(
+                    context.file_manager if context is not None else self.file_manager
+                ),
                 colors=self.colors,
                 on_changed=lambda: self._rescan_node_after_change(node_id),
                 coordinator=self._coordinator,

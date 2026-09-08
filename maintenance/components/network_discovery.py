@@ -73,6 +73,7 @@ class DiscoveryAdvertisement:
     platform: str | None = None
     connectable: bool = False
     port: int | None = None
+    identity_fingerprint: str | None = None
 
 
 class DiscoveryBackend(Protocol):
@@ -115,6 +116,7 @@ class ZeroconfDiscoveryBackend:
         if _zeroconf_module is None:
             raise RuntimeError("python-zeroconf is not installed")
         zc = _zeroconf_module.Zeroconf()
+        self._zeroconf = zc
         properties = {
             "id": advertisement.stable_id,
             "name": advertisement.display_name,
@@ -123,6 +125,8 @@ class ZeroconfDiscoveryBackend:
         }
         if advertisement.platform:
             properties["platform"] = advertisement.platform
+        if advertisement.identity_fingerprint:
+            properties["fingerprint"] = advertisement.identity_fingerprint
         properties["connectable"] = "true" if advertisement.connectable else "false"
         port = advertisement.port or 0
         service_info = _zeroconf_module.ServiceInfo(
@@ -135,7 +139,6 @@ class ZeroconfDiscoveryBackend:
         zc.register_service(service_info)
         listener = _ZeroconfListener(self._listener)
         browser = _zeroconf_module.ServiceBrowser(zc, SERVICE_TYPE, cast(Any, listener))
-        self._zeroconf = zc
         self._service_info = service_info
         self._browser = browser
 
@@ -308,6 +311,7 @@ class NetworkDiscovery:
                 connectable=candidate.connectable,
                 compatible=candidate.compatible,
                 last_seen=candidate.last_seen,
+                identity_fingerprint=candidate.identity_fingerprint,
             )
             changed = (
                 existing.addresses != updated.addresses
@@ -315,6 +319,7 @@ class NetworkDiscovery:
                 or existing.app_version != updated.app_version
                 or existing.port != updated.port
                 or existing.connectable != updated.connectable
+                or existing.identity_fingerprint != updated.identity_fingerprint
             )
             self._peers[candidate.stable_id] = _PeerRecord(updated, candidate.last_seen)
             if changed:
@@ -365,7 +370,10 @@ class NetworkDiscovery:
         properties = _property_map(info)
         stable_id = properties.get("id")
         if not stable_id:
-            raise _MalformedAdvertisement(f"{service_name}: missing id")
+            # Zeroconf can deliver the service record before TXT properties;
+            # wait for its next update instead of treating that transient state
+            # as a malformed peer or surfacing a noisy warning for our service.
+            return None
         if stable_id == self._local_node_id.value:
             return None
 
@@ -373,6 +381,7 @@ class NetworkDiscovery:
         app_version = properties.get("app_version", "")
         protocol_version = properties.get("protocol_version", "")
         platform = properties.get("platform") or None
+        identity_fingerprint = properties.get("fingerprint") or None
         connectable = properties.get("connectable", "false").casefold() == "true"
 
         port: int | None = None
@@ -396,6 +405,7 @@ class NetworkDiscovery:
             connectable=connectable,
             compatible=protocol_version in SUPPORTED_PROTOCOL_VERSIONS,
             last_seen=self._clock(),
+            identity_fingerprint=identity_fingerprint,
         )
 
 

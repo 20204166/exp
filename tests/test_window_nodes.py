@@ -2,6 +2,7 @@
 
 import threading
 import unittest
+from dataclasses import replace
 from queue import Queue
 from types import SimpleNamespace
 from typing import Any
@@ -24,10 +25,13 @@ from maintenance.nodes import (
     NodeContext,
     NodeDescriptor,
     NodeId,
+    NodeIdentityStatus,
+    NodePermission,
     NodeRegistry,
     NodeStatus,
     NodeTrustState,
     local_node_descriptor,
+    node_identity_fingerprint,
     node_operation_key,
 )
 from maintenance.ui.render_coordinator import UICoordinator
@@ -71,6 +75,7 @@ def _trusted_context(
             status=NodeStatus.ONLINE,
             capabilities=capabilities,
             platform="Linux",
+            permissions=frozenset(NodePermission),
         ),
         provider=Mock(),
         process_manager=Mock(),
@@ -459,6 +464,21 @@ class WindowNodeSwitchingTests(unittest.TestCase):
 
 
 class WindowDiscoveryIntegrationTests(unittest.TestCase):
+    def test_migrated_local_identity_uses_matching_fingerprint(self) -> None:
+        window = _make_window(start_discovery=False)
+        window._cluster_state = ClusterState(local_node_id="node-persisted")
+        window._node_registry = NodeRegistry()
+        window._component_scheduler = ComponentRefreshScheduler()
+
+        window._build_local_node_context()
+
+        descriptor = window._node_registry.selected_context().descriptor
+        self.assertEqual(descriptor.id, NodeId("node-persisted"))
+        self.assertEqual(
+            descriptor.identity_fingerprint,
+            node_identity_fingerprint("node-persisted"),
+        )
+
     def test_start_discovery_registers_local_advertisement(self) -> None:
         with patch(
             "window.NetworkDiscovery",
@@ -546,6 +566,152 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         self.assertEqual(record.port, 6000)
         self.assertEqual(record.hostname, "new-host")
 
+    def test_legacy_trusted_rediscovery_hydrates_live_fingerprint(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer")
+        )
+        window._cluster_store = Mock()
+        window._cluster_store.save = Mock()
+        window._cluster_state = ClusterState(
+            discovery_enabled=True,
+            trusted_nodes=(
+                trusted_node_record(
+                    node_id="peer-a",
+                    display_name="Peer A",
+                    hostname="peer-a",
+                    host="192.168.1.10",
+                    port=5000,
+                    secret="a" * 64,
+                ),
+            ),
+        )
+        provider = Mock()
+        provider.hello.return_value = {"ok": True, "node_id": "peer-a"}
+        candidate = DiscoveredNodeCandidate(
+            stable_id="peer-a",
+            hostname="peer-a",
+            addresses=("192.168.1.10",),
+            port=5000,
+            service_name="peer-a._system-analyzer._tcp.local.",
+            app_version="1.2.4.0",
+            protocol_version="1",
+            platform="Linux",
+            connectable=False,
+            compatible=True,
+            last_seen=1.0,
+            identity_fingerprint=node_identity_fingerprint("peer-a"),
+        )
+
+        with patch("window.AuthenticatedNodeProvider", return_value=provider):
+            window._on_discovered_candidate(candidate)
+
+        descriptor = window._node_registry.context(NodeId("peer-a")).descriptor
+        self.assertEqual(
+            descriptor.identity_fingerprint,
+            node_identity_fingerprint("peer-a"),
+        )
+        self.assertEqual(descriptor.identity_status, NodeIdentityStatus.VERIFIED)
+        record = window._cluster_state.record("peer-a")
+        assert record is not None
+        self.assertEqual(
+            record.identity_fingerprint,
+            node_identity_fingerprint("peer-a"),
+        )
+        provider.hello.assert_called_once()
+
+    def test_trusted_rediscovery_rejects_identity_mismatch(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer")
+        )
+        window._cluster_store = Mock()
+        window._cluster_store.save = Mock()
+        window._cluster_state = ClusterState(
+            discovery_enabled=True,
+            trusted_nodes=(
+                trusted_node_record(
+                    node_id="peer-a",
+                    display_name="Peer A",
+                    hostname="peer-a",
+                    host="192.168.1.10",
+                    port=5000,
+                    secret="a" * 64,
+                    identity_fingerprint="original",
+                ),
+            ),
+        )
+        candidate = DiscoveredNodeCandidate(
+            stable_id="peer-a",
+            hostname="new-host",
+            addresses=("192.168.1.20",),
+            port=6000,
+            service_name="peer-a._system-analyzer._tcp.local.",
+            app_version="1.2.4.0",
+            protocol_version="1",
+            platform="Linux",
+            connectable=False,
+            compatible=True,
+            last_seen=1.0,
+            identity_fingerprint="changed",
+        )
+
+        with patch("window.AuthenticatedNodeProvider") as factory:
+            window._on_discovered_candidate(candidate)
+
+        factory.assert_not_called()
+        record = window._cluster_state.record("peer-a")
+        assert record is not None
+        self.assertEqual(record.host, "192.168.1.10")
+        self.assertEqual(
+            window._node_registry.context(
+                NodeId("peer-a")
+            ).descriptor.identity_status.value,
+            "mismatch",
+        )
+
+        matching = replace(candidate, identity_fingerprint="original")
+        with patch("window.AuthenticatedNodeProvider", return_value=Mock()):
+            window._on_discovered_candidate(matching)
+
+        self.assertEqual(
+            window._node_registry.context(NodeId("peer-a")).descriptor.identity_status,
+            NodeIdentityStatus.VERIFIED,
+        )
+
+    def test_confirmed_mismatch_repair_replaces_trust_record(self) -> None:
+        context = _trusted_context(
+            "peer-a", "Peer A", cpu_value="peer", host_label="peer"
+        )
+        context.descriptor = replace(
+            context.descriptor,
+            identity_fingerprint="original",
+            identity_status=NodeIdentityStatus.VERIFIED,
+        )
+        window = _make_window(context)
+        window._cluster_store = Mock()
+        window._cluster_store.save = Mock()
+        window._cluster_state = ClusterState(
+            trusted_nodes=(
+                trusted_node_record(
+                    node_id="peer-a",
+                    display_name="Peer A",
+                    hostname="peer-a",
+                    host="192.168.1.10",
+                    port=5000,
+                    secret="a" * 64,
+                    identity_fingerprint="original",
+                ),
+            )
+        )
+        window._node_registry.update_discovered(_candidate("peer-a", "replacement"))
+
+        with patch("window.messagebox.askyesno", return_value=True):
+            window._pair_discovered_node("peer-a")
+
+        records = window._cluster_state.trusted_nodes
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].identity_fingerprint, "replacement")
+        self.assertIs(window._cluster_state.record("peer-a"), records[0])
+
     def test_discovery_status_lists_untrusted_peers_and_hides_when_lost(self) -> None:
         window = _make_window()
         window.discovery_status_label = Mock()
@@ -615,7 +781,7 @@ class WindowOpenResourceNodeTests(unittest.TestCase):
         window._rescan_after_change.assert_not_called()
 
 
-def _candidate(stable_id: str) -> Any:
+def _candidate(stable_id: str, fingerprint: str | None = None) -> Any:
     from maintenance.nodes import DiscoveredNodeCandidate
 
     return DiscoveredNodeCandidate(
@@ -630,6 +796,7 @@ def _candidate(stable_id: str) -> Any:
         connectable=False,
         compatible=True,
         last_seen=1.0,
+        identity_fingerprint=fingerprint,
     )
 
 

@@ -1,9 +1,11 @@
 """Cluster data-contract and trusted-node store tests."""
 
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from maintenance.cluster import (
     ClusterDataError,
@@ -36,6 +38,7 @@ from maintenance.nodes import (
     NODE_SNAPSHOT_SCHEMA_VERSION,
     NodeCapability,
     NodeId,
+    NodePermission,
     NodeSnapshot,
     NodeStatus,
 )
@@ -182,6 +185,24 @@ class ClusterStoreTests(unittest.TestCase):
         state = store.load()
         self.assertTrue(state.discovery_enabled)
         self.assertEqual(state.trusted_nodes, ())
+        self.assertTrue(state.local_node_id.startswith("node-"))
+
+    def test_local_node_identity_survives_reload(self) -> None:
+        store, _path = self._store()
+
+        first = store.load()
+        second = store.load()
+
+        self.assertEqual(first.local_node_id, second.local_node_id)
+
+    def test_failed_identity_migration_is_marked_not_persisted(self) -> None:
+        store, _path = self._store()
+        with patch.object(
+            store, "save", Mock(side_effect=ClusterSaveError("disk full"))
+        ):
+            state = store.load()
+
+        self.assertFalse(state.local_identity_persisted)
 
     def test_save_and_load_round_trip(self) -> None:
         store, path = self._store()
@@ -192,7 +213,9 @@ class ClusterStoreTests(unittest.TestCase):
             host="192.168.1.10",
             port=5000,
             capabilities=frozenset({NodeCapability.DASHBOARD_READ}),
+            permissions=frozenset({NodePermission.DASHBOARD_READ}),
             color="emerald",
+            identity_fingerprint="aaaa:bbbb",
         )
         state = ClusterState(discovery_enabled=False, trusted_nodes=(record,))
         store.save(state)
@@ -207,6 +230,49 @@ class ClusterStoreTests(unittest.TestCase):
         self.assertEqual(restored.color, "emerald")
         self.assertEqual(restored.capabilities, {NodeCapability.DASHBOARD_READ})
         self.assertEqual(restored.secret, record.secret)
+        self.assertEqual(restored.identity_fingerprint, "aaaa:bbbb")
+        self.assertEqual(
+            restored.permissions,
+            {NodePermission.DASHBOARD_READ},
+        )
+        self.assertTrue(loaded.local_node_id.startswith("node-"))
+
+    def test_legacy_trusted_record_gets_read_only_permissions(self) -> None:
+        store, path = self._store()
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "trusted_nodes": [
+                        {
+                            "node_id": "peer",
+                            "display_name": "Peer",
+                            "hostname": "peer-host",
+                            "platform": "Linux",
+                            "color": None,
+                            "host": "127.0.0.1",
+                            "port": 5000,
+                            "capabilities": ["process_review"],
+                            "secret": "a" * 64,
+                            "trusted_at": 1.0,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        record = store.load().trusted_nodes[0]
+
+        self.assertEqual(
+            record.permissions,
+            {
+                NodePermission.DASHBOARD_READ,
+                NodePermission.COMPONENT_READ,
+                NodePermission.PROCESS_REVIEW,
+                NodePermission.STORAGE_REVIEW,
+            },
+        )
 
     def test_malformed_file_falls_back_to_defaults(self) -> None:
         store, path = self._store()

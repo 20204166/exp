@@ -39,6 +39,7 @@ class NodesConnectionsCallbacks:
     on_open_node: Callable[[str], None]
     on_add_manual_host: Callable[[str, str, int | None], None]
     on_remove_manual: Callable[[str], None]
+    on_permissions: Callable[[str, frozenset[str]], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,7 @@ class DiscoveredPeerSpec:
     compatible: bool
     connectable: bool
     port: int | None
+    identity_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +67,11 @@ class TrustedNodeSpec:
     host: str
     port: int | None
     selectable: bool
+    openable: bool = False
     is_manual: bool = False
+    identity_fingerprint: str | None = None
+    identity_status: str = "unverified"
+    permissions: tuple[str, ...] = ()
 
 
 class NodesConnectionsPage:
@@ -225,6 +231,8 @@ class NodesConnectionsPage:
         if not spec.compatible:
             text += "  ·  incompatible"
         text += f"  ·  ID {spec.node_id}"
+        if spec.identity_fingerprint:
+            text += f"  ·  fingerprint {spec.identity_fingerprint}"
         self.label_cls(
             row,
             text=text,
@@ -306,6 +314,8 @@ class NodesConnectionsPage:
             text += f"  ·  {spec.hostname}"
         text += f"  ·  ID {spec.node_id}"
         text += f"  ·  {spec.status}"
+        if spec.identity_status == "mismatch":
+            text += "  ·  IDENTITY MISMATCH"
         self.label_cls(
             row,
             text=text,
@@ -361,15 +371,46 @@ class NodesConnectionsPage:
                 text=text_,
                 command=command,
                 style=style,
-                state=tk.NORMAL if text_ != "Open" or spec.selectable else tk.DISABLED,
+                state=(
+                    tk.NORMAL
+                    if text_ != "Open" or spec.selectable or spec.openable
+                    else tk.DISABLED
+                ),
             )
             button.pack(side="left", padx=(6, 0))
             self._register_button(
                 action_id,
                 command,
                 button,
-                text_ != "Open" or spec.selectable,
+                text_ != "Open" or spec.selectable or spec.openable,
             )
+        if self.callbacks.on_permissions is not None:
+            on_permissions = self.callbacks.on_permissions
+            permission_frame = self.frame_cls(row, bg=self.colors["card"])
+            permission_frame.pack(side="bottom", anchor="w", fill="x", pady=(6, 0))
+            permission_values: dict[str, Any] = {}
+            for permission, label in (
+                ("process_review", "Review processes"),
+                ("process_termination", "Terminate processes"),
+                ("process_force_termination", "Force terminate"),
+            ):
+                variable = self._boolean_var_factory()
+                variable.set(permission in spec.permissions)
+                permission_values[permission] = variable
+                control = self.checkbutton_cls(
+                    permission_frame,
+                    text=label,
+                    variable=variable,
+                    command=lambda: on_permissions(
+                        spec.node_id,
+                        frozenset(
+                            key
+                            for key, value in permission_values.items()
+                            if value.get()
+                        ),
+                    ),
+                )
+                control.pack(side="left", padx=(0, 8))
         return row
 
     def _build_manual_hosts_section(self) -> None:

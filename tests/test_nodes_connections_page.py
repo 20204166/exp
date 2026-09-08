@@ -149,6 +149,25 @@ class NodesConnectionsPageTests(unittest.TestCase):
         ]
         self.assertTrue(any("ID peer-a" in text for text in row_texts))
 
+    def test_discovered_rows_show_identity_fingerprint(self) -> None:
+        _page, _parent, recorder = make_page(
+            discovered=[
+                DiscoveredPeerSpec(
+                    "peer-a",
+                    "peer-a-host",
+                    "1.2.4.0",
+                    True,
+                    True,
+                    5000,
+                    "aaaa:bbbb",
+                )
+            ]
+        )
+        row_texts = [
+            widget.kwargs.get("text", "") for widget in recorder.widgets("label")
+        ]
+        self.assertTrue(any("fingerprint aaaa:bbbb" in text for text in row_texts))
+
     def test_incompatible_peer_pair_button_is_disabled(self) -> None:
         _page, _parent, recorder = make_page(
             discovered=[DiscoveredPeerSpec("bad", "bad-host", "9", False, False, None)]

@@ -1,6 +1,7 @@
 """Node model and registry tests for the cluster target boundary."""
 
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from maintenance.nodes import (
@@ -15,6 +16,7 @@ from maintenance.nodes import (
     NodeTrustState,
     is_trusted_descriptor,
     local_node_descriptor,
+    node_identity_fingerprint,
     node_operation_key,
 )
 
@@ -28,6 +30,7 @@ def _candidate(
     connectable: bool = False,
     compatible: bool = True,
     last_seen: float = 100.0,
+    identity_fingerprint: str | None = None,
 ) -> DiscoveredNodeCandidate:
     return DiscoveredNodeCandidate(
         stable_id=stable_id,
@@ -41,6 +44,8 @@ def _candidate(
         connectable=connectable,
         compatible=compatible,
         last_seen=last_seen,
+        identity_fingerprint=identity_fingerprint
+        or node_identity_fingerprint(stable_id),
     )
 
 
@@ -321,6 +326,82 @@ class DiscoveredBoundaryTests(unittest.TestCase):
         registry = NodeRegistry(_local_context())
         with self.assertRaises(KeyError):
             registry.promote_to_trusted(NodeId("never-seen"))
+
+    def test_promotion_requires_a_peer_fingerprint(self) -> None:
+        registry = NodeRegistry(_local_context())
+        registry.update_discovered(
+            replace(_candidate("peer-a"), identity_fingerprint=None)
+        )
+
+        with self.assertRaises(ValueError):
+            registry.promote_to_trusted(NodeId("peer-a"))
+
+    def test_verified_pairing_records_identity_fingerprint(self) -> None:
+        registry = NodeRegistry(_local_context())
+        fingerprint = node_identity_fingerprint("peer-a")
+        registry.update_discovered(
+            _candidate("peer-a", identity_fingerprint=fingerprint)
+        )
+
+        descriptor = registry.promote_to_trusted(NodeId("peer-a"))
+
+        self.assertEqual(descriptor.identity_fingerprint, fingerprint)
+        self.assertEqual(descriptor.identity_status.value, "verified")
+
+    def test_identity_mismatch_is_not_silently_accepted(self) -> None:
+        registry = NodeRegistry(_local_context())
+        original = node_identity_fingerprint("peer-a")
+        registry.update_discovered(_candidate("peer-a", identity_fingerprint=original))
+        registry.promote_to_trusted(NodeId("peer-a"))
+
+        registry.update_discovered(
+            _candidate("peer-a", hostname="new-host", identity_fingerprint="changed")
+        )
+
+        descriptor = registry.context(NodeId("peer-a")).descriptor
+        self.assertEqual(descriptor.identity_status.value, "mismatch")
+        self.assertEqual(len(registry.discovered_candidates()), 1)
+        self.assertEqual(registry.discovered_candidates()[0].hostname, "new-host")
+        self.assertNotIn(
+            NodeId("peer-a"),
+            {item.id for item in registry.selectable_descriptors()},
+        )
+
+        registry.update_discovered(
+            _candidate("peer-a", hostname="new-host", identity_fingerprint="changed")
+        )
+
+        self.assertEqual(
+            registry.context(NodeId("peer-a")).descriptor.identity_status.value,
+            "mismatch",
+        )
+
+        registry.update_discovered(
+            _candidate(
+                "peer-a", hostname="original-host", identity_fingerprint=original
+            )
+        )
+
+        self.assertEqual(
+            registry.context(NodeId("peer-a")).descriptor.identity_status.value,
+            "mismatch",
+        )
+
+    def test_revoke_then_repair_accepts_new_verified_identity(self) -> None:
+        registry = NodeRegistry(_local_context())
+        registry.update_discovered(
+            _candidate("peer-a", identity_fingerprint="original")
+        )
+        registry.promote_to_trusted(NodeId("peer-a"))
+        registry.revoke_trusted(NodeId("peer-a"))
+        registry.update_discovered(
+            _candidate("peer-a", identity_fingerprint="replacement")
+        )
+
+        descriptor = registry.promote_to_trusted(NodeId("peer-a"))
+
+        self.assertEqual(descriptor.identity_fingerprint, "replacement")
+        self.assertEqual(descriptor.identity_status.value, "verified")
 
     def test_revoke_trusted_removes_node_and_deselects_to_local(self) -> None:
         registry = NodeRegistry(_local_context())

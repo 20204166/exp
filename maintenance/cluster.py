@@ -16,7 +16,7 @@ import json
 import logging
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
@@ -34,11 +34,14 @@ from maintenance.models import (
 )
 from maintenance.nodes import (
     NODE_SNAPSHOT_SCHEMA_VERSION,
+    READ_PERMISSIONS,
     NodeCapability,
     NodeId,
+    NodePermission,
     NodeSnapshot,
     NodeStatus,
     generate_node_secret,
+    generate_stable_node_id,
 )
 from maintenance.persistence import atomic_write_text, read_text_or_none
 from maintenance.preferences import default_preferences_path
@@ -348,6 +351,8 @@ class TrustedNodeRecord:
     capabilities: frozenset[NodeCapability]
     secret: str
     trusted_at: float
+    identity_fingerprint: str | None = None
+    permissions: frozenset[NodePermission] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,6 +361,8 @@ class ClusterState:
 
     discovery_enabled: bool = True
     trusted_nodes: tuple[TrustedNodeRecord, ...] = ()
+    local_node_id: str = "local"
+    local_identity_persisted: bool = True
 
     def record(self, node_id: str) -> TrustedNodeRecord | None:
         for record in self.trusted_nodes:
@@ -376,6 +383,8 @@ def trusted_node_record(
     capabilities: Iterable[NodeCapability] = (),
     secret: str | None = None,
     trusted_at: float | None = None,
+    identity_fingerprint: str | None = None,
+    permissions: Iterable[NodePermission] = (),
 ) -> TrustedNodeRecord:
     """Build one trusted-node record, generating a fresh secret when absent."""
 
@@ -390,6 +399,8 @@ def trusted_node_record(
         capabilities=frozenset(capabilities),
         secret=secret or generate_node_secret(),
         trusted_at=trusted_at if trusted_at is not None else time.time(),
+        identity_fingerprint=identity_fingerprint,
+        permissions=frozenset(permissions),
     )
 
 
@@ -411,8 +422,27 @@ class ClusterStore:
             warning_template="Failed to read cluster settings: %s",
         )
         if text is None:
-            return ClusterState()
-        return self._parse(text)
+            state = ClusterState(local_node_id=generate_stable_node_id())
+            return replace(
+                state,
+                local_identity_persisted=self._save_identity_migration(state),
+            )
+        state = self._parse(text)
+        if state.local_node_id == "local":
+            state = replace(state, local_node_id=generate_stable_node_id())
+            state = replace(
+                state,
+                local_identity_persisted=self._save_identity_migration(state),
+            )
+        return state
+
+    def _save_identity_migration(self, state: ClusterState) -> bool:
+        try:
+            self.save(state)
+        except ClusterSaveError as error:
+            LOGGER.warning("Could not persist local node identity: %s", error)
+            return False
+        return True
 
     def save(self, state: ClusterState) -> None:
         """Validate and persist ``state`` atomically.
@@ -461,9 +491,14 @@ class ClusterStore:
             for item in records_data
             if (record := self._parse_record(item)) is not None
         )
+        local_node_id = data.get("local_node_id", "local")
+        if not isinstance(local_node_id, str) or not local_node_id:
+            LOGGER.warning("Cluster local node identity is malformed; using a new id")
+            local_node_id = "local"
         return ClusterState(
             discovery_enabled=discovery,
             trusted_nodes=records,
+            local_node_id=local_node_id,
         )
 
     @staticmethod
@@ -518,13 +553,36 @@ class ClusterStore:
             capabilities=frozenset(capabilities),
             secret=secret,
             trusted_at=float(trusted_at),
+            identity_fingerprint=(
+                item.get("identity_fingerprint")
+                if isinstance(item.get("identity_fingerprint"), str)
+                else None
+            ),
+            permissions=ClusterStore._parse_permissions(item.get("permissions")),
         )
+
+    @staticmethod
+    def _parse_permissions(value: Any) -> frozenset[NodePermission]:
+        if value is None:
+            return READ_PERMISSIONS
+        if not isinstance(value, list):
+            return frozenset()
+        permissions: set[NodePermission] = set()
+        for raw in value:
+            if not isinstance(raw, str):
+                continue
+            try:
+                permissions.add(NodePermission(raw))
+            except ValueError:
+                LOGGER.warning("Ignoring unknown node permission %r", raw)
+        return frozenset(permissions)
 
     @staticmethod
     def _serialize(state: ClusterState) -> str:
         payload: dict[str, Any] = {
             "schema_version": CLUSTER_SCHEMA_VERSION,
             "discovery_enabled": state.discovery_enabled,
+            "local_node_id": state.local_node_id,
             "trusted_nodes": [
                 {
                     "node_id": record.node_id,
@@ -539,6 +597,10 @@ class ClusterStore:
                     ),
                     "secret": record.secret,
                     "trusted_at": record.trusted_at,
+                    "identity_fingerprint": record.identity_fingerprint,
+                    "permissions": sorted(
+                        permission.value for permission in record.permissions
+                    ),
                 }
                 for record in state.trusted_nodes
             ],
