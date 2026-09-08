@@ -1,5 +1,6 @@
 """Headless tests for the reusable All Systems cluster overview page."""
 
+import tkinter as tk
 import unittest
 from typing import Any
 from unittest.mock import Mock
@@ -10,6 +11,7 @@ from maintenance.ui.cluster_page import (
     ClusterPage,
     ClusterPageCallbacks,
 )
+from tests.support.live_tk import DISPLAY_AVAILABLE
 from tests.support.widget_recording import RecordingWidget, WidgetRecorder
 
 
@@ -68,6 +70,31 @@ def open_button(recorder: WidgetRecorder) -> RecordingWidget:
 
 
 class ClusterPageTests(unittest.TestCase):
+    @unittest.skipUnless(DISPLAY_AVAILABLE, "Tk display unavailable")
+    def test_real_tk_rebuilds_release_destroyed_buttons(self) -> None:
+        root = tk.Tk()
+        coordinator = ButtonCoordinator()
+        page = ClusterPage(
+            root,
+            callbacks=make_callbacks(),
+            nodes=[_spec("local", selectable=True)],
+            button_coordinator=coordinator,
+        )
+        try:
+            for _ in range(30):
+                prior = coordinator._actions["cluster:node:local:open"].widgets[0]
+                page.refresh_nodes([_spec("local", selectable=True)])
+                self.assertFalse(prior.winfo_exists())
+                widgets = coordinator._actions["cluster:node:local:open"].widgets
+                self.assertEqual(len(widgets), 1)
+                self.assertTrue(widgets[0].winfo_exists())
+            page.refresh_nodes([])
+            self.assertEqual(coordinator.registered_ids(), ())
+        finally:
+            root.destroy()
+            page.dispose()
+            page.dispose()
+
     def test_page_root_is_not_packed(self) -> None:
         _page, parent, _recorder = make_page()
         self.assertEqual(parent.pack_calls, [])

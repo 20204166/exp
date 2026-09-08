@@ -200,6 +200,7 @@ class AppRunState:
     on_result: Callable[[str, Any], None] | None = None
     on_error: Callable[[str, str], None] | None = None
     on_progress: Callable[[str, str], None] | None = None
+    on_finished: Callable[[], None] | None = None
     task_factory: Callable[..., Any] | None = None
 
 
@@ -296,6 +297,7 @@ class AppCoordinator:
         on_result: Callable[[str, Any], None] | None = None,
         on_error: Callable[[str, str], None] | None = None,
         on_progress: Callable[[str, str], None] | None = None,
+        on_finished: Callable[[], None] | None = None,
     ) -> int | None:
         """Run one background operation under the shared key.
 
@@ -315,6 +317,7 @@ class AppCoordinator:
             state.on_error = on_error
         if on_progress is not None:
             state.on_progress = on_progress
+        state.on_finished = on_finished
         state.task_factory = task_factory
         return self._start_run(key, state)
 
@@ -385,6 +388,7 @@ class AppCoordinator:
             return
         rerun_requested = self._settle_run(state)
         if state.cancelled:
+            self._invoke_finished(key, state)
             if rerun_requested:
                 self._replay(key, state)
             return
@@ -395,8 +399,18 @@ class AppCoordinator:
         else:
             self._notify_subscribers(state, key, None)
             self._safe_invoke(state.on_error, key, error)
+        self._invoke_finished(key, state)
         if rerun_requested:
             self._replay(key, state)
+
+    @staticmethod
+    def _invoke_finished(key: str, state: AppRunState) -> None:
+        if state.on_finished is None:
+            return
+        try:
+            state.on_finished()
+        except Exception as finalizer_error:  # noqa: BLE001 - completion must still be delivered.
+            LOGGER.warning("Operation %r finalizer failed: %s", key, finalizer_error)
 
     def _replay(self, key: str, state: AppRunState) -> None:
         if state.task_factory is not None:

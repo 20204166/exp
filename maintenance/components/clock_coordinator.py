@@ -2,7 +2,7 @@
 
 `ClockCoordinator` owns absolute monotonic deadlines and coalesced refresh
 requests. `ResourceGovernor` owns bounded admission for background work.
-Neither class starts threads or talks to Tkinter.
+The governor samples pressure off-thread; neither class talks to Tkinter.
 """
 
 from __future__ import annotations
@@ -419,7 +419,15 @@ class ResourceGovernor:
                 return False
             self._pressure_sampling = True
 
-        threading.Thread(target=self._pressure_sample_worker, daemon=True).start()
+        try:
+            threading.Thread(target=self._pressure_sample_worker, daemon=True).start()
+        except RuntimeError as error:
+            self._apply_pressure_snapshot(
+                PressureSnapshot(sampled_at=now, sample_error=str(error))
+            )
+            with self._pressure_lock:
+                self._pressure_sampling = False
+            return False
         return True
 
     def _pressure_sample_worker(self) -> None:
@@ -531,6 +539,9 @@ class ResourceGovernor:
     def _apply_pressure_snapshot(self, snapshot: PressureSnapshot) -> PressureSnapshot:
         with self._pressure_lock:
             degraded = self._pressure_degraded
+            # Unknown pressure is not overload. Admission remains capacity-bounded.
+            if not snapshot.available:
+                degraded = False
             if snapshot.available:
                 if degraded:
                     if self._pressure_relaxed(
@@ -585,20 +596,15 @@ class ResourceGovernor:
         rss_bytes: int | None,
         memory_total_bytes: int | None,
     ) -> bool:
-        seen = False
         if memory_percent is not None and memory_percent >= self.memory_leave_percent:
             return False
-        if memory_percent is not None:
-            seen = True
         if swap_percent is not None and swap_percent >= self.swap_leave_percent:
             return False
-        if swap_percent is not None:
-            seen = True
-        if rss_bytes is not None and memory_total_bytes:
-            if (rss_bytes / float(memory_total_bytes)) >= self.rss_leave_fraction:
-                return False
-            seen = True
-        return seen
+        return not (
+            rss_bytes is not None
+            and memory_total_bytes
+            and (rss_bytes / float(memory_total_bytes)) >= self.rss_leave_fraction
+        )
 
     def _active_total(self) -> int:
         return len(self._active)

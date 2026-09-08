@@ -256,6 +256,7 @@ class InfoDialogLayoutContractTests(unittest.TestCase):
             patch.object(InfoDialog, "minsize"),
             patch.object(InfoDialog, "configure"),
             patch.object(InfoDialog, "transient"),
+            patch.object(InfoDialog, "protocol"),
             patch.object(InfoDialog, "destroy"),
             patch("maintenance.dialogs.tk.Frame", FakeWidget),
             patch("maintenance.dialogs.tk.Label", FakeWidget),

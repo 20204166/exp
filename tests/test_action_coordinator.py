@@ -9,6 +9,16 @@ from tests.support.widget_recording import RecordingWidget
 
 
 class ButtonCoordinatorTests(unittest.TestCase):
+    def test_replacement_prunes_widget_that_fails_state_update(self) -> None:
+        coordinator = ButtonCoordinator()
+        widget = Mock()
+        widget.winfo_exists.return_value = True
+        coordinator.register("open", Mock())
+        coordinator.bind(widget, "open")
+        widget.config.side_effect = tk.TclError("invalid command name")
+        coordinator.register("open", Mock(), replace=True)
+        self.assertEqual(coordinator._actions["open"].widgets, [])
+
     def test_register_and_dispatch_calls_callback(self) -> None:
         coordinator = ButtonCoordinator()
         callback = Mock()

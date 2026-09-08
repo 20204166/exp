@@ -159,8 +159,6 @@ class ClusterPage:
         self._disposed = True
         if self._button_coordinator is not None:
             self._button_coordinator.clear_prefix("cluster:node:")
-        for child in tuple(self._body.winfo_children()):
-            child.destroy()
 
     def _node_row(self, body: Any, spec: ClusterNodeSpec) -> None:
         row = self.frame_cls(body, bg=self.colors["card"])

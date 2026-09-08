@@ -720,6 +720,7 @@ class AppWindowTests(unittest.TestCase):
             105.0, "pressure"
         )
         window._coordinator = Mock()
+        window._coordinator.in_flight.return_value = False
         window._schedule_component_poll = Mock()
 
         with patch("window.time.monotonic", return_value=100.0):

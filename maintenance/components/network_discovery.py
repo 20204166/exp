@@ -26,12 +26,13 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from maintenance.nodes import DiscoveredNodeCandidate
 
 LOGGER = logging.getLogger(__name__)
 
+_zeroconf_module: Any
 try:
     import zeroconf as _zeroconf_module  # pyright: ignore[reportMissingImports]
 except ImportError:
@@ -133,7 +134,7 @@ class ZeroconfDiscoveryBackend:
         )
         zc.register_service(service_info)
         listener = _ZeroconfListener(self._listener)
-        browser = _zeroconf_module.ServiceBrowser(zc, SERVICE_TYPE, listener)
+        browser = _zeroconf_module.ServiceBrowser(zc, SERVICE_TYPE, cast(Any, listener))
         self._zeroconf = zc
         self._service_info = service_info
         self._browser = browser

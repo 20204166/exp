@@ -258,10 +258,14 @@ class LiveResizeTests(unittest.TestCase):
                 ("dashboard", "settings", "preferences", "nodes", "cluster"),
             )
 
-            # Navigation alone schedules no timers and starts no scans
+            # Navigation alone starts no scans. Active mDNS discovery keeps the
+            # UI delivery poll alive so transport callbacks reach Tk safely.
             self.assertEqual(len(window._pending_after_ids), 0)
             self.assertIsNone(window._component_poll_id)
-            self.assertIsNone(window._background_poll_id)
+            if window._discovery_tick_id is None:
+                self.assertIsNone(window._background_poll_id)
+            else:
+                self.assertIsNotNone(window._background_poll_id)
             self.assertEqual(window._background_tasks, 0)
 
             window._close()

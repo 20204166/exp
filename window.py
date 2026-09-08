@@ -579,12 +579,22 @@ class AppWindow:
             callbacks=ui_settings_home.SettingsHomeCallbacks(
                 on_back=self._show_dashboard_page,
                 on_select_category=self._on_select_settings_category,
+                on_start_discovery=self._start_discovery_from_settings,
             ),
             categories=self._settings_categories(),
             version=__version__,
             button_coordinator=self._button_coordinator,
         )
         return self.settings_frame
+
+    def _start_discovery_from_settings(self) -> None:
+        """Enable and start local discovery from the Settings home page."""
+
+        if not self._cluster_state.discovery_enabled:
+            self._apply_discovery_enabled(True)
+            return
+        self._start_discovery()
+        self._show_nodes_page()
 
     def _settings_categories(self) -> list[ui_settings_home.SettingsCategorySpec]:
         return [
@@ -1365,7 +1375,6 @@ class AppWindow:
         if context is None:
             return
         coordinator = self.__dict__.get("_coordinator")
-        governor = self.__dict__.get("_resource_governor")
         scheduler = getattr(context, "scheduler", None)
         node_id = getattr(context.descriptor, "id", None)
         for feature in self._feature_catalog.all():
@@ -1373,10 +1382,11 @@ class AppWindow:
                 coordinator.cancel(
                     node_operation_key(node_id, f"component:{feature.key}")
                 )
-            if governor is not None and node_id is not None:
-                governor.release(
+                if coordinator.in_flight(
                     node_operation_key(node_id, f"component:{feature.key}")
-                )
+                ):
+                    # Retain physical capacity until the worker acknowledges cancel.
+                    continue
             cancel = getattr(scheduler, "cancel", None)
             if cancel is not None:
                 try:
@@ -1478,6 +1488,7 @@ class AppWindow:
                 int(REAP_TICK_SECONDS * 1000),
                 self._tick_discovery,
             )
+            self._start_background_poll()
 
     def _tick_discovery(self) -> None:
         self._discovery_tick_id = None
@@ -1815,11 +1826,12 @@ class AppWindow:
         *,
         job_profile: JobProfile | None = None,
         retry_callback: Callable[[], None] | None = None,
+        admitted: bool = False,
     ) -> bool:
         governor = self.__dict__.get("_resource_governor")
         decision = (
             governor.admit(job_profile, time.monotonic())
-            if governor is not None and job_profile is not None
+            if governor is not None and job_profile is not None and not admitted
             else None
         )
         if decision is not None and not decision.admitted:
@@ -1837,17 +1849,30 @@ class AppWindow:
         success_callback = on_success or self._show_snapshot
         error_callback = on_error or self._show_error
 
-        def on_finished() -> None:
+        def finish_on_ui() -> None:
             if governor is not None and job_profile is not None:
                 governor.release(job_profile.key)
-            self._background_queue.put(None)
+            self._background_tasks = max(0, self._background_tasks - 1)
+            self._resolve_completed_worker()
 
-        self._run_daemon(
-            task,
-            lambda result: self._background_queue.put((success_callback, (result,))),
-            lambda error: self._background_queue.put((error_callback, (str(error),))),
-            on_finished=on_finished,
-        )
+        def on_finished() -> None:
+            self._background_queue.put(("finished", finish_on_ui))
+
+        try:
+            self._run_daemon(
+                task,
+                lambda result: self._background_queue.put(
+                    (success_callback, (result,))
+                ),
+                lambda error: self._background_queue.put(
+                    (error_callback, (str(error),))
+                ),
+                on_finished=on_finished,
+            )
+        except RuntimeError as error:
+            finish_on_ui()
+            error_callback(str(error))
+            return False
         return True
 
     def _submit_ui(self, callback: Callable[[], None]) -> None:
@@ -1860,6 +1885,9 @@ class AppWindow:
         self._background_queue.put(("ui", callback))
 
     def _start_background_poll(self) -> None:
+        # Transport callbacks only enqueue; the UI-owned poll drains discovery too.
+        if threading.current_thread() is not threading.main_thread():
+            return
         if self._background_poll_id is None and not self._is_closing:
             self._background_poll_id = self._schedule_timer(
                 self.BACKGROUND_POLL_MILLISECONDS,
@@ -1884,6 +1912,10 @@ class AppWindow:
                     self._resolve_completed_worker()
                     continue
 
+                if isinstance(item, tuple) and len(item) == 2 and item[0] == "finished":
+                    self._invoke_delivered(cast(Callable[[], None], item[1]))
+                    continue
+
                 if isinstance(item, tuple) and len(item) == 2 and item[0] == "ui":
                     if not self._is_closing:
                         self._invoke_delivered(cast(Callable[[], None], item[1]))
@@ -1901,7 +1933,11 @@ class AppWindow:
 
         coordinator = self.__dict__.get("_coordinator")
         pending = coordinator is not None and coordinator.has_pending_work
-        if not self._is_closing and (self._background_tasks > 0 or pending):
+        if not self._is_closing and (
+            self._background_tasks > 0
+            or pending
+            or self.__dict__.get("_discovery_tick_id") is not None
+        ):
             self._start_background_poll()
 
     @staticmethod
@@ -1964,6 +2000,11 @@ class AppWindow:
         )
 
         def report_progress(message: str) -> None:
+            self._submit_ui(lambda: apply_progress(message))
+
+        def apply_progress(message: str) -> None:
+            if generation <= self._resolved_scan_generation:
+                return
             self._request_render(
                 ui_render.RenderIntent(
                     target="scan-status",
@@ -1987,6 +2028,11 @@ class AppWindow:
             )
 
         def queue_snapshot(snapshot: DashboardSnapshot) -> None:
+            # Lifecycle completion cannot wait for a hidden page to be rendered.
+            rerun_requested = self._resolution_for_generation(generation)
+            if rerun_requested is None:
+                return
+            self._set_busy(False)
             self._request_render(
                 ui_render.RenderIntent(
                     target="dashboard-snapshot",
@@ -1998,30 +2044,16 @@ class AppWindow:
                     payload_set=True,
                     priority=3,
                 ),
-                lambda intent: self._show_snapshot_for_generation(
+                lambda intent: self._show_snapshot_if_current(
                     generation,
                     cast(DashboardSnapshot, intent.payload),
                     node_id=source_node_id,
                 ),
             )
+            self._schedule_rerun_if_requested(rerun_requested)
 
         def queue_error(message: str) -> None:
-            self._request_render(
-                ui_render.RenderIntent(
-                    target="scan-status",
-                    generation=generation,
-                    node_id=source_node_id,
-                    components=frozenset({"error"}),
-                    payload=message,
-                    payload_set=True,
-                    priority=2,
-                ),
-                lambda intent: self._show_error_for_generation(
-                    generation,
-                    cast(str, intent.payload),
-                    node_id=source_node_id,
-                ),
-            )
+            self._show_error_for_generation(generation, message, node_id=source_node_id)
 
         self._run_in_background(
             dashboard_task,
@@ -2029,6 +2061,7 @@ class AppWindow:
             on_error=queue_error,
             job_profile=job_profile,
             retry_callback=self.handle_analyze,
+            admitted=True,
         )
 
     def _claim_scan_resolution(self, generation: int) -> tuple[bool, bool]:
@@ -2190,6 +2223,21 @@ class AppWindow:
         if node_id is None or node_id == self.__dict__.get("_selected_node_id"):
             self._show_snapshot(snapshot)
         self._schedule_rerun_if_requested(rerun_requested)
+
+    def _show_snapshot_if_current(
+        self,
+        generation: int,
+        snapshot: DashboardSnapshot,
+        *,
+        node_id: NodeId | None = None,
+    ) -> None:
+        """Commit a resolved snapshot only if its scan and node remain current."""
+
+        if generation != self._scan_coordinator_state().generation:
+            return
+        if node_id is not None and node_id != self.__dict__.get("_selected_node_id"):
+            return
+        self._show_snapshot(snapshot)
 
     def _show_error_for_generation(
         self,
@@ -2492,6 +2540,11 @@ class AppWindow:
             source_scheduler = source_context.scheduler
             source_provider = source_context.provider
         operation_key = self._operation_key(f"component:{key}")
+        coordinator_active = self._coordinator.in_flight(operation_key)
+        scheduler_active = source_scheduler.in_flight(key)
+        if coordinator_active and scheduler_active:
+            source_scheduler.request_refresh(key)
+            return
         governor = self.__dict__.get("_resource_governor")
         admission = (
             governor.admit(
@@ -2530,14 +2583,18 @@ class AppWindow:
                 lambda: source_provider.component_summary(key),
             )
 
-        def queue_component_snapshot(resource: ResourceSummary) -> None:
+        def finish_component() -> None:
             source_scheduler.finish(key)
             if governor is not None:
                 governor.release(operation_key)
             self._schedule_component_poll(force=True)
+
+        def queue_component_snapshot(resource: ResourceSummary) -> None:
+            render_generation = self._coordinator.generation(operation_key)
             self._request_render(
                 ui_render.RenderIntent(
                     target=f"component:{key}",
+                    generation=render_generation,
                     node_id=source_node_id,
                     components=frozenset({key}),
                     payload=resource,
@@ -2549,18 +2606,16 @@ class AppWindow:
                     started_at,
                     cast(ResourceSummary, intent.payload),
                     node_id=source_node_id,
-                    scheduler=source_scheduler,
+                    scheduler_finished=True,
                 ),
             )
 
         def queue_component_error(message: str) -> None:
-            source_scheduler.finish(key)
-            if governor is not None:
-                governor.release(operation_key)
-            self._schedule_component_poll(force=True)
+            render_generation = self._coordinator.generation(operation_key)
             self._request_render(
                 ui_render.RenderIntent(
                     target=f"component:{key}",
+                    generation=render_generation,
                     node_id=source_node_id,
                     components=frozenset({key}),
                     payload=RuntimeError(message),
@@ -2572,16 +2627,25 @@ class AppWindow:
                     started_at,
                     cast(Exception, intent.payload),
                     node_id=source_node_id,
-                    scheduler=source_scheduler,
+                    scheduler_finished=True,
                 ),
             )
 
-        self._coordinator.run(
+        run_generation = self._coordinator.run(
             operation_key,
             task_factory,
             on_result=lambda _operation, resource: queue_component_snapshot(resource),
             on_error=lambda _operation, message: queue_component_error(message),
+            on_finished=finish_component,
         )
+        if run_generation is None:
+            # A stale coordinator state coalesced this trigger. Restore the
+            # scheduler lease and retry after the existing worker settles.
+            source_scheduler.finish(key)
+            source_scheduler.request_refresh(key)
+            if governor is not None:
+                governor.release(operation_key)
+            self._schedule_component_poll(force=True)
 
     def _queue_component_result(
         self,
@@ -2591,11 +2655,13 @@ class AppWindow:
         *,
         node_id: NodeId | None = None,
         scheduler: ComponentRefreshScheduler | None = None,
+        scheduler_finished: bool = False,
     ) -> None:
         """Apply one component scan result delivered on the Tkinter thread."""
 
         source_scheduler = scheduler or self._component_scheduler
-        source_scheduler.finish(key)
+        if not scheduler_finished:
+            source_scheduler.finish(key)
         try:
             if node_id is not None and node_id != self.__dict__.get(
                 "_selected_node_id"

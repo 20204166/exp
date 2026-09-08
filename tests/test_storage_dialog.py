@@ -256,6 +256,7 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         dialog.analyzer = Mock()
         dialog._waiting_for_shared = False
         dialog._scan_active = False
+        dialog._on_close = dialog._default_close
         dialog.status_label = FakeControl()
         dialog.scan_button = FakeControl()
         dialog.trash_button = FakeControl()

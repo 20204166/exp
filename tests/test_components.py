@@ -977,7 +977,7 @@ class ResourceGovernorTests(unittest.TestCase):
         third = governor.refresh_pressure(3.0)
 
         self.assertTrue(first.degraded)
-        self.assertTrue(second.degraded)
+        self.assertFalse(second.degraded)
         self.assertFalse(third.degraded)
         self.assertEqual(first.available, True)
         self.assertEqual(second.available, False)
