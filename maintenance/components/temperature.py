@@ -16,6 +16,13 @@ from maintenance.models import CapabilityState, ResourceSummary
 _DETAIL_TEMPERATURE_PATTERN = re.compile(r"(\d+(?:\.\d+)?)°C")
 
 
+def parse_temperature_value(text: str) -> float | None:
+    """Extract one Celsius value from an already-selected detail string."""
+
+    match = _DETAIL_TEMPERATURE_PATTERN.search(text)
+    return float(match.group(1)) if match else None
+
+
 class TemperatureState(str, Enum):
     VALID = "valid"
     NO_DATA = "no_data"
@@ -398,10 +405,9 @@ class TemperatureTelemetry:
         for line in summary.details:
             if not line.startswith(prefix):
                 continue
-            match = _DETAIL_TEMPERATURE_PATTERN.search(line)
-            if match:
+            value = parse_temperature_value(line)
+            if value is not None:
                 now = datetime.now(timezone.utc).astimezone()
-                value = float(match.group(1))
                 return (
                     TemperatureSample(
                         component=component,

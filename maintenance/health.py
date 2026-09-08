@@ -10,6 +10,7 @@ unsupported or unavailable simply produces no warning (neutral/healthy).
 import re
 
 from maintenance.components.scan_support import BYTE_SCALE_UNITS, detail_line_suffix
+from maintenance.components.temperature import parse_temperature_value
 from maintenance.models import DashboardSnapshot, ResourceSummary
 
 STORAGE_WARN_PERCENT = 90.0
@@ -21,7 +22,6 @@ CONSECUTIVE_LIMIT = 2
 _BYTE_UNITS = {"B": 1, **{unit: scale for scale, unit in BYTE_SCALE_UNITS}}
 
 _SWAP_UNITS = "|".join(("B", *(unit for _scale, unit in reversed(BYTE_SCALE_UNITS))))
-_TEMPERATURE_PATTERN = re.compile(r"(\d+(?:\.\d+)?)°C")
 _SWAP_PATTERN = re.compile(
     rf"Swap: ([\d.]+) ({_SWAP_UNITS}) used of ([\d.]+) ({_SWAP_UNITS})"
 )
@@ -102,10 +102,7 @@ def _temperature(
     line = detail_line_suffix(resource.details, prefix)
     if line is None:
         return None
-    match = _TEMPERATURE_PATTERN.search(line)
-    if match:
-        return float(match.group(1))
-    return None
+    return parse_temperature_value(line)
 
 
 def _swap_usage(resource: ResourceSummary | None) -> tuple[float, float]:

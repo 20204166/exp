@@ -9,6 +9,7 @@ from maintenance.components.temperature import (
     TemperatureSeriesSnapshot,
     TemperatureState,
     TemperatureTelemetry,
+    parse_temperature_value,
 )
 from maintenance.models import CapabilityState
 from tests.support.models import make_summary
@@ -16,6 +17,11 @@ from tests.support.temperature import make_temperature_sample
 
 
 class TemperatureTelemetryTests(unittest.TestCase):
+    def test_parse_temperature_value_handles_valid_and_malformed_text(self) -> None:
+        self.assertEqual(parse_temperature_value("Temperature: 45°C"), 45.0)
+        self.assertEqual(parse_temperature_value("Drive temperature: 38.5°C"), 38.5)
+        self.assertIsNone(parse_temperature_value("Temperature: unavailable"))
+
     def test_record_summary_populates_current_and_history(self) -> None:
         telemetry = TemperatureTelemetry(
             policies={
