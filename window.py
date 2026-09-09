@@ -1222,6 +1222,7 @@ class AppWindow:
             trusted_nodes=updated_records,
             local_node_id=state.local_node_id,
             local_identity_persisted=state.local_identity_persisted,
+            peer_grants=state.peer_grants,
         )
         if not self._save_cluster_state(updated_state):
             self._nodes_error("Cluster settings could not be saved")
