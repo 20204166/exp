@@ -384,6 +384,15 @@ class TrustedNodeRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class PeerGrantRecord:
+    """Target-owned credential and permission grant for one caller."""
+
+    caller_node_id: str
+    secret: str
+    permissions: frozenset[NodePermission]
+
+
+@dataclass(frozen=True, slots=True)
 class ClusterState:
     """The persisted cluster settings and trusted-node records."""
 
@@ -391,6 +400,13 @@ class ClusterState:
     trusted_nodes: tuple[TrustedNodeRecord, ...] = ()
     local_node_id: str = "local"
     local_identity_persisted: bool = True
+    peer_grants: tuple[PeerGrantRecord, ...] = ()
+
+    def grant(self, caller_node_id: str) -> PeerGrantRecord | None:
+        for grant in self.peer_grants:
+            if grant.caller_node_id == caller_node_id:
+                return grant
+        return None
 
     def record(self, node_id: str) -> TrustedNodeRecord | None:
         for record in self.trusted_nodes:
@@ -519,6 +535,24 @@ class ClusterStore:
             for item in records_data
             if (record := self._parse_record(item)) is not None
         )
+        grants_data = data.get("peer_grants", [])
+        grants = (
+            tuple(
+                grant
+                for item in grants_data
+                if (grant := self._parse_grant(item)) is not None
+            )
+            if isinstance(grants_data, list)
+            else ()
+        )
+        grant_counts: dict[str, int] = {}
+        for grant in grants:
+            grant_counts[grant.caller_node_id] = (
+                grant_counts.get(grant.caller_node_id, 0) + 1
+            )
+        grants = tuple(
+            grant for grant in grants if grant_counts[grant.caller_node_id] == 1
+        )
         local_node_id = data.get("local_node_id", "local")
         if not isinstance(local_node_id, str) or not local_node_id:
             LOGGER.warning("Cluster local node identity is malformed; using a new id")
@@ -527,6 +561,7 @@ class ClusterStore:
             discovery_enabled=discovery,
             trusted_nodes=records,
             local_node_id=local_node_id,
+            peer_grants=grants,
         )
 
     @staticmethod
@@ -610,6 +645,37 @@ class ClusterStore:
         return frozenset(permissions)
 
     @staticmethod
+    def _parse_grant(item: Any) -> PeerGrantRecord | None:
+        if not isinstance(item, dict):
+            LOGGER.warning("Ignoring malformed peer grant")
+            return None
+        caller = item.get("caller_node_id")
+        secret = item.get("secret")
+        if not isinstance(caller, str) or not caller:
+            return None
+        if not isinstance(secret, str) or len(secret) != 64:
+            LOGGER.warning("Ignoring malformed peer grant for %s", caller)
+            return None
+        try:
+            bytes.fromhex(secret)
+        except ValueError:
+            LOGGER.warning("Ignoring non-hex peer grant for %s", caller)
+            return None
+        raw_permissions = item.get("permissions")
+        known_permissions = {permission.value for permission in NodePermission}
+        if not isinstance(raw_permissions, list) or any(
+            not isinstance(raw, str) or raw not in known_permissions
+            for raw in raw_permissions
+        ):
+            LOGGER.warning("Ignoring malformed permissions for peer grant %s", caller)
+            return None
+        return PeerGrantRecord(
+            caller_node_id=caller,
+            secret=secret,
+            permissions=frozenset(NodePermission(raw) for raw in raw_permissions),
+        )
+
+    @staticmethod
     def _serialize(state: ClusterState) -> str:
         payload: dict[str, Any] = {
             "schema_version": CLUSTER_SCHEMA_VERSION,
@@ -635,6 +701,16 @@ class ClusterStore:
                     ),
                 }
                 for record in state.trusted_nodes
+            ],
+            "peer_grants": [
+                {
+                    "caller_node_id": grant.caller_node_id,
+                    "secret": grant.secret,
+                    "permissions": sorted(
+                        permission.value for permission in grant.permissions
+                    ),
+                }
+                for grant in state.peer_grants
             ],
         }
         return json.dumps(payload, indent=2, sort_keys=True) + "\n"

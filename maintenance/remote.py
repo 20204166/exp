@@ -16,6 +16,7 @@ feature wiring.
 
 import hashlib
 import hmac
+import inspect
 import json
 import logging
 import math
@@ -109,6 +110,24 @@ class RemoteExecutionError(RuntimeError):
 
 class RemoteTransportError(RuntimeError):
     """Raised when the transport cannot complete an authenticated exchange."""
+
+
+@dataclass(frozen=True, slots=True)
+class PeerGrant:
+    """Target-owned authorization grant for one authenticated caller."""
+
+    caller_node_id: NodeId
+    secret: str
+    permissions: frozenset[NodePermission]
+
+
+def _validate_secret(secret: str) -> None:
+    if not isinstance(secret, str) or len(secret) != 64:
+        raise ValueError("peer credentials must be 256-bit hex text")
+    try:
+        bytes.fromhex(secret)
+    except ValueError as error:
+        raise ValueError("peer credentials must be hexadecimal") from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +281,19 @@ def verify_request(
         raise RemoteProtocolError("request envelope must be an object")
     if envelope.get("v") != REMOTE_PROTOCOL_VERSION:
         raise RemoteProtocolError("unsupported remote protocol version")
+    allowed_fields = {
+        "v",
+        "node_id",
+        "caller_node_id",
+        "op",
+        "params",
+        "request_id",
+        "nonce",
+        "ts",
+        "sig",
+    }
+    if not set(envelope) <= allowed_fields or "sig" not in envelope:
+        raise RemoteProtocolError("request envelope fields are invalid")
     signature = envelope.get("sig")
     if not isinstance(signature, str):
         raise RemoteAuthError("request is missing its signature")
@@ -289,7 +321,11 @@ def verify_request(
         raise RemoteAuthError("request_id is invalid")
     if not isinstance(nonce, str) or not nonce:
         raise RemoteAuthError("request nonce is invalid")
-    if not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp):
+    if (
+        not isinstance(timestamp, (int, float))
+        or isinstance(timestamp, bool)
+        or not math.isfinite(timestamp)
+    ):
         raise RemoteAuthError("request timestamp is invalid")
     now = clock()
     age = now - float(timestamp)
@@ -319,6 +355,18 @@ def verify_response(
         raise RemoteProtocolError("response envelope must be an object")
     if envelope.get("v") != REMOTE_PROTOCOL_VERSION:
         raise RemoteProtocolError("unsupported remote protocol version")
+    allowed_fields = {
+        "v",
+        "node_id",
+        "request_id",
+        "status",
+        "payload",
+        "error",
+        "ts",
+        "sig",
+    }
+    if not set(envelope) <= allowed_fields or "sig" not in envelope:
+        raise RemoteProtocolError("response envelope fields are invalid")
     signature = envelope.get("sig")
     if not isinstance(signature, str):
         raise RemoteAuthError("response is missing its signature")
@@ -329,7 +377,12 @@ def verify_response(
     request_id = envelope.get("request_id")
     status = envelope.get("status")
     timestamp = envelope.get("ts")
-    if not isinstance(node_id, str) or not isinstance(request_id, str):
+    if (
+        not isinstance(node_id, str)
+        or not node_id
+        or not isinstance(request_id, str)
+        or not request_id
+    ):
         raise RemoteAuthError("response identity fields are invalid")
     if status not in ("ok", "error"):
         raise RemoteProtocolError("response status is invalid")
@@ -339,7 +392,11 @@ def verify_response(
     error = envelope.get("error")
     if error is not None and not isinstance(error, str):
         raise RemoteProtocolError("response error must be a string or null")
-    if not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp):
+    if (
+        not isinstance(timestamp, (int, float))
+        or isinstance(timestamp, bool)
+        or not math.isfinite(timestamp)
+    ):
         raise RemoteAuthError("response timestamp is invalid")
     age = clock() - float(timestamp)
     if age > freshness_seconds or age < -freshness_seconds:
@@ -376,6 +433,7 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
             create_time = item.get("create_time")
             if create_time is not None and (
                 not isinstance(create_time, (int, float))
+                or isinstance(create_time, bool)
                 or not math.isfinite(float(create_time))
             ):
                 raise RemoteProtocolError("process reference create_time is invalid")
@@ -413,6 +471,7 @@ class RemoteService:
         permissions: frozenset[NodePermission] | None = None,
         process_manager: Any | None = None,
         expected_caller_id: NodeId | None = None,
+        grants: dict[NodeId, PeerGrant] | None = None,
         identity_fingerprint: str | None = None,
     ) -> None:
         self._node_id = node_id
@@ -427,7 +486,13 @@ class RemoteService:
         self._identity_fingerprint = identity_fingerprint or node_identity_fingerprint(
             node_id
         )
+        _validate_secret(secret)
         self._secret = secret
+        self._grant_mode = grants is not None
+        self._grant_lock = threading.RLock()
+        self._grants = dict(grants or {})
+        for grant in self._grants.values():
+            _validate_secret(grant.secret)
         self._app_version = app_version
         self._clock = clock
         self._freshness_seconds = freshness_seconds
@@ -455,13 +520,25 @@ class RemoteService:
             envelope = json.loads(envelope_text)
         except (ValueError, TypeError) as error:
             raise RemoteProtocolError("envelope is not valid JSON") from error
+        caller_node_id = self._caller_from_json(envelope)
+        credential = self._secret
+        grant: PeerGrant | None = None
+        with self._grant_lock:
+            if self._grant_mode:
+                if caller_node_id is None:
+                    raise RemoteAuthError("request caller identity is required")
+                grant = self._grants.get(caller_node_id)
+                if grant is None:
+                    raise RemoteAuthError("request caller identity is unknown")
+                credential = grant.secret
         request = verify_request(
             envelope,
-            secret=self._secret,
+            secret=credential,
             clock=self._clock,
             freshness_seconds=self._freshness_seconds,
             replay_cache=self._replay_cache,
         )
+        response_secret = grant.secret if grant is not None else self._secret
         if (
             self._expected_caller_id is not None
             and request.caller_node_id != self._expected_caller_id
@@ -470,23 +547,36 @@ class RemoteService:
         if request.node_id != self._node_id:
             raise RemoteAuthError("request target identity is invalid")
         try:
-            payload = self._solve(request)
+            payload = self._solve(request, grant=grant)
+        except RemoteAuthorizationError as error:
+            response = sign_response(
+                node_id=self._node_id.value,
+                request_id=request.request_id,
+                status="error",
+                error=(
+                    "capability_unavailable"
+                    if "not authorised" in str(error)
+                    else "permission_denied"
+                ),
+                timestamp=self._clock(),
+                secret=response_secret,
+            )
+            return json.dumps(response)
         except RemoteProtocolError:
             raise
-        except Exception as error:  # noqa: BLE001 - failures become signed errors.
+        except Exception:  # noqa: BLE001 - failures become stable signed errors.
             LOGGER.warning(
-                "Remote operation %s failed on %s: %s",
+                "Remote operation %s failed on %s",
                 request.op,
                 self._node_id,
-                error,
             )
             response = sign_response(
                 node_id=self._node_id.value,
                 request_id=request.request_id,
                 status="error",
-                error=str(error),
+                error="execution_failed",
                 timestamp=self._clock(),
-                secret=self._secret,
+                secret=response_secret,
             )
             return json.dumps(response)
         response = sign_response(
@@ -495,18 +585,38 @@ class RemoteService:
             status="ok",
             payload=payload,
             timestamp=self._clock(),
-            secret=self._secret,
+            secret=response_secret,
         )
         return json.dumps(response)
 
-    def _solve(self, request: RemoteRequest) -> dict[str, Any]:
+    def update_grants(self, grants: dict[NodeId, PeerGrant]) -> None:
+        """Replace the live target ACL after an atomic settings update."""
+
+        validated = dict(grants)
+        for grant in validated.values():
+            _validate_secret(grant.secret)
+        with self._grant_lock:
+            self._grant_mode = True
+            self._grants = validated
+
+    @staticmethod
+    def _caller_from_json(envelope: Any) -> NodeId | None:
+        if not isinstance(envelope, dict):
+            return None
+        caller = envelope.get("caller_node_id")
+        return NodeId(caller) if isinstance(caller, str) and caller else None
+
+    def _solve(
+        self, request: RemoteRequest, *, grant: PeerGrant | None = None
+    ) -> dict[str, Any]:
         required = OP_REQUIRED_CAPABILITY.get(request.op)
         if required is None:
             raise RemoteProtocolError(f"unknown operation: {request.op}")
         if required not in self._capabilities:
             raise RemoteAuthorizationError(f"node is not authorised for {request.op}")
         permission = OP_REQUIRED_PERMISSION[request.op]
-        if permission not in self._permissions:
+        permissions = grant.permissions if grant is not None else self._permissions
+        if permission not in permissions:
             raise RemoteAuthorizationError(f"caller lacks permission for {request.op}")
         validate_operation_params(request.op, request.params)
         if request.op == "hello":
@@ -525,7 +635,10 @@ class RemoteService:
             return {"snapshot": node_snapshot_to_dict(snapshot)}
         if request.op == "component_summary":
             resource = self._provider.component_summary(request.params["key"])
-            return {"resource": resource_summary_to_dict(resource)}
+            return {
+                "node_id": self._node_id.value,
+                "resource": resource_summary_to_dict(resource),
+            }
         if request.op == "process_candidates":
             processes = self._provider.process_candidates()
             return {"processes": [process_candidate_to_dict(p) for p in processes]}
@@ -577,7 +690,7 @@ class MemoryRemoteTransport:
     def __init__(self, service: RemoteService) -> None:
         self._service = service
 
-    def request(self, envelope_text: str) -> str:
+    def request(self, envelope_text: str, cancel_event: Any | None = None) -> str:
         return self._service.handle(envelope_text)
 
 
@@ -620,29 +733,62 @@ class SocketRemoteTransport:
         self._port = port
         self._timeout = timeout
 
-    def request(self, envelope_text: str) -> str:
+    def request(self, envelope_text: str, cancel_event: Any | None = None) -> str:
         data = envelope_text.encode("utf-8")
         if len(data) > MAX_ENVELOPE_BYTES:
             raise RemoteTransportError("request envelope is too large")
         try:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RemoteExecutionError("cancelled")
+            connect_timeout = (
+                min(self._timeout, 0.25) if cancel_event else self._timeout
+            )
             with socket_module.create_connection(
-                (self._host, self._port), timeout=self._timeout
+                (self._host, self._port), timeout=connect_timeout
             ) as sock:
-                sock.settimeout(self._timeout)
-                _send_frame(sock, data, max_bytes=MAX_ENVELOPE_BYTES)
-                body = _recv_frame(
-                    sock,
-                    max_bytes=MAX_ENVELOPE_BYTES,
-                    closed_message="connection closed before response",
+                sock.settimeout(
+                    min(self._timeout, 0.25) if cancel_event else self._timeout
                 )
+                _send_frame(sock, data, max_bytes=MAX_ENVELOPE_BYTES)
+                if cancel_event is None:
+                    body = _recv_frame(
+                        sock,
+                        max_bytes=MAX_ENVELOPE_BYTES,
+                        closed_message="connection closed before response",
+                    )
+                else:
+                    header = _recv_exact_with_cancel(sock, 4, cancel_event)
+                    length = struct.unpack(">I", header)[0]
+                    if length > MAX_ENVELOPE_BYTES:
+                        raise RemoteTransportError("envelope is too large")
+                    body = _recv_exact_with_cancel(sock, length, cancel_event)
         except RemoteTransportError:
             raise
         except OSError as error:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RemoteExecutionError("cancelled") from error
             raise RemoteTransportError(f"remote transport failed: {error}") from error
         try:
             return body.decode("utf-8")
         except UnicodeDecodeError as error:
             raise RemoteProtocolError("response is not valid UTF-8") from error
+
+
+def _recv_exact_with_cancel(sock: Any, length: int, cancel_event: Any) -> bytes:
+    chunks: list[bytes] = []
+    remaining = length
+    while remaining:
+        if cancel_event.is_set():
+            raise RemoteExecutionError("cancelled")
+        try:
+            chunk = sock.recv(remaining)
+        except TimeoutError:
+            continue
+        if not chunk:
+            raise RemoteTransportError("connection closed before response")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
 
 
 class RemoteSocketServer:
@@ -712,7 +858,11 @@ class RemoteSocketServer:
             (self._host, self._port),
             make_handler(self._service),
         )
+        # A provider may not honour cooperative cancellation. Daemon handlers
+        # and non-blocking close keep application shutdown bounded; idle and
+        # malformed clients remain bounded by the socket timeout.
         server.daemon_threads = True
+        server.block_on_close = False
         self._server = server
         self._thread = threading.Thread(target=server.serve_forever, daemon=True)
         self._thread.start()
@@ -727,6 +877,11 @@ class RemoteSocketServer:
             except Exception:  # shutdown is best-effort.
                 LOGGER.debug("Remote socket server shutdown failed", exc_info=True)
             server.server_close()
+
+    def update_grants(self, grants: dict[NodeId, PeerGrant]) -> None:
+        """Update authorization without restarting the listening socket."""
+
+        self._service.update_grants(grants)
 
 
 class AuthenticatedNodeProvider:
@@ -755,8 +910,8 @@ class AuthenticatedNodeProvider:
         self._clock = clock
         self._freshness_seconds = freshness_seconds
 
-    def hello(self) -> dict[str, Any]:
-        return self._request("hello", {})
+    def hello(self, cancel_event: Any | None = None) -> dict[str, Any]:
+        return self._request("hello", {}, cancel_event)
 
     def dashboard_snapshot(
         self,
@@ -764,14 +919,31 @@ class AuthenticatedNodeProvider:
         progress_callback: Callable[[str], None] | None = None,
     ) -> Any:
         self._check_cancel(cancel_event)
-        payload = self._request("dashboard_snapshot", {})
+        payload = self._request("dashboard_snapshot", {}, cancel_event)
         try:
             snapshot = node_snapshot_from_dict(payload["snapshot"])
         except (KeyError, ClusterDataError) as error:
             raise RemoteExecutionError("remote sent an invalid snapshot") from error
         if snapshot.dashboard is None:
             raise RemoteExecutionError("remote sent no dashboard data")
+        if snapshot.node_id != self._node_id:
+            raise RemoteAuthError("remote snapshot came from the wrong node")
         return snapshot.dashboard
+
+    def node_snapshot(
+        self,
+        cancel_event: Any | None = None,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> NodeSnapshot:
+        self._check_cancel(cancel_event)
+        payload = self._request("dashboard_snapshot", {}, cancel_event)
+        try:
+            snapshot = node_snapshot_from_dict(payload["snapshot"])
+        except (KeyError, ClusterDataError) as error:
+            raise RemoteExecutionError("remote sent an invalid snapshot") from error
+        if snapshot.node_id != self._node_id:
+            raise RemoteAuthError("remote snapshot came from the wrong node")
+        return snapshot
 
     def component_summary(
         self,
@@ -779,7 +951,9 @@ class AuthenticatedNodeProvider:
         cancel_event: Any | None = None,
     ) -> ResourceSummary:
         self._check_cancel(cancel_event)
-        payload = self._request("component_summary", {"key": key})
+        payload = self._request("component_summary", {"key": key}, cancel_event)
+        if payload.get("node_id") != self._node_id.value:
+            raise RemoteAuthError("remote resource came from the wrong node")
         try:
             return resource_summary_from_dict(payload["resource"])
         except ClusterDataError as error:
@@ -790,7 +964,7 @@ class AuthenticatedNodeProvider:
         cancel_event: Any | None = None,
     ) -> list[Any]:
         self._check_cancel(cancel_event)
-        payload = self._request("process_candidates", {})
+        payload = self._request("process_candidates", {}, cancel_event)
         try:
             return [process_candidate_from_dict(item) for item in payload["processes"]]
         except (KeyError, TypeError, ClusterDataError) as error:
@@ -802,7 +976,7 @@ class AuthenticatedNodeProvider:
         cancel_event: Any | None = None,
     ) -> list[Any]:
         self._check_cancel(cancel_event)
-        payload = self._request("storage_candidates", {})
+        payload = self._request("storage_candidates", {}, cancel_event)
         try:
             return [file_candidate_from_dict(item) for item in payload["files"]]
         except (KeyError, TypeError, ClusterDataError) as error:
@@ -835,7 +1009,13 @@ class AuthenticatedNodeProvider:
         if cancel_event is not None and cancel_event.is_set():
             raise RemoteExecutionError("cancelled")
 
-    def _request(self, op: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _request(
+        self,
+        op: str,
+        params: dict[str, Any],
+        cancel_event: Any | None = None,
+    ) -> dict[str, Any]:
+        self._check_cancel(cancel_event)
         request_id = secrets.token_hex(16)
         nonce = secrets.token_hex(16)
         envelope = sign_request(
@@ -851,7 +1031,13 @@ class AuthenticatedNodeProvider:
             ),
         )
         envelope_text = json.dumps(envelope)
-        response_text = self._transport.request(envelope_text)
+        request = self._transport.request
+        try:
+            inspect.signature(request).bind(envelope_text, cancel_event)
+        except (TypeError, ValueError):
+            response_text = request(envelope_text)
+        else:
+            response_text = request(envelope_text, cancel_event)
         try:
             response_envelope = json.loads(response_text)
         except (TypeError, ValueError) as error:
@@ -867,6 +1053,10 @@ class AuthenticatedNodeProvider:
         if response.request_id != request_id:
             raise RemoteAuthError("response request id does not match")
         if response.status == "error":
+            if response.error == "permission_denied":
+                raise RemoteAuthorizationError("caller lacks permission")
+            if response.error == "capability_unavailable":
+                raise RemoteAuthorizationError("node capability is unavailable")
             raise RemoteExecutionError(response.error or "remote operation failed")
         if response.payload is None:
             raise RemoteProtocolError("successful response has no payload")

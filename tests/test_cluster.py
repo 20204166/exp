@@ -12,6 +12,7 @@ from maintenance.cluster import (
     ClusterSaveError,
     ClusterState,
     ClusterStore,
+    PeerGrantRecord,
     dashboard_snapshot_from_dict,
     dashboard_snapshot_to_dict,
     file_candidate_from_dict,
@@ -355,6 +356,60 @@ class ClusterStoreTests(unittest.TestCase):
         state = ClusterState(trusted_nodes=(record,))
         self.assertIs(state.record("a"), record)
         self.assertIsNone(state.record("missing"))
+
+    def test_target_owned_peer_grants_round_trip(self) -> None:
+        store, path = self._store()
+        grant = PeerGrantRecord(
+            caller_node_id="caller",
+            secret="a" * 64,
+            permissions=frozenset({NodePermission.DASHBOARD_READ}),
+        )
+        store.save(ClusterState(peer_grants=(grant,)))
+        loaded = ClusterStore(path).load()
+        self.assertEqual(loaded.grant("caller"), grant)
+
+    def test_malformed_peer_grant_is_denied(self) -> None:
+        _store, path = self._store()
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "peer_grants": [
+                        {
+                            "caller_node_id": "caller",
+                            "secret": "not-a-secret",
+                            "permissions": ["dashboard_read"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(ClusterStore(path).load().peer_grants, ())
+
+    def test_duplicate_peer_grants_are_denied_together(self) -> None:
+        _store, path = self._store()
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "peer_grants": [
+                        {
+                            "caller_node_id": "caller",
+                            "secret": "a" * 64,
+                            "permissions": ["dashboard_read"],
+                        },
+                        {
+                            "caller_node_id": "caller",
+                            "secret": "b" * 64,
+                            "permissions": ["dashboard_read"],
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(ClusterStore(path).load().peer_grants, ())
 
 
 if __name__ == "__main__":

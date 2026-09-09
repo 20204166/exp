@@ -369,6 +369,12 @@ class NodeProvider(Protocol):
         progress_callback: Callable[[str], None] | None = None,
     ) -> Any: ...
 
+    def node_snapshot(
+        self,
+        cancel_event: Any | None = None,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> NodeSnapshot: ...
+
     def component_summary(
         self,
         key: str,
@@ -434,6 +440,7 @@ class NodeContext:
     scheduler: Any
     coordinator: Any
     snapshot: Any | None = None
+    node_snapshot: NodeSnapshot | None = None
     telemetry: TemperatureTelemetry = field(default_factory=TemperatureTelemetry)
     capabilities: dict[str, Any] = field(default_factory=dict)
     capability_counts: dict[str, int] = field(default_factory=dict)

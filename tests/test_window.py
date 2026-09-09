@@ -73,7 +73,7 @@ class AppWindowTests(unittest.TestCase):
         window.status_label = Mock()
         window.refreshed_label = Mock()
         window.scan_time_label = Mock()
-        window.progress_bar = Mock()
+        window.progress_bar = None
         window.health_label = Mock()
         return window
 
@@ -692,7 +692,7 @@ class AppWindowTests(unittest.TestCase):
         window._apply_component("cpu", self._summary("cpu", "CPU", "30%"))
 
         window.status_label.config.assert_not_called()
-        window.progress_bar.config.assert_not_called()
+        self.assertIsNone(window.progress_bar)
         window.cards["cpu"].update_summary.assert_called_once()
 
     def test_component_cycle_skips_in_flight_component(self) -> None:
@@ -777,11 +777,13 @@ class AppWindowTests(unittest.TestCase):
         window.preferences_progress_bar = Mock()
 
         window._for_each_presentation_target(
-            lambda label, bar: (label.config(text="x"), bar.stop())
+            lambda label, bar: (
+                label.config(text="x"),
+                bar.stop() if bar is not None else None,
+            )
         )
 
         window.status_label.config.assert_called_with(text="x")
-        window.progress_bar.stop.assert_called_once()
         window.preferences_status_label.config.assert_called_with(text="x")
         window.preferences_progress_bar.stop.assert_called_once()
 
@@ -789,11 +791,14 @@ class AppWindowTests(unittest.TestCase):
         window = self.make_window()
 
         window._for_each_presentation_target(
-            lambda label, bar: (label.config(text="x"), bar.stop())
+            lambda label, bar: (
+                label.config(text="x"),
+                bar.stop() if bar is not None else None,
+            )
         )
 
         window.status_label.config.assert_called_with(text="x")
-        window.progress_bar.stop.assert_called_once()
+        self.assertIsNone(window.progress_bar)
 
     def test_render_visibility_tracks_active_page(self) -> None:
         window = self.make_window()
@@ -829,12 +834,7 @@ class AppWindowTests(unittest.TestCase):
         for message in ("CPU", "Memory", "Storage", "GPU", "Network", "Battery"):
             window._show_progress(f"Scanning {message}...")
 
-        values = [
-            call.kwargs.get("value")
-            for call in window.progress_bar.config.call_args_list
-            if "value" in call.kwargs
-        ]
-        self.assertEqual(values, [1, 2, 3, 4, 5, 6])
+        self.assertIsNone(window.progress_bar)
         window.status_label.config.assert_called_with(
             text="●  Scanning Battery... (6/6)"
         )
@@ -849,12 +849,6 @@ class AppWindowTests(unittest.TestCase):
 
         window._show_snapshot(self._snapshot())
 
-        full_call = next(
-            call
-            for call in window.progress_bar.config.call_args_list
-            if call.kwargs.get("value") == 6
-        )
-        self.assertEqual(full_call.kwargs["style"], "Complete.Horizontal.TProgressbar")
         window.status_label.config.assert_any_call(
             text="● Scan complete",
             style="Ready.Status.TLabel",
@@ -882,12 +876,7 @@ class AppWindowTests(unittest.TestCase):
             text="●  Ready",
             style="Ready.Status.TLabel",
         )
-        values = [
-            call.kwargs.get("value")
-            for call in window.progress_bar.config.call_args_list
-            if "value" in call.kwargs
-        ]
-        self.assertEqual(values, [6])
+        self.assertIsNone(window.progress_bar)
 
     def test_hold_is_suppressed_when_new_scan_active(self) -> None:
         window = self.make_window()
@@ -924,10 +913,7 @@ class AppWindowTests(unittest.TestCase):
         with patch("window.messagebox.showerror"):
             window._show_error("boom")
 
-        self.assertEqual(
-            window.progress_bar.config.call_args_list[-1].kwargs["value"],
-            0,
-        )
+        self.assertIsNone(window.progress_bar)
 
     def test_cancel_branch_resets_progress_bar_to_zero(self) -> None:
         window = self.make_window()
@@ -941,10 +927,7 @@ class AppWindowTests(unittest.TestCase):
             str(ScanCancelled(DOWNLOADS_SCAN_CANCELLED)),
         )
 
-        self.assertEqual(
-            window.progress_bar.config.call_args_list[-1].kwargs["value"],
-            0,
-        )
+        self.assertIsNone(window.progress_bar)
 
     def test_busy_start_resets_progress_and_cancels_hold(self) -> None:
         window = self.make_window()

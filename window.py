@@ -16,7 +16,6 @@ from maintenance.cluster import (
     ClusterState,
     ClusterStore,
     default_cluster_path,
-    trusted_node_record,
 )
 from maintenance.components import (
     DOWNLOADS_SCAN_CANCELLED,
@@ -62,17 +61,16 @@ from maintenance.models import (
     unavailable_summary,
 )
 from maintenance.nodes import (
-    READ_PERMISSIONS,
     NodeCapability,
     NodeContext,
-    NodeDescriptor,
     NodeId,
     NodeIdentityStatus,
     NodePermission,
     NodeRegistry,
-    NodeStatus,
-    NodeTrustState,
+    NodeSnapshot,
+    generate_node_secret,
     is_trusted_descriptor,
+    local_node_descriptor,
     node_identity_fingerprint,
     node_operation_key,
 )
@@ -84,25 +82,28 @@ from maintenance.preferences import (
     default_preferences_path,
 )
 from maintenance.remote import (
-    READ_CAPABILITIES,
     AuthenticatedNodeProvider,
+    PeerGrant,
     RemoteProcessActionBackend,
+    RemoteService,
+    RemoteSocketServer,
     SocketRemoteTransport,
 )
 from maintenance.ui import cluster_page as ui_cluster
+from maintenance.ui import dashboard_page as ui_dashboard
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
-from maintenance.ui import layout as ui_layout
 from maintenance.ui import nodes_connections as ui_nodes
 from maintenance.ui import preferences_page as ui_preferences
 from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui import scan_status
 from maintenance.ui import settings_home as ui_settings_home
 from maintenance.ui import styles as ui_styles
-from maintenance.ui import thermals_page as ui_thermals
 from maintenance.ui import transition as ui_transition
+from maintenance.ui import window_node_actions as ui_node_actions
+from maintenance.ui import window_pages as ui_window_pages
 from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.navigation import PageRouter, PageSpec
-from maintenance.ui.window_supports import card_policy, snapshot_state
+from maintenance.ui.window_supports import card_policy, node_specs, snapshot_state
 from maintenance.ui.window_supports.timer_delivery import TimerDelivery
 
 LOGGER = logging.getLogger(__name__)
@@ -116,6 +117,20 @@ THERMALS_PAGE = "thermals"
 
 
 class AppWindow:
+    # Dashboard widgets are built by the dashboard adapter after construction.
+    tk: Any
+    cards: dict[str, ResourceCard]
+    cards_frame: Any
+    _refresh_cards_scrollbar: Callable[..., None]
+    refreshed_label: Any
+    scan_time_label: Any
+    health_label: Any
+    status_label: Any
+    analyze_button: Any
+    cancel_button: Any
+    preferences_page: Any
+    settings_home: Any
+    thermals_page: Any
     BACKGROUND = ui_styles.COLORS["background"]
     CARD_BACKGROUND = ui_styles.COLORS["card"]
     TEXT_PRIMARY = ui_styles.COLORS["text"]
@@ -144,7 +159,7 @@ class AppWindow:
 
     def __init__(
         self,
-        master: tk.Tk | None = None,
+        master: Any = None,
         *,
         preferences_store: PreferencesStore | None = None,
         cluster_store: ClusterStore | None = None,
@@ -188,6 +203,7 @@ class AppWindow:
         self._discovery_tick_id: str | None = None
         self._build_local_node_context()
         self._restore_trusted_nodes()
+        self._peer_server: RemoteSocketServer | None = None
 
         self.master = master or tk.Tk()
         self._timer_delivery = TimerDelivery(
@@ -204,6 +220,7 @@ class AppWindow:
 
         self._configure_styles()
         self._build_window()
+        self._start_peer_listener()
         self._start_discovery()
         self._schedule_timer(350, self.handle_analyze)
 
@@ -456,195 +473,13 @@ class AppWindow:
             coordinator.set_visible(f"component:{feature.key}", dashboard_visible)
 
     def _build_dashboard_page(self, parent: Any) -> Any:
-        self.main_frame = ttk.Frame(
-            parent,
-            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
-            style="App.TFrame",
-        )
-
-        node_title = None
-        if self._multi_node_selectable():
-            context = self._selected_context()
-            if context is not None:
-                node_title = context.descriptor.display_name
-
-        self.header_actions = ui_layout.dashboard_header(
-            self.main_frame,
-            title="System Analyzer",
-            description=(
-                "Scan your system, open any category, and review safe cleanup "
-                "actions before anything changes."
-            ),
-            frame_cls=ttk.Frame,
-            label_cls=ttk.Label,
-            wrap=680,
-            node_title=node_title,
-        )
-        self.node_title_label = getattr(
-            self.header_actions,
-            "_dashboard_node_label",
-            None,
-        )
-        self.discovery_status_label = getattr(
-            self.header_actions,
-            "_dashboard_discovery_label",
-            None,
-        )
-        ui_discovery_refresh.render_discovery_status(
-            self.discovery_status_label,
-            self._node_registry.discovered_candidates(),
-        )
-
-        self.settings_button = ttk.Button(
-            self.header_actions,
-            text="Settings",
-            command=self._show_settings_page,
-            style="Neutral.TButton",
-            cursor="hand2",
-        )
-        self.cluster_button = ttk.Button(
-            self.header_actions,
-            text="All Systems",
-            command=self._show_cluster_page,
-            style="Neutral.TButton",
-            cursor="hand2",
-        )
-        self.thermals_button = ttk.Button(
-            self.header_actions,
-            text="Thermals",
-            command=self._show_thermals_page,
-            style="Neutral.TButton",
-            cursor="hand2",
-        )
-        self._button_coordinator.register(
-            "dashboard:settings",
-            self._show_settings_page,
-            replace=True,
-        )
-        self._button_coordinator.bind(self.settings_button, "dashboard:settings")
-        self._button_coordinator.register(
-            "dashboard:cluster",
-            self._show_cluster_page,
-            replace=True,
-        )
-        self._button_coordinator.bind(self.cluster_button, "dashboard:cluster")
-        self._button_coordinator.register(
-            "dashboard:thermals",
-            self._show_thermals_page,
-            replace=True,
-        )
-        self._button_coordinator.bind(self.thermals_button, "dashboard:thermals")
-        self._build_node_selector(self.header_actions)
-        self.settings_button.pack(anchor="e")
-        self.cluster_button.pack(anchor="e", padx=(8, 0))
-        self.thermals_button.pack(anchor="e", padx=(8, 0))
-
-        self.status_label = ttk.Label(
-            self.header_actions,
-            text="●  Ready",
-            style="Ready.Status.TLabel",
-        )
-        self.status_label.pack(anchor="e", pady=(9, 0))
-
-        self.progress_bar = ttk.Progressbar(
-            self.main_frame,
-            mode="determinate",
-            maximum=len(self._feature_catalog.all()),
-            style="Analysis.Horizontal.TProgressbar",
-        )
-        self.progress_bar.pack(fill="x", pady=(22, 20))
-
-        self.overview_frame = ttk.Frame(self.main_frame, style="App.TFrame")
-        self.overview_frame.pack(fill="x", pady=(0, 10))
-        ttk.Label(
-            self.overview_frame,
-            text="System overview",
-            style="Section.TLabel",
-        ).pack(side="left")
-        self.scan_time_label = ttk.Label(
-            self.overview_frame,
-            text="Not scanned yet",
-            style="Description.TLabel",
-        )
-        self.scan_time_label.pack(side="right")
-
-        self.cards_container = ttk.Frame(self.main_frame, style="App.TFrame")
-        self.cards_container.pack(fill="both", expand=True)
-        (
-            self.cards_canvas,
-            self.cards_frame,
-            self._refresh_cards_scrollbar,
-        ) = ui_layout.scrollable_area(
-            self.cards_container,
-            bg=self.BACKGROUND,
-            frame_cls=ttk.Frame,
-            canvas_cls=tk.Canvas,
-            scrollbar_cls=ttk.Scrollbar,
-            frame_kwargs={"style": "App.TFrame"},
-        )
-
-        for column in range(3):
-            self.cards_frame.grid_columnconfigure(column, weight=1, uniform="cards")
-
-        self.cards: dict[str, ResourceCard] = {}
-        for index, feature in enumerate(self._feature_catalog.all()):
-            action_id = f"dashboard:resource:{feature.key}"
-
-            def open_feature(key: str = feature.key) -> None:
-                self.open_resource(key)
-
-            self._button_coordinator.register(
-                action_id,
-                open_feature,
-                replace=True,
-            )
-            card = ResourceCard(
-                self.cards_frame,
-                key=feature.key,
-                title=feature.title,
-                on_open=self.open_resource,
-                colors=self.colors,
-                action_id=action_id,
-                button_coordinator=self._button_coordinator,
-            )
-            self._grid_card(card, index, 3)
-            self.cards[feature.key] = card
-        self.cards_empty_label: ttk.Label | None = None
-
-        self.refreshed_label = ttk.Label(
-            self.main_frame,
-            text="Not refreshed yet",
-            style="Description.TLabel",
-        )
-        self.refreshed_label.pack(anchor="w", pady=(4, 0))
-
-        self.health_label = ttk.Label(
-            self.main_frame,
-            text="Health: No issues detected",
-            style="Healthy.TLabel",
-        )
-        self.health_label.pack(anchor="w", pady=(2, 0))
-
-        self._layout_dashboard_cards()
-        return self.main_frame
+        self.ttk = ttk
+        self.tk = tk
+        return ui_dashboard.build(self, parent)
 
     def _build_settings_home_page(self, parent: Any) -> Any:
-        self.settings_frame = ttk.Frame(
-            parent,
-            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
-            style="App.TFrame",
-        )
-        self.settings_home = ui_settings_home.SettingsHome(
-            self.settings_frame,
-            callbacks=ui_settings_home.SettingsHomeCallbacks(
-                on_back=self._show_dashboard_page,
-                on_select_category=self._on_select_settings_category,
-            ),
-            categories=self._settings_categories(),
-            version=__version__,
-            button_coordinator=self._button_coordinator,
-        )
-        return self.settings_frame
+        self.ttk = ttk
+        return ui_window_pages.build_settings_home(self, parent)
 
     def _settings_categories(self) -> list[ui_settings_home.SettingsCategorySpec]:
         return [
@@ -675,34 +510,8 @@ class AppWindow:
         ]
 
     def _build_preferences_page(self, parent: Any) -> Any:
-        self.preferences_frame = ttk.Frame(
-            parent,
-            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
-            style="App.TFrame",
-        )
-        self.preferences_page = ui_preferences.PreferencesPage(
-            self.preferences_frame,
-            callbacks=ui_preferences.PreferencesPageCallbacks(
-                on_back=self._show_settings_page,
-                on_interval_commit=self._on_interval_commit,
-                on_card_visibility_change=self._on_card_visibility_change,
-                on_auto_hide_change=self._on_auto_hide_change,
-                on_scan=self.handle_analyze,
-                on_cancel_scan=self._cancel_analysis,
-                on_reset=self._on_reset,
-                on_appearance_change=self._on_appearance_change,
-            ),
-            intervals=self._interval_specs(),
-            cards=self._card_specs(),
-            hide_unavailable_cards=self._preferences.hide_unavailable_cards,
-            appearance=self._preferences.appearance,
-            button_coordinator=self._button_coordinator,
-        )
-        self.analyze_button = self.preferences_page.analyze_button
-        self.cancel_button = self.preferences_page.cancel_button
-        self.preferences_status_label = self.preferences_page.manual_status_label
-        self.preferences_progress_bar = self.preferences_page.manual_progress_bar
-        return self.preferences_frame
+        self.ttk = ttk
+        return ui_window_pages.build_preferences(self, parent)
 
     def _interval_specs(self) -> list[ui_preferences.IntervalControlSpec]:
         intervals = self._preferences.refresh_intervals.as_dict()
@@ -732,49 +541,20 @@ class AppWindow:
         ]
 
     def _show_settings_page(self) -> None:
-        self._page_router.show(SETTINGS_PAGE)
-        self._sync_render_visibility(SETTINGS_PAGE)
-        self.settings_home.focus_back()
+        ui_window_pages.show_page(self, SETTINGS_PAGE, "settings_home")
 
     def _show_preferences_page(self) -> None:
-        self._page_router.show(PREFERENCES_PAGE)
-        self._sync_render_visibility(PREFERENCES_PAGE)
-        self.preferences_page.focus_back()
+        ui_window_pages.show_page(self, PREFERENCES_PAGE, "preferences_page")
 
     def _show_dashboard_page(self) -> None:
-        self._page_router.show(DASHBOARD_PAGE)
-        self._sync_render_visibility(DASHBOARD_PAGE)
-        button = getattr(self, "settings_button", None)
-        if button is not None:
-            button.focus_set()
+        ui_window_pages.show_dashboard(self)
 
     def _show_thermals_page(self) -> None:
-        page = getattr(self, "thermals_page", None)
-        context = self._selected_context()
-        if page is not None:
-            page.render(
-                self._thermal_render_state(context) if context is not None else None,
-                getattr(context, "capabilities", None) if context is not None else None,
-            )
-        self._page_router.show(THERMALS_PAGE)
-        self._sync_render_visibility(THERMALS_PAGE)
-        if page is not None:
-            page.focus_back()
+        ui_window_pages.show_thermals(self)
 
     def _build_thermals_page(self, parent: Any) -> Any:
-        self.thermals_frame = ttk.Frame(
-            parent,
-            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
-            style="App.TFrame",
-        )
-        self.thermals_page = ui_thermals.ThermalsPage(
-            self.thermals_frame,
-            callbacks=ui_thermals.ThermalsPageCallbacks(
-                on_back=self._show_dashboard_page,
-            ),
-            colors=self.colors,
-        )
-        return self.thermals_frame
+        self.ttk = ttk
+        return ui_window_pages.build_thermals(self, parent)
 
     def _on_select_settings_category(self, key: str) -> None:
         """Route one Settings category card to its dedicated page.
@@ -783,53 +563,15 @@ class AppWindow:
         matter of registering its page and a handler here.
         """
 
-        handlers = {
-            "preferences": self._show_preferences_page,
-            "nodes": self._show_nodes_page,
-            "cluster": self._show_cluster_page,
-        }
-        handler = handlers.get(key)
-        if handler is not None:
-            handler()
+        ui_window_pages.select_settings_category(self, key)
 
     def _show_nodes_page(self) -> None:
         self._refresh_nodes_page()
-        self._page_router.show(NODES_PAGE)
-        self._sync_render_visibility(NODES_PAGE)
-        page = getattr(self, "nodes_page", None)
-        if page is not None:
-            page.focus_back()
+        ui_window_pages.show_page(self, NODES_PAGE, "nodes_page")
 
     def _build_nodes_page(self, parent: Any) -> Any:
-        self.nodes_frame = ttk.Frame(
-            parent,
-            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
-            style="App.TFrame",
-        )
-        self.nodes_page = ui_nodes.NodesConnectionsPage(
-            self.nodes_frame,
-            callbacks=ui_nodes.NodesConnectionsCallbacks(
-                on_back=self._show_settings_page,
-                on_discovery_toggle=self._apply_discovery_enabled,
-                on_start_discovery=self._start_discovery_from_nodes,
-                on_pair=self._pair_discovered_node,
-                on_reject=self._reject_discovered_node,
-                on_rename=self._rename_node,
-                on_color=self._set_node_color,
-                on_revoke=self._revoke_trusted_node,
-                on_test_connection=self._test_connection,
-                on_open_node=self._open_cluster_node,
-                on_add_manual_host=self._add_manual_host,
-                on_remove_manual=self._remove_manual_host,
-                on_permissions=self._set_node_permissions,
-            ),
-            discovery_enabled=self._cluster_state.discovery_enabled,
-            discovered=self._nodes_peer_specs(),
-            trusted=self._nodes_trusted_specs(),
-            manual=self._nodes_manual_specs(),
-            button_coordinator=self._button_coordinator,
-        )
-        return self.nodes_frame
+        self.ttk = ttk
+        return ui_window_pages.build_nodes(self, parent)
 
     def _start_discovery_from_nodes(self) -> None:
         """Enable and start local discovery from Nodes & Connections."""
@@ -843,208 +585,49 @@ class AppWindow:
         registry = self.__dict__.get("_node_registry")
         if registry is None:
             return []
-        return [
-            ui_nodes.DiscoveredPeerSpec(
-                node_id=candidate.stable_id,
-                hostname=candidate.hostname,
-                app_version=candidate.app_version,
-                compatible=candidate.compatible,
-                connectable=candidate.connectable,
-                port=candidate.port,
-                identity_fingerprint=candidate.identity_fingerprint,
-                pairing_state=registry.pairing_state(NodeId(candidate.stable_id)).value,
-            )
-            for candidate in registry.discovered_candidates()
-        ]
+        return node_specs.discovered_peer_specs(registry)
 
     def _nodes_trusted_specs(self) -> list[ui_nodes.TrustedNodeSpec]:
         registry = self.__dict__.get("_node_registry")
         if registry is None:
             return []
-        manual: set[str] = getattr(self, "_manual_host_ids", set())
-        selectable = {descriptor.id for descriptor in registry.selectable_descriptors()}
-        specs: list[ui_nodes.TrustedNodeSpec] = []
-        for context in registry.contexts():
-            descriptor = context.descriptor
-            if descriptor.is_local:
-                continue
-            if not is_trusted_descriptor(descriptor):
-                continue
-            if descriptor.id.value in manual:
-                continue
-            record = self._cluster_state.record(descriptor.id.value)
-            specs.append(
-                ui_nodes.TrustedNodeSpec(
-                    node_id=descriptor.id.value,
-                    display_name=descriptor.display_name,
-                    hostname=descriptor.hostname,
-                    color=descriptor.color,
-                    status=descriptor.status.value,
-                    host=record.host if record is not None else descriptor.hostname,
-                    port=record.port if record is not None else None,
-                    selectable=descriptor.id in selectable,
-                    openable=record is not None and record.port is not None,
-                    identity_fingerprint=descriptor.identity_fingerprint,
-                    identity_status=descriptor.identity_status.value,
-                    permissions=tuple(
-                        sorted(
-                            permission.value for permission in descriptor.permissions
-                        )
-                    ),
-                    pairing_state=descriptor.pairing_state.value,
-                )
-            )
-        return specs
+        return node_specs.trusted_node_specs(
+            registry, self._cluster_state, getattr(self, "_manual_host_ids", set())
+        )
 
     def _nodes_manual_specs(self) -> list[ui_nodes.TrustedNodeSpec]:
         registry = self.__dict__.get("_node_registry")
         if registry is None:
             return []
-        specs: list[ui_nodes.TrustedNodeSpec] = []
-        for node_id in tuple(getattr(self, "_manual_host_ids", set())):
-            try:
-                context = registry.context(NodeId(node_id))
-            except KeyError:
-                continue
-            descriptor = context.descriptor
-            record = self._cluster_state.record(node_id)
-            specs.append(
-                ui_nodes.TrustedNodeSpec(
-                    node_id=node_id,
-                    display_name=descriptor.display_name,
-                    hostname=descriptor.hostname,
-                    color=descriptor.color,
-                    status=descriptor.status.value,
-                    host=record.host if record is not None else descriptor.hostname,
-                    port=record.port if record is not None else None,
-                    selectable=False,
-                    openable=record is not None and record.port is not None,
-                    is_manual=True,
-                    identity_fingerprint=descriptor.identity_fingerprint,
-                    identity_status=descriptor.identity_status.value,
-                    permissions=tuple(
-                        sorted(
-                            permission.value for permission in descriptor.permissions
-                        )
-                    ),
-                    pairing_state=descriptor.pairing_state.value,
-                )
-            )
-        return specs
+        return node_specs.manual_node_specs(
+            registry, self._cluster_state, getattr(self, "_manual_host_ids", set())
+        )
 
     def _refresh_nodes_page(self) -> None:
-        page = getattr(self, "nodes_page", None)
-        if page is None:
-            return
-        page.set_discovery_enabled(self._cluster_state.discovery_enabled)
-        page.refresh_discovered(self._nodes_peer_specs())
-        page.refresh_trusted(self._nodes_trusted_specs())
-        page.refresh_manual(self._nodes_manual_specs())
+        ui_window_pages.refresh_nodes(self)
 
     def _nodes_status(self, message: str) -> None:
-        page = getattr(self, "nodes_page", None)
-        if page is not None:
-            self._request_render(
-                ui_render.RenderIntent(
-                    target="nodes-status",
-                    payload=message,
-                    payload_set=True,
-                    priority=1,
-                ),
-                lambda intent: page.show_status(cast(str, intent.payload)),
-            )
+        ui_window_pages.set_nodes_status(self, message, error=False)
 
     def _nodes_error(self, message: str) -> None:
-        page = getattr(self, "nodes_page", None)
-        if page is not None:
-            self._request_render(
-                ui_render.RenderIntent(
-                    target="nodes-status",
-                    payload=message,
-                    payload_set=True,
-                    priority=1,
-                ),
-                lambda intent: page.show_error(cast(str, intent.payload)),
-            )
+        ui_window_pages.set_nodes_status(self, message, error=True)
 
     def _show_cluster_page(self) -> None:
         self._refresh_cluster_page()
-        self._page_router.show(CLUSTER_PAGE)
-        self._sync_render_visibility(CLUSTER_PAGE)
-        page = getattr(self, "cluster_page", None)
-        if page is not None:
-            page.focus_back()
+        ui_window_pages.show_page(self, CLUSTER_PAGE, "cluster_page")
 
     def _build_cluster_page(self, parent: Any) -> Any:
-        self.cluster_frame = ttk.Frame(
-            parent,
-            padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
-            style="App.TFrame",
-        )
-        self.cluster_page = ui_cluster.ClusterPage(
-            self.cluster_frame,
-            callbacks=ui_cluster.ClusterPageCallbacks(
-                on_back=self._show_dashboard_page,
-                on_open_node=self._open_cluster_node,
-            ),
-            nodes=self._cluster_specs(),
-            button_coordinator=self._button_coordinator,
-        )
-        return self.cluster_frame
+        self.ttk = ttk
+        return ui_window_pages.build_cluster(self, parent)
 
     def _cluster_specs(self) -> list[ui_cluster.ClusterNodeSpec]:
         registry = self.__dict__.get("_node_registry")
         if registry is None:
             return []
-        selectable = {descriptor.id for descriptor in registry.selectable_descriptors()}
-        specs: list[ui_cluster.ClusterNodeSpec] = []
-        for context in registry.contexts():
-            descriptor = context.descriptor
-            last_refresh = None
-            snapshot = context.snapshot
-            if snapshot is not None:
-                last_refresh = snapshot.scanned_at.strftime("%H:%M:%S")
-            specs.append(
-                ui_cluster.ClusterNodeSpec(
-                    node_id=descriptor.id.value,
-                    display_name=descriptor.display_name,
-                    hostname=descriptor.hostname,
-                    color=descriptor.color,
-                    trust=descriptor.trust.value,
-                    status=descriptor.status.value,
-                    capabilities=tuple(
-                        sorted(
-                            capability.value for capability in descriptor.capabilities
-                        )
-                    ),
-                    is_local=descriptor.is_local,
-                    selectable=descriptor.id in selectable,
-                    last_refresh=last_refresh,
-                )
-            )
-        for candidate in registry.discovered_candidates():
-            specs.append(
-                ui_cluster.ClusterNodeSpec(
-                    node_id=candidate.stable_id,
-                    display_name=candidate.hostname,
-                    hostname=candidate.hostname,
-                    color=None,
-                    trust="untrusted",
-                    status="online" if candidate.last_seen else "unknown",
-                    capabilities=(),
-                    is_local=False,
-                    selectable=False,
-                    pairing_state=registry.pairing_state(
-                        NodeId(candidate.stable_id)
-                    ).value,
-                )
-            )
-        return specs
+        return node_specs.cluster_node_specs(registry)
 
     def _refresh_cluster_page(self) -> None:
-        page = getattr(self, "cluster_page", None)
-        if page is not None:
-            page.refresh_nodes(self._cluster_specs())
+        ui_window_pages.refresh_cluster(self)
 
     def _save_cluster_state(self, state: ClusterState) -> bool:
         try:
@@ -1052,292 +635,54 @@ class AppWindow:
         except ClusterSaveError as error:
             LOGGER.warning("Failed to save cluster settings: %s", error)
             return False
+        self._cluster_state = state
+        self._sync_peer_listener_grants()
         return True
 
-    def _apply_discovery_enabled(self, enabled: bool) -> None:
-        candidate = ClusterState(
-            discovery_enabled=enabled,
-            trusted_nodes=self._cluster_state.trusted_nodes,
-            local_node_id=self._cluster_state.local_node_id,
-            local_identity_persisted=self._cluster_state.local_identity_persisted,
-        )
-        if not self._save_cluster_state(candidate):
-            page = getattr(self, "nodes_page", None)
-            if page is not None:
-                page.set_discovery_enabled(self._cluster_state.discovery_enabled)
-                page.show_error("Cluster settings could not be saved")
+    def _sync_peer_listener_grants(self) -> None:
+        server = self.__dict__.get("_peer_server")
+        if server is None:
+            if self._cluster_state.peer_grants:
+                self._start_peer_listener()
             return
-        self._cluster_state = candidate
-        if enabled:
-            self._start_discovery()
-        else:
-            self._stop_discovery()
-        self._nodes_status(
-            f"Discovery {'enabled' if enabled else 'disabled'} and saved"
-        )
+        grants = {
+            NodeId(grant.caller_node_id): PeerGrant(
+                caller_node_id=NodeId(grant.caller_node_id),
+                secret=grant.secret,
+                permissions=grant.permissions,
+            )
+            for grant in self._cluster_state.peer_grants
+        }
+        if not grants:
+            server.stop()
+            self._peer_server = None
+            return
+        server.update_grants(grants)
+
+    def _apply_discovery_enabled(self, enabled: bool) -> None:
+        ui_node_actions.apply_discovery_enabled(self, enabled)
 
     def _pair_discovered_node(self, node_id: str) -> None:
-        registry = self.__dict__.get("_node_registry")
-        if registry is None:
-            return
-        candidates = {
-            candidate.stable_id: candidate
-            for candidate in registry.discovered_candidates()
-        }
-        candidate = candidates.get(node_id)
-        if candidate is None:
-            self._nodes_error("That peer is no longer visible on the network")
-            return
-        if not candidate.identity_fingerprint:
-            self._nodes_error("That peer did not provide an identity fingerprint")
-            return
-        try:
-            registry.begin_pairing(NodeId(node_id))
-        except (KeyError, ValueError) as error:
-            self._nodes_error(str(error))
-            return
-        if not messagebox.askyesno(
-            "Confirm peer fingerprint",
-            (
-                f"Pair {candidate.hostname}?\n\n"
-                f"Stable node ID: {candidate.stable_id}\n"
-                f"Identity fingerprint:\n{candidate.identity_fingerprint}\n\n"
-                "Confirm this fingerprint through a trusted channel before pairing."
-            ),
-            parent=self.master,
-        ):
-            registry.fail_pairing(NodeId(node_id))
-            self._refresh_nodes_page()
-            self._nodes_status(f"Pairing cancelled for {candidate.hostname}")
-            return
-        node = NodeId(node_id)
-        previous_context = None
-        previous_selected = False
-        try:
-            previous_context = registry.context(node)
-            previous_selected = registry.selected_id() == node
-        except KeyError:
-            pass
-        try:
-            descriptor = registry.promote_to_trusted(
-                node, capabilities=READ_CAPABILITIES
-            )
-        except (KeyError, ValueError) as error:
-            registry.fail_pairing(node)
-            self._refresh_nodes_page()
-            self._nodes_error(str(error))
-            return
-        descriptor = replace(descriptor, permissions=READ_PERMISSIONS)
-        registry.context(node).descriptor = descriptor
-        host = candidate.addresses[0] if candidate.addresses else candidate.hostname
-        record = trusted_node_record(
-            node_id=node_id,
-            display_name=descriptor.display_name,
-            hostname=descriptor.hostname,
-            host=host,
-            platform=descriptor.platform,
-            port=candidate.port,
-            capabilities=READ_CAPABILITIES,
-            permissions=READ_PERMISSIONS,
-            identity_fingerprint=candidate.identity_fingerprint,
+        ui_node_actions.pair_discovered_node(
+            self, node_id, messagebox_module=messagebox
         )
-        existing_record = self._cluster_state.record(node_id)
-        trusted_nodes = tuple(
-            record if item.node_id == node_id else item
-            for item in self._cluster_state.trusted_nodes
-        )
-        if existing_record is None:
-            trusted_nodes = (*trusted_nodes, record)
-        state = ClusterState(
-            discovery_enabled=self._cluster_state.discovery_enabled,
-            trusted_nodes=trusted_nodes,
-            local_node_id=self._cluster_state.local_node_id,
-            local_identity_persisted=self._cluster_state.local_identity_persisted,
-        )
-        if not self._save_cluster_state(state):
-            registry.revoke_trusted(node)
-            if previous_context is not None:
-                registry.register_context(previous_context)
-                registry.update_discovered(candidate)
-                if previous_selected:
-                    registry.select(node)
-            else:
-                registry.update_discovered(candidate)
-                registry.fail_pairing(node)
-            self._nodes_error("Cluster settings could not be saved")
-            return
-        self._cluster_state = state
-        self._refresh_nodes_page()
-        self._refresh_cluster_page()
-        self._rebuild_node_selector()
-        self._nodes_status(f"Paired {descriptor.display_name} (read-only)")
 
     def _reject_discovered_node(self, node_id: str) -> None:
-        registry = self.__dict__.get("_node_registry")
-        if registry is None:
-            return
-        registry.reject_discovered(NodeId(node_id))
-        ui_discovery_refresh.refresh_discovery_views(
-            page=getattr(self, "nodes_page", None),
-            peer_specs=self._nodes_peer_specs(),
-            trusted_specs=(),
-            refresh_trusted=False,
-            refresh_cluster_page=self._refresh_cluster_page,
-            status_label=getattr(self, "discovery_status_label", None),
-            discovered_candidates=registry.discovered_candidates(),
-        )
-        self._nodes_status(f"Rejected {node_id}")
+        ui_node_actions.reject_discovered_node(self, node_id)
 
     def _rename_node(self, node_id: str) -> None:
-        registry = self.__dict__.get("_node_registry")
-        if registry is None:
-            return
-        current = registry.context(NodeId(node_id)).descriptor.display_name
-        name = simpledialog.askstring(
-            "Rename Node",
-            "Display name:",
-            initialvalue=current,
-            parent=self.master,
-        )
-        if not name:
-            return
-        name = name.strip()
-        if not name:
-            return
-        try:
-            descriptor = registry.set_display_name(NodeId(node_id), name)
-        except KeyError as error:
-            self._nodes_error(str(error))
-            return
-        records = [
-            replace(record, display_name=name) if record.node_id == node_id else record
-            for record in self._cluster_state.trusted_nodes
-        ]
-        state = ClusterState(
-            discovery_enabled=self._cluster_state.discovery_enabled,
-            trusted_nodes=tuple(records),
-            local_node_id=self._cluster_state.local_node_id,
-            local_identity_persisted=self._cluster_state.local_identity_persisted,
-        )
-        if not self._save_cluster_state(state):
-            registry.set_display_name(NodeId(node_id), current)
-            self._nodes_error("Cluster settings could not be saved")
-            return
-        self._cluster_state = state
-        self._refresh_nodes_page()
-        self._refresh_cluster_page()
-        self._rebuild_node_selector()
-        self._nodes_status(f"Renamed node to {descriptor.display_name}")
+        ui_node_actions.rename_node(self, node_id, simpledialog_module=simpledialog)
 
     def _set_node_permissions(
         self, node_id: str, raw_permissions: frozenset[str]
     ) -> None:
-        registry = self.__dict__.get("_node_registry")
-        if registry is None:
-            return
-        try:
-            context = registry.context(NodeId(node_id))
-        except KeyError:
-            return
-        allowed = {permission.value for permission in NodePermission}
-        previous = context.descriptor.permissions
-        process_permissions = {
-            NodePermission.PROCESS_REVIEW,
-            NodePermission.PROCESS_TERMINATION,
-            NodePermission.PROCESS_FORCE_TERMINATION,
-        }
-        permissions = frozenset(
-            permission
-            for permission in previous
-            if permission not in process_permissions
-        ) | frozenset(
-            NodePermission(value)
-            for value in raw_permissions
-            if value in allowed and NodePermission(value) in process_permissions
-        )
-        context.descriptor = replace(context.descriptor, permissions=permissions)
-        records = [
-            replace(record, permissions=permissions)
-            if record.node_id == node_id
-            else record
-            for record in self._cluster_state.trusted_nodes
-        ]
-        state = ClusterState(
-            discovery_enabled=self._cluster_state.discovery_enabled,
-            trusted_nodes=tuple(records),
-            local_node_id=self._cluster_state.local_node_id,
-            local_identity_persisted=self._cluster_state.local_identity_persisted,
-        )
-        if not self._save_cluster_state(state):
-            context.descriptor = replace(context.descriptor, permissions=previous)
-            self._nodes_error("Cluster settings could not be saved")
-            return
-        self._cluster_state = state
-        self._refresh_nodes_page()
+        ui_node_actions.set_node_permissions(self, node_id, raw_permissions)
 
     def _set_node_color(self, node_id: str, color: str) -> None:
-        registry = self.__dict__.get("_node_registry")
-        if registry is None:
-            return
-        try:
-            context = registry.context(NodeId(node_id))
-            previous = context.descriptor.color
-            registry.set_color(NodeId(node_id), color)
-        except KeyError as error:
-            self._nodes_error(str(error))
-            return
-        records = [
-            replace(record, color=color) if record.node_id == node_id else record
-            for record in self._cluster_state.trusted_nodes
-        ]
-        state = ClusterState(
-            discovery_enabled=self._cluster_state.discovery_enabled,
-            trusted_nodes=tuple(records),
-            local_node_id=self._cluster_state.local_node_id,
-            local_identity_persisted=self._cluster_state.local_identity_persisted,
-        )
-        if not self._save_cluster_state(state):
-            registry.set_color(NodeId(node_id), previous)
-            self._nodes_error("Cluster settings could not be saved")
-            return
-        self._cluster_state = state
-        self._refresh_nodes_page()
-        self._refresh_cluster_page()
+        ui_node_actions.set_node_color(self, node_id, color)
 
     def _revoke_trusted_node(self, node_id: str) -> None:
-        registry = self.__dict__.get("_node_registry")
-        if registry is None:
-            return
-        node = NodeId(node_id)
-        try:
-            registry.revoke_trusted(node)
-        except (KeyError, ValueError) as error:
-            self._nodes_error(str(error))
-            return
-        state = ClusterState(
-            discovery_enabled=self._cluster_state.discovery_enabled,
-            trusted_nodes=tuple(
-                record
-                for record in self._cluster_state.trusted_nodes
-                if record.node_id != node_id
-            ),
-            local_node_id=self._cluster_state.local_node_id,
-            local_identity_persisted=self._cluster_state.local_identity_persisted,
-        )
-        if not self._save_cluster_state(state):
-            self._nodes_error("Cluster settings could not be saved")
-            return
-        self._cluster_state = state
-        getattr(self, "_manual_host_ids", set()).discard(node_id)
-        self._refresh_nodes_page()
-        self._refresh_cluster_page()
-        self._rebuild_node_selector()
-        if self.__dict__.get("_selected_node_id") != registry.selected_id():
-            self.__dict__["_selected_node_id"] = registry.selected_id()
-            context = registry.selected_context()
-            self._sync_selected_context_mirrors(context)
-            self._render_selected_node(context)
-        self._nodes_status("Node removed from trusted machines")
+        ui_node_actions.revoke_trusted_node(self, node_id)
 
     def _add_manual_host(
         self,
@@ -1345,226 +690,32 @@ class AppWindow:
         host: str,
         port: int | None,
     ) -> None:
-        registry = self.__dict__.get("_node_registry")
-        if registry is None:
-            return
-        if port is not None and (
-            not isinstance(port, int)
-            or isinstance(port, bool)
-            or not 0 <= port <= 65535
-        ):
-            self._nodes_error("Port must be between 0 and 65535")
-            return
-        node_id = f"manual-{host}:{port}" if port is not None else f"manual-{host}"
-        node = NodeId(node_id)
-        try:
-            registry.context(node)
-            self._nodes_error("That manual host is already configured")
-            return
-        except KeyError:
-            pass
-        descriptor = NodeDescriptor(
-            id=node,
-            display_name=display_name,
-            hostname=host,
-            is_local=False,
-            trust=NodeTrustState.TRUSTED,
-            status=NodeStatus.UNKNOWN,
-            capabilities=READ_CAPABILITIES,
-            platform=None,
-            color=None,
-            permissions=READ_PERMISSIONS,
-        )
-        context = NodeContext(
-            descriptor=descriptor,
-            provider=None,
-            process_manager=None,
-            file_manager=None,
-            scheduler=None,
-            coordinator=None,
-        )
-        record = trusted_node_record(
-            node_id=node_id,
-            display_name=display_name,
-            hostname=host,
-            host=host,
-            port=port,
-            capabilities=READ_CAPABILITIES,
-            permissions=READ_PERMISSIONS,
-        )
-        state = ClusterState(
-            discovery_enabled=self._cluster_state.discovery_enabled,
-            trusted_nodes=self._cluster_state.trusted_nodes + (record,),
-            local_node_id=self._cluster_state.local_node_id,
-            local_identity_persisted=self._cluster_state.local_identity_persisted,
-        )
-        try:
-            registry.register_context(context)
-        except ValueError as error:
-            self._nodes_error(str(error))
-            return
-        if not self._save_cluster_state(state):
-            registry.revoke_trusted(node)
-            self._nodes_error("Cluster settings could not be saved")
-            return
-        self._cluster_state = state
-        manual_ids = getattr(self, "_manual_host_ids", None)
-        if manual_ids is None:
-            manual_ids = set()
-            self._manual_host_ids = manual_ids
-        manual_ids.add(node_id)
-        self._refresh_nodes_page()
-        self._refresh_cluster_page()
-        self._nodes_status(f"Configured manual host {display_name}")
+        ui_node_actions.add_manual_host(self, display_name, host, port)
 
     def _remove_manual_host(self, node_id: str) -> None:
-        self._revoke_trusted_node(node_id)
+        ui_node_actions.remove_manual_host(self, node_id)
 
     def _test_connection(self, node_id: str) -> None:
-        record = self._cluster_state.record(node_id)
-        if record is None:
-            self._nodes_error("No connection details saved for that node")
-            return
-        port = record.port
-        if port is None:
-            self._nodes_error("That node has no authenticated remote port")
-            return
-        node = NodeId(node_id)
-
-        def task() -> dict[str, Any]:
-            provider = AuthenticatedNodeProvider(
-                node_id=node,
-                secret=record.secret,
-                transport=SocketRemoteTransport(record.host, port),
-            )
-            return provider.hello()
-
-        def on_success(result: dict[str, Any]) -> None:
-            if result.get("node_id") != node_id:
-                messagebox.showerror(
-                    "Connection Failed",
-                    f"{record.display_name} answered as a different node.",
-                    parent=self.master,
-                )
-                return
-            if (
-                record.identity_fingerprint is not None
-                and result.get("identity_fingerprint") != record.identity_fingerprint
-            ):
-                messagebox.showerror(
-                    "Connection Failed",
-                    f"{record.display_name} presented a changed identity.",
-                    parent=self.master,
-                )
-                return
-            version = result.get("app_version") or "peer"
-            messagebox.showinfo(
-                "Connection OK",
-                f"{record.display_name} answered an authenticated hello ({version}).",
-                parent=self.master,
-            )
-
-        def on_error(message: str) -> None:
-            messagebox.showerror(
-                "Connection Failed",
-                f"Could not reach {record.display_name}: {message}",
-                parent=self.master,
-            )
-
-        run_in_thread(self.master, task, on_success, on_error)
+        ui_node_actions.test_connection(
+            self,
+            node_id,
+            messagebox_module=messagebox,
+            provider_cls=AuthenticatedNodeProvider,
+            transport_cls=SocketRemoteTransport,
+            run_in_thread_fn=run_in_thread,
+        )
 
     def _open_cluster_node(self, node_id: str) -> None:
-        registry = self.__dict__.get("_node_registry")
-        if registry is None:
-            return
-        try:
-            registry.context(NodeId(node_id))
-        except KeyError:
-            return
-        node = NodeId(node_id)
-        context = registry.context(node)
-        if context.provider is None:
-            self._activate_remote_node(node)
-            return
-        self._switch_selected_node(node)
-        self._show_dashboard_page()
+        ui_node_actions.open_cluster_node(self, node_id)
 
     def _activate_remote_node(self, node_id: NodeId) -> None:
-        """Authenticate and attach one remote context without blocking Tk."""
-
-        registry = self.__dict__.get("_node_registry")
-        state = self.__dict__.get("_cluster_state")
-        if registry is None or state is None:
-            return
-        record = state.record(node_id.value)
-        if record is None or record.port is None:
-            self._nodes_error("That trusted node has no authenticated remote port")
-            return
-        key = node_operation_key(node_id, "connect")
-
-        def task(
-            _cancel_event: threading.Event,
-            _progress: Callable[[str], None],
-        ) -> tuple[AuthenticatedNodeProvider, frozenset[NodeCapability]]:
-            provider = AuthenticatedNodeProvider(
-                node_id=node_id,
-                secret=record.secret,
-                caller_node_id=NodeId(state.local_node_id),
-                transport=SocketRemoteTransport(record.host, record.port),
-            )
-            result = provider.hello()
-            if result.get("node_id") != node_id.value:
-                raise RuntimeError("authenticated peer returned the wrong node ID")
-            expected_fingerprint = record.identity_fingerprint
-            actual_fingerprint = result.get("identity_fingerprint")
-            if not isinstance(actual_fingerprint, str) or not actual_fingerprint:
-                raise RuntimeError(
-                    "authenticated peer returned no identity fingerprint"
-                )
-            if expected_fingerprint is not None and actual_fingerprint != (
-                expected_fingerprint
-            ):
-                raise RuntimeError("authenticated peer identity fingerprint changed")
-            capabilities = frozenset(
-                NodeCapability(raw)
-                for raw in result.get("capabilities", [])
-                if isinstance(raw, str)
-                and raw in {capability.value for capability in NodeCapability}
-            )
-            return provider, capabilities
-
-        def on_result(
-            _key: str,
-            result: tuple[AuthenticatedNodeProvider, frozenset[NodeCapability]],
-        ) -> None:
-            context = registry.context(node_id)
-            provider, capabilities = result
-            context.descriptor = replace(
-                context.descriptor,
-                capabilities=capabilities,
-                status=NodeStatus.ONLINE,
-                identity_status=NodeIdentityStatus.VERIFIED,
-                permissions=record.permissions,
-            )
-            context.provider = provider
-            context.process_manager = RemoteProcessActionBackend(provider)
-            context.scheduler = ComponentRefreshScheduler()
-            context.coordinator = self._coordinator
-            self._refresh_nodes_page()
-            self._rebuild_node_selector()
-            self._switch_selected_node(node_id)
-            self._show_dashboard_page()
-
-        def on_error(_key: str, message: str) -> None:
-            self._nodes_error(
-                f"Could not authenticate {record.display_name}: {message}"
-            )
-
-        self._coordinator.run(
-            key,
-            task,
-            on_result=on_result,
-            on_error=on_error,
+        ui_node_actions.activate_remote_node(
+            self,
+            node_id,
+            provider_cls=AuthenticatedNodeProvider,
+            transport_cls=SocketRemoteTransport,
+            backend_cls=RemoteProcessActionBackend,
+            scheduler_cls=ComponentRefreshScheduler,
         )
 
     def _rebuild_node_selector(self) -> None:
@@ -1732,6 +883,7 @@ class AppWindow:
         self.process_manager = context.process_manager
         self.file_manager = context.file_manager
         self.snapshot = context.snapshot
+        self.__dict__["_node_snapshot"] = context.node_snapshot
         self._capabilities = context.capabilities
         self.__dict__["_capability_counts"] = context.capability_counts
         self.__dict__["_failed_card_counts"] = context.failed_card_counts
@@ -1783,10 +935,54 @@ class AppWindow:
                 discovery_factory=NetworkDiscovery,
                 app_version=__version__,
                 is_closing=lambda: self._is_closing,
+                get_listener_endpoint=self._listener_endpoint,
             )
             session.timer_id = self.__dict__.get("_discovery_tick_id")
             self._discovery_session = session
         return session
+
+    def _listener_endpoint(self) -> tuple[bool, int | None]:
+        # The current listener is deliberately loopback-only. Do not advertise
+        # a port that another machine cannot reach.
+        return False, None
+
+    def _start_peer_listener(self) -> None:
+        """Start the target listener only when target-owned grants exist."""
+
+        if self.__dict__.get("_peer_server") is not None:
+            return
+        grants = {
+            NodeId(grant.caller_node_id): PeerGrant(
+                caller_node_id=NodeId(grant.caller_node_id),
+                secret=grant.secret,
+                permissions=grant.permissions,
+            )
+            for grant in self._cluster_state.peer_grants
+        }
+        if not grants:
+            return
+        descriptor = self._node_registry.selected_context().descriptor
+        service = RemoteService(
+            node_id=descriptor.id,
+            display_name=descriptor.display_name,
+            hostname=descriptor.hostname,
+            platform=descriptor.platform,
+            status=descriptor.status,
+            capabilities=descriptor.capabilities,
+            provider=self.analyzer,
+            process_manager=self.process_manager,
+            secret=generate_node_secret(),
+            app_version=__version__,
+            grants=grants,
+            identity_fingerprint=descriptor.identity_fingerprint,
+        )
+        server = RemoteSocketServer(service, host="127.0.0.1")
+        try:
+            server.start()
+        except OSError as error:
+            LOGGER.warning("Remote peer listener unavailable: %s", error)
+            return
+        self._peer_server = server
 
     def _start_discovery(self) -> None:
         """Advertise this node and browse for peers via the shared coordinator.
@@ -1970,6 +1166,7 @@ class AppWindow:
             provider = AuthenticatedNodeProvider(
                 node_id=descriptor.id,
                 secret=record.secret,
+                caller_node_id=NodeId(self._cluster_state.local_node_id),
                 transport=SocketRemoteTransport(address, port),
             )
             hello = provider.hello()
@@ -2029,7 +1226,6 @@ class AppWindow:
         if not self._save_cluster_state(updated_state):
             self._nodes_error("Cluster settings could not be saved")
             return False
-        self._cluster_state = updated_state
         if needs_identity_hydration or needs_identity_recovery:
             registry.confirm_identity(descriptor.id, candidate.identity_fingerprint)
         return True
@@ -2097,7 +1293,7 @@ class AppWindow:
         shared scan state so they can never drift apart.
         """
 
-        targets: list[tuple[Any, Any]] = [(self.status_label, self.progress_bar)]
+        targets: list[tuple[Any, Any | None]] = [(self.status_label, None)]
         settings_label = getattr(self, "preferences_status_label", None)
         settings_bar = getattr(self, "preferences_progress_bar", None)
         if settings_label is not None and settings_bar is not None:
@@ -2132,7 +1328,8 @@ class AppWindow:
             self._completion_transition().cancel()
 
             def apply_scanning_state(label: Any, bar: Any) -> None:
-                scan_status.apply_reset(bar)
+                if bar is not None:
+                    scan_status.apply_reset(bar)
                 scan_status.apply_scanning(label)
 
             self._for_each_presentation_target(apply_scanning_state)
@@ -2140,7 +1337,8 @@ class AppWindow:
 
             def apply_ready_state(label: Any, bar: Any) -> None:
                 scan_status.apply_ready(label)
-                bar.stop()
+                if bar is not None:
+                    bar.stop()
 
             self._for_each_presentation_target(apply_ready_state)
 
@@ -2173,12 +1371,20 @@ class AppWindow:
         count = self.__dict__.get("_scan_progress_count", 0) + 1
         self.__dict__["_scan_progress_count"] = count
         self._for_each_presentation_target(
-            lambda label, bar: scan_status.apply_step(
-                label,
-                bar,
-                message,
-                count,
-                self._progress_total(),
+            lambda label, bar: (
+                scan_status.apply_step(
+                    label,
+                    bar,
+                    message,
+                    count,
+                    self._progress_total(),
+                )
+                if bar is not None
+                else label.config(
+                    text=scan_status.progress_text(
+                        message, count, self._progress_total()
+                    )
+                )
             )
         )
 
@@ -2249,6 +1455,8 @@ class AppWindow:
                 )
 
         def start_worker(generation: int, cancel_event: threading.Event) -> None:
+            resolved_node_snapshot: NodeSnapshot | None = None
+
             def report_progress(message: str) -> None:
                 self._submit_ui(lambda: apply_progress(message))
 
@@ -2269,13 +1477,50 @@ class AppWindow:
                 )
 
             def dashboard_task() -> DashboardSnapshot:
-                return call_legacy_compatible(
-                    lambda: source_provider.dashboard_snapshot(
-                        cancel_event=cancel_event,
-                        progress_callback=report_progress,
-                    ),
-                    lambda: source_provider.dashboard_snapshot(),
+                provider_snapshot = getattr(
+                    type(source_provider), "node_snapshot", None
                 )
+                if callable(provider_snapshot):
+                    provider_snapshot = cast(Any, source_provider).node_snapshot
+                    result = call_legacy_compatible(
+                        lambda: provider_snapshot(
+                            cancel_event=cancel_event,
+                            progress_callback=report_progress,
+                        ),
+                        lambda: provider_snapshot(),
+                    )
+                else:
+                    dashboard = call_legacy_compatible(
+                        lambda: source_provider.dashboard_snapshot(
+                            cancel_event=cancel_event,
+                            progress_callback=report_progress,
+                        ),
+                        lambda: source_provider.dashboard_snapshot(),
+                    )
+                    descriptor = (
+                        source_context.descriptor
+                        if source_context is not None
+                        else local_node_descriptor()
+                    )
+                    result = NodeSnapshot(
+                        node_id=source_node_id or descriptor.id,
+                        display_name=descriptor.display_name,
+                        hostname=descriptor.hostname,
+                        platform=descriptor.platform,
+                        status=descriptor.status,
+                        capabilities=descriptor.capabilities,
+                        scanned_at=dashboard.scanned_at,
+                        dashboard=dashboard,
+                    )
+                if not isinstance(result, NodeSnapshot):
+                    raise TypeError("provider returned an invalid node snapshot")
+                if source_node_id is not None and result.node_id != source_node_id:
+                    raise RuntimeError("provider returned the wrong node snapshot")
+                if result.dashboard is None:
+                    raise RuntimeError("provider returned no dashboard data")
+                nonlocal resolved_node_snapshot
+                resolved_node_snapshot = result
+                return result.dashboard
 
             def queue_snapshot(snapshot: DashboardSnapshot) -> None:
                 # Lifecycle completion cannot wait for a hidden page to render.
@@ -2290,13 +1535,13 @@ class AppWindow:
                         node_id=source_node_id,
                         components=frozenset({"snapshot"}),
                         layout_changed=True,
-                        payload=snapshot,
+                        payload=resolved_node_snapshot,
                         payload_set=True,
                         priority=3,
                     ),
-                    lambda intent: self._show_snapshot_if_current(
+                    lambda intent: self._show_node_snapshot_if_current(
                         generation,
-                        cast(DashboardSnapshot, intent.payload),
+                        cast(NodeSnapshot, intent.payload),
                         node_id=source_node_id,
                     ),
                 )
@@ -2418,20 +1663,38 @@ class AppWindow:
         generation: int,
         snapshot: DashboardSnapshot,
         *,
+        node_snapshot: NodeSnapshot | None = None,
         node_id: NodeId | None = None,
     ) -> None:
         rerun_requested = self._resolution_for_generation(generation)
         if rerun_requested is None:
             return
         if node_id is None or node_id == self.__dict__.get("_selected_node_id"):
-            self._show_snapshot(snapshot)
+            self._show_snapshot(snapshot, node_snapshot=node_snapshot)
         self._schedule_rerun_if_requested(rerun_requested)
+
+    def _show_node_snapshot_if_current(
+        self,
+        generation: int,
+        node_snapshot: NodeSnapshot,
+        *,
+        node_id: NodeId | None = None,
+    ) -> None:
+        if node_snapshot.dashboard is None:
+            return
+        self._show_snapshot_if_current(
+            generation,
+            node_snapshot.dashboard,
+            node_snapshot=node_snapshot,
+            node_id=node_id,
+        )
 
     def _show_snapshot_if_current(
         self,
         generation: int,
         snapshot: DashboardSnapshot,
         *,
+        node_snapshot: NodeSnapshot | None = None,
         node_id: NodeId | None = None,
     ) -> None:
         """Commit a resolved snapshot only if its scan and node remain current."""
@@ -2440,7 +1703,7 @@ class AppWindow:
             return
         if node_id is not None and node_id != self.__dict__.get("_selected_node_id"):
             return
-        self._show_snapshot(snapshot)
+        self._show_snapshot(snapshot, node_snapshot=node_snapshot)
 
     def _show_error_for_generation(
         self,
@@ -2464,7 +1727,12 @@ class AppWindow:
         self._show_error(message)
         self._schedule_rerun_if_requested(rerun_requested)
 
-    def _show_snapshot(self, snapshot: DashboardSnapshot) -> None:
+    def _show_snapshot(
+        self,
+        snapshot: DashboardSnapshot,
+        *,
+        node_snapshot: NodeSnapshot | None = None,
+    ) -> None:
         if self._is_closing:
             return
 
@@ -2473,6 +1741,8 @@ class AppWindow:
         context = self._selected_context()
         if context is not None:
             context.snapshot = merged
+            if node_snapshot is not None:
+                context.node_snapshot = node_snapshot
             context.full_snapshot_applied_at = time.monotonic()
         coordinator = self.__dict__.get("_coordinator")
         if coordinator is not None:
@@ -2491,10 +1761,13 @@ class AppWindow:
         self.refreshed_label.config(text=f"Last refreshed: {scanned_time}")
         self._set_busy(False)
         self._for_each_presentation_target(
-            lambda label, bar: scan_status.apply_complete(
-                label,
-                bar,
-                self._progress_total(),
+            lambda label, bar: (
+                scan_status.apply_complete(label, bar, self._progress_total())
+                if bar is not None
+                else label.config(
+                    text=scan_status.COMPLETE_TEXT,
+                    style=scan_status.READY_STYLE,
+                )
             )
         )
         self._completion_transition().start(
@@ -3195,6 +2468,10 @@ class AppWindow:
         reach a dying UI.
         """
 
+        peer_server = self.__dict__.get("_peer_server")
+        self.__dict__["_peer_server"] = None
+        if peer_server is not None:
+            peer_server.stop()
         self._stop_discovery()
         self._dashboard_scan_lifecycle().cancel()
         self._sync_dashboard_scan_state()
@@ -3262,7 +2539,9 @@ class AppWindow:
 
         self._completion_transition().cancel()
         self._for_each_presentation_target(
-            lambda _label, bar: scan_status.apply_reset(bar)
+            lambda _label, bar: (
+                scan_status.apply_reset(bar) if bar is not None else None
+            )
         )
 
     def run(self) -> None:

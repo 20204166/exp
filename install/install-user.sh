@@ -33,8 +33,6 @@ for arg in "$@"; do
   esac
 done
 
-reinstall_flag=(--force-reinstall)
-
 if [ -n "${SA_SYSTEM_PYTHON:-}" ]; then py="$SA_SYSTEM_PYTHON"
 elif found="$(first_system_python_ge_310)"; then py="$found"
 else py=/usr/bin/python3; fi
@@ -78,7 +76,10 @@ if [ "$mode" = "system" ]; then
   command -v sudo >/dev/null 2>&1 || { echo "sudo is required for --system" >&2; exit 1; }
   echo "Installing machine-wide (system Python, no venv)..."
   clean_installed_package "$py" sudo -H
-  install_pip sudo -H "$py" -m pip install "${reinstall_flag[@]}" "$wheel"
+  # The existing application is removed above. Do not force-reinstall
+  # dependencies: distro-managed packages such as Debian's psutil may satisfy
+  # the requirement but have no RECORD file for pip to uninstall.
+  install_pip sudo -H "$py" -m pip install "$wheel"
   verify_installed "$py" "$(wheel_version "$wheel")"
   launcher="$(command -v system-analyzer || true)"
   if [ -n "$launcher" ]; then
@@ -108,7 +109,7 @@ if [ "$mode" = "system" ]; then
 else
   echo "Installing into the user environment (no venv)..."
   clean_user_installed_package "$py"
-  install_pip "$py" -m pip install --user "${reinstall_flag[@]}" "$wheel"
+  install_pip "$py" -m pip install --user "$wheel"
   verify_installed "$py" "$(wheel_version "$wheel")"
   bin_dir="$("$py" -c 'import sysconfig;print(sysconfig.get_path("scripts", scheme="posix_user"))' 2>/dev/null || echo "$HOME/.local/bin")"
   echo "Installed. Console scripts are in: $bin_dir"

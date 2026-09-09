@@ -12,6 +12,7 @@ from maintenance.cluster import (
     ClusterDataError,
     process_action_result_from_dict,
     process_action_result_to_dict,
+    resource_summary_to_dict,
 )
 from maintenance.models import (
     CapabilityState,
@@ -25,6 +26,7 @@ from maintenance.nodes import (
     NodeCapability,
     NodeId,
     NodePermission,
+    NodeSnapshot,
     NodeStatus,
 )
 from maintenance.remote import (
@@ -32,6 +34,7 @@ from maintenance.remote import (
     READ_CAPABILITIES,
     AuthenticatedNodeProvider,
     MemoryRemoteTransport,
+    PeerGrant,
     RemoteAuthError,
     RemoteAuthorizationError,
     RemoteExecutionError,
@@ -237,6 +240,26 @@ class SigningAndVerificationTests(unittest.TestCase):
                 replay_cache=ReplayCache(),
             )
 
+    def test_unknown_request_fields_are_rejected(self) -> None:
+        envelope = sign_request(
+            node_id="peer",
+            op="hello",
+            params={},
+            request_id="r1",
+            nonce="n1",
+            timestamp=100.0,
+            secret=SECRET,
+        )
+        envelope["unexpected"] = True
+        with self.assertRaises(RemoteProtocolError):
+            verify_request(
+                envelope,
+                secret=SECRET,
+                clock=lambda: 100.0,
+                freshness_seconds=DEFAULT_FRESHNESS_SECONDS,
+                replay_cache=ReplayCache(),
+            )
+
 
 class RemoteServiceRoundTripTests(unittest.TestCase):
     def test_hello_returns_ok(self) -> None:
@@ -251,11 +274,50 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
         self.assertEqual(snapshot.system_label, "peer-host")
         self.assertEqual(snapshot.get("cpu").value, "10%")
 
+    def test_node_snapshot_round_trip_preserves_target_metadata(self) -> None:
+        client = _client(_service())
+        snapshot = client.node_snapshot()
+        self.assertIsInstance(snapshot, NodeSnapshot)
+        self.assertEqual(snapshot.node_id, NodeId("peer"))
+        self.assertEqual(snapshot.display_name, "Peer")
+        dashboard = snapshot.dashboard
+        self.assertIsNotNone(dashboard)
+        assert dashboard is not None
+        self.assertEqual(dashboard.get("cpu").value, "10%")
+
     def test_component_summary_round_trip(self) -> None:
         client = _client(_service())
         resource = client.component_summary("cpu")
         self.assertEqual(resource.title, "CPU")
         self.assertEqual(resource.temperatures[0].value_celsius, 45.0)
+
+    def test_component_summary_rejects_wrong_target_metadata(self) -> None:
+        class WrongTargetTransport:
+            def request(self, envelope_text: str) -> str:
+                envelope = json.loads(envelope_text)
+                resource = FakeProvider().component_summary("cpu")
+                return json.dumps(
+                    sign_response(
+                        node_id="peer",
+                        request_id=envelope["request_id"],
+                        status="ok",
+                        payload={
+                            "node_id": "other",
+                            "resource": resource_summary_to_dict(resource),
+                        },
+                        timestamp=100.0,
+                        secret=SECRET,
+                    )
+                )
+
+        client = AuthenticatedNodeProvider(
+            node_id=NodeId("peer"),
+            secret=SECRET,
+            transport=WrongTargetTransport(),
+            clock=lambda: 100.0,
+        )
+        with self.assertRaises(RemoteAuthError):
+            client.component_summary("cpu")
 
     def test_process_candidates_round_trip(self) -> None:
         client = _client(_service())
@@ -380,6 +442,38 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
         )
         with self.assertRaises(RemoteAuthError):
             service.handle(json.dumps(request))
+
+    def test_target_grants_are_per_caller_and_sign_denials(self) -> None:
+        service = RemoteService(
+            node_id=NodeId("target"),
+            display_name="Target",
+            hostname="target-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=READ_CAPABILITIES,
+            provider=FakeProvider(),
+            secret=SECRET,
+            grants={
+                NodeId("caller-a"): PeerGrant(
+                    NodeId("caller-a"),
+                    SECRET,
+                    frozenset({NodePermission.DASHBOARD_READ}),
+                ),
+                NodeId("caller-b"): PeerGrant(
+                    NodeId("caller-b"),
+                    "b" * 64,
+                    frozenset({NodePermission.PROCESS_REVIEW}),
+                ),
+            },
+        )
+        client = AuthenticatedNodeProvider(
+            node_id=NodeId("target"),
+            caller_node_id=NodeId("caller-a"),
+            secret=SECRET,
+            transport=MemoryRemoteTransport(service),
+        )
+        with self.assertRaises(RemoteAuthorizationError):
+            client.process_candidates()
 
     def test_unknown_operation_is_rejected(self) -> None:
         service = _service()

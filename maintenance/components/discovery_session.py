@@ -52,6 +52,10 @@ class DiscoverySession:
         discovery_factory: Callable[..., Any] = NetworkDiscovery,
         app_version: str = "",
         is_closing: Callable[[], bool] = lambda: False,
+        get_listener_endpoint: Callable[[], tuple[bool, int | None]] = lambda: (
+            False,
+            None,
+        ),
     ) -> None:
         self._coordinator = coordinator
         self._registry = registry
@@ -66,6 +70,7 @@ class DiscoverySession:
         self._discovery_factory = discovery_factory
         self._app_version = app_version
         self._is_closing = is_closing
+        self._get_listener_endpoint = get_listener_endpoint
         self.timer_id: str | None = None
         self._active = False
 
@@ -93,6 +98,7 @@ class DiscoverySession:
             return DiscoveryStartResult(started=False, reason="local node unavailable")
 
         descriptor = local_context.descriptor
+        connectable, listener_port = self._get_listener_endpoint()
         advertisement = DiscoveryAdvertisement(
             stable_id=descriptor.id.value,
             display_name=descriptor.display_name,
@@ -100,8 +106,8 @@ class DiscoverySession:
             app_version=self._app_version,
             protocol_version=PROTOCOL_VERSION,
             platform=descriptor.platform,
-            connectable=False,
-            port=None,
+            connectable=connectable,
+            port=listener_port if connectable else None,
             identity_fingerprint=(
                 local_context.descriptor.identity_fingerprint
                 or node_identity_fingerprint(descriptor.id)
