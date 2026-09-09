@@ -27,7 +27,9 @@ Write-Host "Verifying wheel: $(Split-Path $wheel -Leaf)"
 Invoke-Versioned $py "maintenance._release" @("verify-wheel", $wheel)
 
 Write-Host "Installing into the user environment (no venv)..."
+Remove-InstalledPackage $py
 Install-UserWheel $py $wheel
+Verify-InstalledWheel $py (Get-WheelVersion $wheel)
 
 $binDir = & $py -c "import os,sysconfig;print(sysconfig.get_path('scripts', scheme='nt_user' if os.name=='nt' else 'posix_user'))" 2>$null
 if (-not $binDir) { $binDir = if ($env:OS -eq "Windows_NT") { Join-Path $env:APPDATA "Python\Scripts" } else { Join-Path $HOME ".local\bin" } }

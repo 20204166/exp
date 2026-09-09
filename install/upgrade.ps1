@@ -12,7 +12,9 @@ if ($Version) {
     $wheel = Get-WheelPath
 }
 Write-Host "Upgrading to: $(Split-Path $wheel -Leaf)"
+Remove-InstalledPackage $py
 & $py -m pip install --no-index --no-deps --force-reinstall $wheel
 if ($LASTEXITCODE -ne 0) { throw "pip install failed (exit $LASTEXITCODE)" }
+Verify-InstalledWheel $py (Get-WheelVersion $wheel)
 Write-Host "After:"; Show-InstalledVersion $py
 Write-Host "Rollback: rollback.ps1 -Version <previous>"

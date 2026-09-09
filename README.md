@@ -112,7 +112,7 @@ Use the command that matches your situation:
 | --------- | ------- |
 | Linux/macOS/WSL, per-user install | `./install/install-user.sh` |
 | Linux/macOS/WSL, machine-wide install | `./install/install-user.sh --system` |
-| Linux/macOS/WSL, reinstall the same wheel version | add `--force-reinstall` |
+| Linux/macOS/WSL, reinstall or clean-install | `./install/install-user.sh` |
 | Linux/macOS/WSL, install a specific wheel from `dist/` | `./install/install-user.sh 1.2.2.0` |
 | Linux/macOS/WSL, online install from anywhere | `curl -fsSL https://raw.githubusercontent.com/20204166/exp/main/install/install-online.sh | bash` |
 | Linux/macOS/WSL, online reinstall of the same wheel version | `curl -fsSL https://raw.githubusercontent.com/20204166/exp/main/install/install-online.sh | bash -s -- --force-reinstall` |
@@ -124,9 +124,10 @@ Notes:
 - `install-user.sh` auto-finds a Python 3.10+, verifies the committed wheel,
   installs it together with its dependencies, and prints where the
   `system-analyzer` scripts landed (`~/.local/bin` by default).
-- `--force-reinstall` is the fix for stale same-version installs: use it when
-  pip says the same version is already installed but you want the wheel
-  contents copied again.
+- The installers always remove existing `system-analyzer` distributions,
+  force-reinstall the selected wheel, and verify the installed version and
+  imported module paths. This prevents a stale same-version or lower-version
+  install from surviving the release.
 - On Windows, `install.ps1` already uses `--force-reinstall` internally for the
   target venv; use `upgrade.ps1` when you want a built-and-reinstalled update
   in one step.

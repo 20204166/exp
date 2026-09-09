@@ -96,6 +96,49 @@ wheel_path() {
 
 show_version() { "$1" -m pip show system-analyzer 2>/dev/null | grep '^Version:' || true; }
 
+wheel_version() {
+  local name
+  name="$(basename "$1")"
+  name="${name#system_analyzer-}"
+  echo "${name%-py3-none-any.whl}"
+}
+
+clean_installed_package() {
+  local py="$1" attempt
+  shift
+  local prefix=("$@")
+  for attempt in 1 2 3; do
+    if ! "${prefix[@]}" "$py" -m pip show system-analyzer >/dev/null 2>&1; then
+      return 0
+    fi
+    echo "Removing existing system-analyzer distribution (pass $attempt)..."
+    "${prefix[@]}" "$py" -m pip uninstall -y system-analyzer
+  done
+  if "${prefix[@]}" "$py" -m pip show system-analyzer >/dev/null 2>&1; then
+    echo "ERROR: could not remove every system-analyzer distribution from $py" >&2
+    return 1
+  fi
+}
+
+verify_installed() {
+  local py="$1" expected="$2"
+  (cd / && "$py" - "$expected" <<'PY'
+import importlib.metadata as metadata
+import sys
+
+expected = sys.argv[1]
+actual = metadata.version("system-analyzer")
+if actual != expected:
+    raise SystemExit(f"installed version {actual} does not match wheel version {expected}")
+import maintenance
+import window
+print(f"Installed system-analyzer {actual}")
+print(f"  maintenance: {maintenance.__file__}")
+print(f"  window: {window.__file__}")
+PY
+  )
+}
+
 # System Analyzer uses PEP 604 union types (e.g. `threading.Event | None`) so
 # it requires Python 3.10+. Fail fast with a clear message instead of a
 # confusing import-time TypeError on older interpreters (e.g. the macOS 3.9

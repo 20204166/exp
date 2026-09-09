@@ -31,7 +31,7 @@ for arg in "$@"; do
 done
 
 reinstall_flag=()
-[ "$force_reinstall" -eq 1 ] && reinstall_flag=(--force-reinstall)
+reinstall_flag=(--force-reinstall)
 
 choose_python() {
   local candidate version major minor base
@@ -82,7 +82,38 @@ install_pip() {
   cat "$err" >&2; rm -f "$err"; return 1
 }
 
+clean_installed_package() {
+  local attempt
+  for attempt in 1 2 3; do
+    if ! "$py" -m pip show system-analyzer >/dev/null 2>&1; then return 0; fi
+    echo "Removing existing system-analyzer distribution (pass $attempt)..."
+    "$py" -m pip uninstall -y system-analyzer
+  done
+  "$py" -m pip show system-analyzer >/dev/null 2>&1 && {
+    echo "ERROR: could not remove every system-analyzer distribution" >&2
+    exit 1
+  }
+}
+
+clean_installed_package
 install_pip "$py" -m pip install --user "${reinstall_flag[@]}" "$tmp/$wheel"
+expected_version="${wheel#system_analyzer-}"
+expected_version="${expected_version%-py3-none-any.whl}"
+(cd / && "$py" - "$expected_version" <<'PY'
+import importlib.metadata as metadata
+import sys
+
+expected = sys.argv[1]
+actual = metadata.version("system-analyzer")
+if actual != expected:
+    raise SystemExit(f"installed version {actual} does not match wheel version {expected}")
+import maintenance
+import window
+print(f"Installed system-analyzer {actual}")
+print(f"  maintenance: {maintenance.__file__}")
+print(f"  window: {window.__file__}")
+PY
+)
 bin_dir="$($py -c 'import sysconfig;print(sysconfig.get_path("scripts", scheme="posix_user"))')"
 launcher="$bin_dir/system-analyzer"
 [ -x "$launcher" ] || { echo "Install completed but launcher was not found at $launcher" >&2; exit 1; }

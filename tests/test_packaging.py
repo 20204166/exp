@@ -150,6 +150,28 @@ class BuildScriptReliabilityTests(unittest.TestCase):
         self.assertIn("pip install", source)
         self.assertLess(source.index("verify.sh"), source.index("pip install"))
 
+    def test_installers_clean_existing_versions_and_verify_target(self) -> None:
+        common = (REPO / "install" / "_common.sh").read_text()
+        install_user = (REPO / "install" / "install-user.sh").read_text()
+        online = (REPO / "install" / "install-online.sh").read_text()
+        self.assertIn("clean_installed_package", common)
+        self.assertIn("verify_installed", common)
+        self.assertIn('clean_installed_package "$py"', install_user)
+        self.assertIn('verify_installed "$py"', install_user)
+        self.assertIn("clean_installed_package", online)
+        self.assertIn("--force-reinstall", install_user)
+        self.assertIn("--force-reinstall", online)
+
+    def test_windows_installers_clean_and_verify_target(self) -> None:
+        common = (REPO / "install" / "_common.ps1").read_text()
+        install_user = (REPO / "install" / "install-user.ps1").read_text()
+        upgrade = (REPO / "install" / "upgrade.ps1").read_text()
+        self.assertIn("Remove-InstalledPackage", common)
+        self.assertIn("Verify-InstalledWheel", common)
+        self.assertIn("Remove-InstalledPackage $py", install_user)
+        self.assertIn("Verify-InstalledWheel", install_user)
+        self.assertIn("Remove-InstalledPackage $py", upgrade)
+
     def test_common_sh_build_backend_version_gate_requires_68(self) -> None:
         import re
 

@@ -157,16 +157,59 @@ function Show-InstalledVersion {
     & $Py -m pip show system-analyzer 2>$null | Select-String "^Version:"
 }
 
+function Remove-InstalledPackage {
+    param([object]$Py)
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        & $Py -m pip show system-analyzer 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { return }
+        Write-Host "Removing existing system-analyzer distribution (pass $attempt)..."
+        & $Py -m pip uninstall -y system-analyzer
+        if ($LASTEXITCODE -ne 0) { throw "pip uninstall failed (exit $LASTEXITCODE)" }
+    }
+    & $Py -m pip show system-analyzer 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { throw "could not remove every system-analyzer distribution" }
+}
+
+function Get-WheelVersion {
+    param([string]$Wheel)
+    $name = Split-Path $Wheel -Leaf
+    if ($name -notmatch "^system_analyzer-(\d+\.\d+\.\d+\.\d+)-py3-none-any\.whl$") {
+        throw "unexpected wheel filename: $name"
+    }
+    return $matches[1]
+}
+
+function Verify-InstalledWheel {
+    param([object]$Py, [string]$ExpectedVersion)
+    $script = @'
+import importlib.metadata as metadata
+import sys
+
+expected = sys.argv[1]
+actual = metadata.version("system-analyzer")
+if actual != expected:
+    raise SystemExit(f"installed version {actual} does not match wheel version {expected}")
+import maintenance
+import window
+print(f"Installed system-analyzer {actual}")
+print(f"  maintenance: {maintenance.__file__}")
+print(f"  window: {window.__file__}")
+'@
+    Push-Location ([System.IO.Path]::GetPathRoot((Get-PackageDir)))
+    try { & $Py -c $script $ExpectedVersion } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { throw "installed wheel verification failed" }
+}
+
 # Install one wheel per-user, handling old pip that lacks the flag. The
 # --break-system-packages flag is a no-op where PEP 668 does not apply.
 function Install-UserWheel {
     param([object]$Py, [string]$Wheel)
-    $argsWith = @("-m", "pip", "install", "--user", "--break-system-packages", $Wheel)
+    $argsWith = @("-m", "pip", "install", "--user", "--force-reinstall", "--break-system-packages", $Wheel)
     $out = & $Py @argsWith 2>&1
     if ($LASTEXITCODE -eq 0) { return }
     $joined = ($out -join "`n")
     if ($joined -match "no such option") {
-        $argsPlain = @("-m", "pip", "install", "--user", $Wheel)
+        $argsPlain = @("-m", "pip", "install", "--user", "--force-reinstall", $Wheel)
         $out = & $Py @argsPlain 2>&1
         if ($LASTEXITCODE -ne 0) { throw ($out -join "`n") }
         return
