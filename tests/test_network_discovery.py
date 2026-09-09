@@ -220,6 +220,49 @@ class NetworkDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(created, [{"ip_version": "all"}])
 
+    def test_zeroconf_backend_falls_back_to_ipv4_when_all_versions_fail(self) -> None:
+        created: list[Any] = []
+
+        class FakeZeroconf:
+            def __init__(self, **kwargs: Any) -> None:
+                created.append(kwargs)
+                if kwargs["ip_version"] == "all":
+                    raise OSError("IPv6 network unavailable")
+
+            def register_service(self, _service_info: Any) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        class FakeServiceInfo:
+            def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                pass
+
+        class FakeServiceBrowser:
+            def __init__(self, *_args: Any) -> None:
+                pass
+
+            def cancel(self) -> None:
+                pass
+
+        fake_module = SimpleNamespace(
+            Zeroconf=FakeZeroconf,
+            ServiceInfo=FakeServiceInfo,
+            ServiceBrowser=FakeServiceBrowser,
+            IPVersion=SimpleNamespace(All="all", V4Only="v4"),
+            get_all_addresses=list,
+            get_all_addresses_v6=list,
+        )
+        with patch(
+            "maintenance.components.network_discovery._zeroconf_module", fake_module
+        ):
+            backend = ZeroconfDiscoveryBackend(lambda *_args: None)
+            backend.start(_advertisement())
+            backend.stop()
+
+        self.assertEqual(created, [{"ip_version": "all"}, {"ip_version": "v4"}])
+
     def test_start_and_stop_lifecycle(self) -> None:
         discovery, backend, _events, _clock = _discovery()
         self.assertTrue(discovery.start())
@@ -316,6 +359,15 @@ class NetworkDiscoveryTests(unittest.TestCase):
         discovery, backend, events, _clock = _discovery(local_id="local")
         discovery.start()
         backend.add(f"local.{SERVICE_TYPE}", _info("local"))
+        self.assertEqual(events, [])
+
+    def test_self_filter_accepts_string_local_node_id(self) -> None:
+        discovery, backend, events, _clock = _discovery()
+        discovery._local_node_id = "local"
+        discovery.start()
+
+        backend.add(f"local.{SERVICE_TYPE}", _info("local"))
+
         self.assertEqual(events, [])
 
     def test_self_advertisement_without_txt_id_is_ignored(self) -> None:

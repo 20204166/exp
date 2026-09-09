@@ -406,6 +406,15 @@ class AppWindowTests(unittest.TestCase):
         self.assertIn(timeout_id, window.master.cancelled)
         self.assertIsNone(window._scan_timeout_id)
 
+    def test_run_handles_ctrl_c_with_normal_close_path(self) -> None:
+        window = self.make_window()
+        window.master.mainloop = Mock(side_effect=KeyboardInterrupt)
+        window._close = Mock()
+
+        window.run()
+
+        window._close.assert_called_once_with()
+
     def test_close_during_live_scan_swallows_late_result(self) -> None:
         window = self.make_window()
         window.snapshot = None

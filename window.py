@@ -3366,6 +3366,9 @@ class AppWindow:
     def run(self) -> None:
         try:
             self.master.mainloop()
+        except KeyboardInterrupt:
+            self._close()
         finally:
-            self._is_closing = True
-            self._finalize_shutdown()
+            if not self._is_closing:
+                self._is_closing = True
+                self._finalize_shutdown()

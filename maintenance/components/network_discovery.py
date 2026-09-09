@@ -121,8 +121,26 @@ class ZeroconfDiscoveryBackend:
         zeroconf_kwargs: dict[str, Any] = {}
         ip_version = getattr(_zeroconf_module, "IPVersion", None)
         all_versions = getattr(ip_version, "All", None)
+        v4_only = getattr(ip_version, "V4Only", None)
         if all_versions is not None:
             zeroconf_kwargs["ip_version"] = all_versions
+        try:
+            self._start_with_zeroconf(advertisement, zeroconf_kwargs)
+        except OSError:
+            if all_versions is None or v4_only is None:
+                raise
+            LOGGER.warning(
+                "All-interface Zeroconf startup failed; retrying with IPv4 only",
+                exc_info=True,
+            )
+            self.stop()
+            self._start_with_zeroconf(advertisement, {"ip_version": v4_only})
+
+    def _start_with_zeroconf(
+        self, advertisement: DiscoveryAdvertisement, zeroconf_kwargs: dict[str, Any]
+    ) -> None:
+        if _zeroconf_module is None:
+            raise RuntimeError("python-zeroconf is not installed")
         zc = _zeroconf_module.Zeroconf(**zeroconf_kwargs)
         self._zeroconf = zc
         properties = {
@@ -396,7 +414,8 @@ class NetworkDiscovery:
             # wait for its next update instead of treating that transient state
             # as a malformed peer or surfacing a noisy warning for our service.
             return None
-        if stable_id == self._local_node_id.value:
+        local_node_id = getattr(self._local_node_id, "value", self._local_node_id)
+        if stable_id == str(local_node_id):
             return None
 
         hostname = properties.get("name") or _service_hostname(service_name)
