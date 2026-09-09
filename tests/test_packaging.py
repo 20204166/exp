@@ -41,6 +41,10 @@ class PyprojectConfigurationTests(unittest.TestCase):
         package_data = _pyproject()["tool"]["setuptools"]["package-data"]
         self.assertIn("py.typed", package_data["maintenance"])
 
+    def test_window_supports_subpackage_is_shipped(self) -> None:
+        packages = _pyproject()["tool"]["setuptools"]["packages"]
+        self.assertIn("maintenance.ui.window_supports", packages)
+
     def test_console_scripts_are_declared(self) -> None:
         scripts = _pyproject()["project"]["scripts"]
         self.assertEqual(

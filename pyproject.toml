@@ -36,6 +36,7 @@ packages = [
     "maintenance",
     "maintenance.components",
     "maintenance.ui",
+    "maintenance.ui.window_supports",
 ]
 py-modules = [
     "main",
