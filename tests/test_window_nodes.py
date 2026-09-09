@@ -35,6 +35,7 @@ from maintenance.nodes import (
     node_operation_key,
 )
 from maintenance.ui.render_coordinator import UICoordinator
+from maintenance.ui.window_supports import node_specs
 from tests.support.models import make_snapshot, make_summary
 from tests.support.scheduling import TimerMaster
 from window import AppWindow
@@ -157,6 +158,30 @@ def _make_window(
 
 
 class WindowNodeSelectorTests(unittest.TestCase):
+    def test_identity_mismatch_is_not_openable(self) -> None:
+        context = _trusted_context("peer", "Peer", cpu_value="peer", host_label="peer")
+        context.descriptor = replace(
+            context.descriptor,
+            identity_status=NodeIdentityStatus.MISMATCH,
+        )
+        window = _make_window(context, start_discovery=False)
+        state = ClusterState(
+            trusted_nodes=(
+                trusted_node_record(
+                    node_id="peer",
+                    display_name="Peer",
+                    hostname="peer",
+                    host="peer",
+                    port=1234,
+                ),
+            )
+        )
+
+        specs = node_specs.trusted_node_specs(window._node_registry, state)
+
+        self.assertEqual(len(specs), 1)
+        self.assertFalse(specs[0].openable)
+
     def test_permission_toggle_preserves_unmanaged_permissions(self) -> None:
         context = _trusted_context("peer", "Peer", cpu_value="peer", host_label="peer")
         context.descriptor = replace(

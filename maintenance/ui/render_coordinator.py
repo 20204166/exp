@@ -103,14 +103,23 @@ class UICoordinator:
         """Advance one target's generation and optionally retarget it to one node."""
 
         current = self._generations.get(target, 0)
+        previous_node = self._target_nodes.get(target)
+        owner_changed = (
+            node_id is not None
+            and previous_node is not None
+            and previous_node != node_id
+        )
         next_generation = (
-            current + 1 if generation is None else max(current, generation)
+            generation
+            if owner_changed and generation is not None
+            else current + 1
+            if generation is None
+            else max(current, generation)
         )
         self._generations[target] = next_generation
         if node_id is not None:
-            previous = self._target_nodes.get(target)
             self._target_nodes[target] = node_id
-            if previous is not None and previous != node_id:
+            if owner_changed:
                 self._pending.pop(target, None)
         pending = self._pending.get(target)
         if pending is not None and pending.intent.generation < next_generation:

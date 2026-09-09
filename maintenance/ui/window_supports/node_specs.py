@@ -3,7 +3,7 @@
 from collections.abc import Iterable
 from typing import Any
 
-from maintenance.nodes import NodeId, is_trusted_descriptor
+from maintenance.nodes import NodeId, NodeIdentityStatus, is_trusted_descriptor
 from maintenance.ui import cluster_page as ui_cluster
 from maintenance.ui import nodes_connections as ui_nodes
 
@@ -55,7 +55,12 @@ def trusted_node_specs(
                 host=record.host if record is not None else descriptor.hostname,
                 port=record.port if record is not None else None,
                 selectable=descriptor.id in selectable,
-                openable=record is not None and record.port is not None,
+                openable=(
+                    descriptor.identity_status == NodeIdentityStatus.VERIFIED
+                    and descriptor.id in selectable
+                    and record is not None
+                    and record.port is not None
+                ),
                 identity_fingerprint=descriptor.identity_fingerprint,
                 identity_status=descriptor.identity_status.value,
                 permissions=tuple(

@@ -202,6 +202,26 @@ class UICoordinatorTests(unittest.TestCase):
         self.assertFalse(accepted)
         self.assertEqual(coordinator.pending_count, 0)
 
+    def test_node_switch_resets_generation_namespace(self) -> None:
+        coordinator = UICoordinator()
+        received: list[str] = []
+
+        coordinator.invalidate("component:cpu", generation=5, node_id="node-a")
+        coordinator.invalidate("component:cpu", generation=0, node_id="node-b")
+        accepted = coordinator.request(
+            RenderIntent(
+                target="component:cpu",
+                generation=1,
+                node_id="node-b",
+                payload="new",
+                payload_set=True,
+            ),
+            lambda intent: received.append(str(intent.payload)),
+        )
+
+        self.assertTrue(accepted)
+        self.assertEqual(received, ["new"])
+
 
 if __name__ == "__main__":
     unittest.main()
