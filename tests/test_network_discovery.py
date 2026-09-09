@@ -135,6 +135,9 @@ class NetworkDiscoveryTests(unittest.TestCase):
         registered: list[Any] = []
 
         class FakeZeroconf:
+            def __init__(self, **kwargs: Any) -> None:
+                self.kwargs = kwargs
+
             def register_service(self, service_info: Any) -> None:
                 registered.append(service_info)
 
@@ -156,6 +159,9 @@ class NetworkDiscoveryTests(unittest.TestCase):
             Zeroconf=FakeZeroconf,
             ServiceInfo=FakeServiceInfo,
             ServiceBrowser=FakeServiceBrowser,
+            IPVersion=SimpleNamespace(All="all"),
+            get_all_addresses=lambda: ["192.168.1.20", "127.0.0.1"],
+            get_all_addresses_v6=lambda: [(("fe80::1", 0, 2), 2), (("::1", 0, 0), 1)],
         )
         with patch(
             "maintenance.components.network_discovery._zeroconf_module", fake_module
@@ -165,7 +171,54 @@ class NetworkDiscoveryTests(unittest.TestCase):
             backend.stop()
 
         self.assertEqual(len(registered), 1)
-        self.assertNotIn("addresses", registered[0].kwargs)
+        self.assertEqual(
+            registered[0].kwargs["addresses"],
+            [
+                b"\xc0\xa8\x01\x14",
+                b"\xfe\x80" + (b"\x00" * 13) + b"\x01",
+            ],
+        )
+
+    def test_zeroconf_backend_requests_all_ip_versions(self) -> None:
+        created: list[Any] = []
+
+        class FakeZeroconf:
+            def __init__(self, **kwargs: Any) -> None:
+                created.append(kwargs)
+
+            def register_service(self, _service_info: Any) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        class FakeServiceInfo:
+            def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                pass
+
+        class FakeServiceBrowser:
+            def __init__(self, *_args: Any) -> None:
+                pass
+
+            def cancel(self) -> None:
+                pass
+
+        fake_module = SimpleNamespace(
+            Zeroconf=FakeZeroconf,
+            ServiceInfo=FakeServiceInfo,
+            ServiceBrowser=FakeServiceBrowser,
+            IPVersion=SimpleNamespace(All="all"),
+            get_all_addresses=list,
+            get_all_addresses_v6=list,
+        )
+        with patch(
+            "maintenance.components.network_discovery._zeroconf_module", fake_module
+        ):
+            backend = ZeroconfDiscoveryBackend(lambda *_args: None)
+            backend.start(_advertisement())
+            backend.stop()
+
+        self.assertEqual(created, [{"ip_version": "all"}])
 
     def test_start_and_stop_lifecycle(self) -> None:
         discovery, backend, _events, _clock = _discovery()
@@ -316,6 +369,30 @@ class NetworkDiscoveryTests(unittest.TestCase):
         backend.add(f"bad.{SERVICE_TYPE}", {"properties": {}, "port": 0})
         self.assertEqual(events, [])
 
+    def test_zeroconf_bytes_properties_are_normalized(self) -> None:
+        discovery, backend, events, _clock = _discovery()
+        discovery.start()
+        info = _info("peer")
+        info["properties"] = {
+            key.encode(): value.encode() for key, value in info["properties"].items()
+        }
+
+        backend.add(f"peer.{SERVICE_TYPE}", info)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0][1].stable_id, "peer")
+
+    def test_ipv6_only_service_uses_parsed_addresses(self) -> None:
+        discovery, backend, events, _clock = _discovery()
+        discovery.start()
+        info = _info("peer")
+        info["addresses"] = []
+        info["parsed_addresses"] = lambda: ["2001:db8::9"]
+
+        backend.add(f"peer.{SERVICE_TYPE}", info)
+
+        self.assertEqual(events[0][1].addresses, ("2001:db8::9",))
+
     def test_incompatible_protocol_version_is_flagged(self) -> None:
         discovery, backend, events, _clock = _discovery()
         discovery.start()
@@ -332,6 +409,32 @@ class NetworkDiscoveryTests(unittest.TestCase):
         self.assertEqual(discovery.peers(), ())
         self.assertEqual(events[-1][0], "lost")
         self.assertEqual(events[-1][1], "a")
+
+    def test_remove_uses_normalized_stable_id_when_service_name_differs(self) -> None:
+        discovery, backend, events, _clock = _discovery()
+        discovery.start()
+        backend.add(f"alias.{SERVICE_TYPE}", _info("peer"))
+        backend.remove(f"alias.{SERVICE_TYPE}")
+
+        self.assertEqual(discovery.peers(), ())
+        self.assertEqual(events[-1], ("lost", "peer"))
+
+    def test_late_transport_event_after_stop_is_ignored(self) -> None:
+        discovery, backend, events, _clock = _discovery()
+        discovery.start()
+        discovery.stop()
+        backend.add(f"peer.{SERVICE_TYPE}", _info("peer"))
+
+        self.assertEqual(discovery.peers(), ())
+        self.assertEqual(events, [])
+
+    def test_malformed_remove_event_is_ignored(self) -> None:
+        discovery, backend, events, _clock = _discovery()
+        discovery.start()
+        backend.remove(object())  # type: ignore[arg-type]
+
+        self.assertEqual(discovery.peers(), ())
+        self.assertEqual(events, [])
 
     def test_expiry_drops_stale_peer(self) -> None:
         discovery, backend, events, clock = _discovery(ttl=30.0)

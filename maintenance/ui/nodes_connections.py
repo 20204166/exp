@@ -40,6 +40,7 @@ class NodesConnectionsCallbacks:
     on_add_manual_host: Callable[[str, str, int | None], None]
     on_remove_manual: Callable[[str], None]
     on_permissions: Callable[[str, frozenset[str]], None] | None = None
+    on_start_discovery: Callable[[], None] = lambda: None
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +193,20 @@ class NodesConnectionsPage:
             control_text="Enabled",
             on_change=lambda: self.callbacks.on_discovery_toggle(var.get()),
             action_id="nodes:discovery:toggle",
+        )
+        self.start_discovery_button = self.button_cls(
+            body,
+            text="Start Discovery",
+            command=self.callbacks.on_start_discovery,
+            style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            cursor="hand2",
+        )
+        self.start_discovery_button.pack(anchor="w", pady=(8, 0))
+        self._register_button(
+            "nodes:discovery:start",
+            self.callbacks.on_start_discovery,
+            self.start_discovery_button,
+            True,
         )
 
     def _build_discovered_section(self) -> None:

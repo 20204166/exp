@@ -27,6 +27,7 @@ def make_callbacks() -> Any:
         on_open_node=Mock(),
         on_add_manual_host=Mock(),
         on_remove_manual=Mock(),
+        on_start_discovery=Mock(),
     )
 
 
@@ -118,11 +119,20 @@ class NodesConnectionsPageTests(unittest.TestCase):
         toggle.kwargs["command"]()
         callbacks.on_discovery_toggle.assert_called_once_with(True)
 
+    def test_start_discovery_button_invokes_callback(self) -> None:
+        callbacks = make_callbacks()
+        _page, _parent, recorder = make_page(callbacks)
+
+        button_with_text(recorder, "Start Discovery").kwargs["command"]()
+
+        callbacks.on_start_discovery.assert_called_once_with()
+
     def test_stable_actions_are_registered_and_cleared_by_prefix(self) -> None:
         coordinator = ButtonCoordinator()
         _page, _parent, _recorder = make_page(button_coordinator=coordinator)
 
         self.assertIn("nodes:discovery:toggle", coordinator.registered_ids())
+        self.assertIn("nodes:discovery:start", coordinator.registered_ids())
         self.assertIn("nodes:peer:peer-a:pair", coordinator.registered_ids())
 
         coordinator.clear_prefix("nodes:peer:")

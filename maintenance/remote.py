@@ -35,6 +35,8 @@ from maintenance.cluster import (
     file_candidate_to_dict,
     node_snapshot_from_dict,
     node_snapshot_to_dict,
+    process_action_result_from_dict,
+    process_action_result_to_dict,
     process_candidate_from_dict,
     process_candidate_to_dict,
     resource_summary_from_dict,
@@ -530,12 +532,7 @@ class RemoteService:
             result = action(pids, create_times)
             if not isinstance(result, ProcessActionResult):
                 raise RemoteExecutionError("target returned an invalid action result")
-            return {
-                "requested": result.requested,
-                "stopped": list(result.stopped),
-                "force_required": list(result.force_required),
-                "errors": list(result.errors),
-            }
+            return process_action_result_to_dict(result)
         if request.op == "storage_candidates":
             candidates = self._provider.storage_candidates()
             return {"files": [file_candidate_to_dict(c) for c in candidates]}
@@ -569,16 +566,35 @@ class MemoryRemoteTransport:
         return self._service.handle(envelope_text)
 
 
-def _recv_exact(sock: Any, length: int) -> bytes:
+def _recv_exact(
+    sock: Any,
+    length: int,
+    *,
+    closed_message: str = "connection closed before response",
+) -> bytes:
     chunks: list[bytes] = []
     remaining = length
     while remaining:
         chunk = sock.recv(remaining)
         if not chunk:
-            raise RemoteTransportError("connection closed before response")
+            raise RemoteTransportError(closed_message)
         chunks.append(chunk)
         remaining -= len(chunk)
     return b"".join(chunks)
+
+
+def _recv_frame(sock: Any, *, max_bytes: int, closed_message: str) -> bytes:
+    header = _recv_exact(sock, 4, closed_message=closed_message)
+    length = struct.unpack(">I", header)[0]
+    if length > max_bytes:
+        raise RemoteTransportError("envelope is too large")
+    return _recv_exact(sock, length, closed_message=closed_message)
+
+
+def _send_frame(sock: Any, payload: bytes, *, max_bytes: int) -> None:
+    if len(payload) > max_bytes:
+        raise RemoteTransportError("envelope is too large")
+    sock.sendall(struct.pack(">I", len(payload)) + payload)
 
 
 class SocketRemoteTransport:
@@ -598,12 +614,12 @@ class SocketRemoteTransport:
                 (self._host, self._port), timeout=self._timeout
             ) as sock:
                 sock.settimeout(self._timeout)
-                sock.sendall(struct.pack(">I", len(data)) + data)
-                header = _recv_exact(sock, 4)
-                length = struct.unpack(">I", header)[0]
-                if length > MAX_ENVELOPE_BYTES:
-                    raise RemoteTransportError("response envelope is too large")
-                body = _recv_exact(sock, length)
+                _send_frame(sock, data, max_bytes=MAX_ENVELOPE_BYTES)
+                body = _recv_frame(
+                    sock,
+                    max_bytes=MAX_ENVELOPE_BYTES,
+                    closed_message="connection closed before response",
+                )
         except RemoteTransportError:
             raise
         except OSError as error:
@@ -651,16 +667,20 @@ class RemoteSocketServer:
                 def handle(self) -> None:
                     try:
                         self.request.settimeout(service_timeout)
-                        header = _recv_exact(self.request, 4)
-                        length = struct.unpack(">I", header)[0]
-                        if length > MAX_ENVELOPE_BYTES:
-                            return
-                        body = _recv_exact(self.request, length)
+                        body = _recv_frame(
+                            self.request,
+                            max_bytes=MAX_ENVELOPE_BYTES,
+                            closed_message="connection closed before request",
+                        )
                         response = service.handle(body.decode("utf-8"))
                     except Exception:  # noqa: BLE001 - auth failures close silently.
                         return
                     payload = response.encode("utf-8")
-                    self.request.sendall(struct.pack(">I", len(payload)) + payload)
+                    _send_frame(
+                        self.request,
+                        payload,
+                        max_bytes=MAX_ENVELOPE_BYTES,
+                    )
 
             return _Handler
 
@@ -781,13 +801,8 @@ class AuthenticatedNodeProvider:
     ) -> ProcessActionResult:
         payload = self._request(operation, {"processes": refs})
         try:
-            return ProcessActionResult(
-                requested=int(payload["requested"]),
-                stopped=tuple(int(pid) for pid in payload["stopped"]),
-                force_required=tuple(int(pid) for pid in payload["force_required"]),
-                errors=tuple(str(error) for error in payload["errors"]),
-            )
-        except (KeyError, TypeError, ValueError) as error:
+            return process_action_result_from_dict(payload)
+        except (ClusterDataError, TypeError, ValueError) as error:
             raise RemoteExecutionError(
                 "remote sent invalid process action data"
             ) from error

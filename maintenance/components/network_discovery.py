@@ -22,9 +22,12 @@ Testability: the ``backend`` is injected. Tests never need a real LAN; they
 drive a fake backend that calls the listener with synthetic service records.
 """
 
+import ipaddress
 import logging
+import socket
 import time
-from collections.abc import Callable
+import warnings
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
@@ -115,7 +118,12 @@ class ZeroconfDiscoveryBackend:
     def start(self, advertisement: DiscoveryAdvertisement) -> None:
         if _zeroconf_module is None:
             raise RuntimeError("python-zeroconf is not installed")
-        zc = _zeroconf_module.Zeroconf()
+        zeroconf_kwargs: dict[str, Any] = {}
+        ip_version = getattr(_zeroconf_module, "IPVersion", None)
+        all_versions = getattr(ip_version, "All", None)
+        if all_versions is not None:
+            zeroconf_kwargs["ip_version"] = all_versions
+        zc = _zeroconf_module.Zeroconf(**zeroconf_kwargs)
         self._zeroconf = zc
         properties = {
             "id": advertisement.stable_id,
@@ -129,12 +137,18 @@ class ZeroconfDiscoveryBackend:
             properties["fingerprint"] = advertisement.identity_fingerprint
         properties["connectable"] = "true" if advertisement.connectable else "false"
         port = advertisement.port or 0
+        service_kwargs: dict[str, Any] = {
+            "port": port,
+            "properties": properties,
+            "server": f"{advertisement.hostname}.local.",
+        }
+        addresses = _local_service_addresses()
+        if addresses:
+            service_kwargs["addresses"] = addresses
         service_info = _zeroconf_module.ServiceInfo(
             SERVICE_TYPE,
             f"{advertisement.stable_id}.{SERVICE_TYPE}",
-            port=port,
-            properties=properties,
-            server=f"{advertisement.hostname}.local.",
+            **service_kwargs,
         )
         zc.register_service(service_info)
         listener = _ZeroconfListener(self._listener)
@@ -216,6 +230,7 @@ class NetworkDiscovery:
             else ZeroconfDiscoveryBackend(self._handle_transport_event)
         )
         self._peers: dict[str, _PeerRecord] = {}
+        self._service_nodes: dict[str, str] = {}
         self._active = False
         self._unavailable_reason: str | None = None
 
@@ -255,6 +270,7 @@ class NetworkDiscovery:
                     "Discovery cleanup after failed start also failed", exc_info=True
                 )
             self._peers.clear()
+            self._service_nodes.clear()
             self._unavailable_reason = f"Discovery start failed: {error}"
             LOGGER.warning("Network discovery failed to start: %s", error)
             return False
@@ -271,6 +287,7 @@ class NetworkDiscovery:
             LOGGER.warning("Network discovery stop failed: %s", error)
         self._active = False
         self._peers.clear()
+        self._service_nodes.clear()
 
     @property
     def active(self) -> bool:
@@ -282,9 +299,11 @@ class NetworkDiscovery:
     def _handle_transport_event(
         self, event: EventKind, service_name: str, info: Any
     ) -> None:
+        if not self._active:
+            return
         try:
             if event == "remove":
-                node_id = self._node_id_for_service(service_name)
+                node_id = self._service_nodes.pop(service_name, None)
                 if node_id is not None:
                     self._drop_peer(node_id)
                 return
@@ -296,6 +315,7 @@ class NetworkDiscovery:
             return
         if candidate is None:
             return
+        self._service_nodes[service_name] = candidate.stable_id
         record = self._peers.get(candidate.stable_id)
         if record is not None:
             existing = record.candidate
@@ -367,6 +387,8 @@ class NetworkDiscovery:
     ) -> DiscoveredNodeCandidate | None:
         """Build a candidate from one raw service record, or None when self."""
 
+        if not isinstance(service_name, str):
+            raise _MalformedAdvertisement("service name must be a string")
         properties = _property_map(info)
         stable_id = properties.get("id")
         if not stable_id:
@@ -391,7 +413,7 @@ class NetworkDiscovery:
         except (TypeError, ValueError):
             port = None
 
-        addresses = tuple(_address_texts(_attr(info, "addresses")))
+        addresses = tuple(_service_address_texts(info))
 
         return DiscoveredNodeCandidate(
             stable_id=stable_id,
@@ -413,6 +435,50 @@ class _MalformedAdvertisement(Exception):
     pass
 
 
+def _local_service_addresses() -> list[bytes]:
+    """Return usable local addresses for Zeroconf service resolution.
+
+    A service with only an unresolved ``server`` hostname can be announced but
+    cannot be resolved by another browser. Supplying concrete interface
+    addresses lets Zeroconf resolve the TXT record and service metadata without
+    assuming an Ethernet interface or a particular hostname.
+    """
+
+    if _zeroconf_module is None:
+        return []
+    addresses: list[bytes] = []
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            ipv4_addresses = _zeroconf_module.get_all_addresses()
+    except (AttributeError, OSError):
+        ipv4_addresses = []
+    for raw in ipv4_addresses:
+        try:
+            address = ipaddress.ip_address(raw)
+            if address.is_loopback:
+                continue
+            addresses.append(socket.inet_pton(socket.AF_INET, str(address)))
+        except (ValueError, OSError, TypeError):
+            continue
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            ipv6_addresses = _zeroconf_module.get_all_addresses_v6()
+    except (AttributeError, OSError):
+        ipv6_addresses = []
+    for raw in ipv6_addresses:
+        try:
+            address_text = raw[0][0] if isinstance(raw[0], tuple) else raw[0]
+            address = ipaddress.ip_address(address_text)
+            if address.is_loopback:
+                continue
+            addresses.append(socket.inet_pton(socket.AF_INET6, str(address)))
+        except (IndexError, ValueError, OSError, TypeError):
+            continue
+    return addresses
+
+
 def _attr(info: Any, name: str) -> Any:
     if info is None:
         return None
@@ -428,7 +494,7 @@ def _property_map(info: Any) -> dict[str, str]:
     result: dict[str, str] = {}
     if isinstance(raw, dict):
         for key, value in raw.items():
-            result[str(key)] = _to_text(value)
+            result[_to_text(key)] = _to_text(value)
     return result
 
 
@@ -450,11 +516,26 @@ def _address_texts(addresses: Any) -> list[str]:
     for address in addresses:
         if isinstance(address, bytes):
             try:
-                import socket
-
-                texts.append(socket.inet_ntoa(address))
+                family = socket.AF_INET if len(address) == 4 else socket.AF_INET6
+                texts.append(socket.inet_ntop(family, address))
                 continue
             except Exception:
                 LOGGER.debug("Failed to convert address %r", address, exc_info=True)
         texts.append(str(address))
     return texts
+
+
+def _service_address_texts(info: Any) -> list[str]:
+    """Read all resolved service addresses across Zeroconf IP versions."""
+
+    for method_name in ("parsed_scoped_addresses", "parsed_addresses"):
+        method = _attr(info, method_name)
+        if callable(method):
+            try:
+                parsed = method()
+            except Exception:
+                LOGGER.debug("Failed to parse service addresses", exc_info=True)
+            else:
+                if parsed:
+                    return [str(address) for address in cast(Iterable[Any], parsed)]
+    return _address_texts(_attr(info, "addresses"))

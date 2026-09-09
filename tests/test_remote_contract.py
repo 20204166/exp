@@ -7,6 +7,11 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+from maintenance.cluster import (
+    ClusterDataError,
+    process_action_result_from_dict,
+    process_action_result_to_dict,
+)
 from maintenance.models import (
     CapabilityState,
     DashboardSnapshot,
@@ -35,6 +40,8 @@ from maintenance.remote import (
     RemoteTransportError,
     ReplayCache,
     SocketRemoteTransport,
+    _recv_frame,
+    _send_frame,
     sign_request,
     sign_response,
     verify_request,
@@ -404,6 +411,55 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
 
 
 class SocketTransportTests(unittest.TestCase):
+    def test_frame_helpers_handle_fragmented_header_and_body(self) -> None:
+        class FragmentedSocket:
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+                self.sent = []
+
+            def recv(self, _length):
+                chunk = self.chunks.pop(0)
+                if len(chunk) <= _length:
+                    return chunk
+                self.chunks.insert(0, chunk[_length:])
+                return chunk[:_length]
+
+            def sendall(self, payload):
+                self.sent.append(payload)
+
+        sender = FragmentedSocket([])
+        _send_frame(sender, b"hello", max_bytes=10)
+        wire = sender.sent[0]
+        receiver = FragmentedSocket([wire[:1], wire[1:3], wire[3:5], wire[5:]])
+
+        self.assertEqual(
+            _recv_frame(
+                receiver,
+                max_bytes=10,
+                closed_message="connection closed before request",
+            ),
+            b"hello",
+        )
+
+    def test_frame_helpers_reject_oversized_payloads(self) -> None:
+        from maintenance.remote import RemoteTransportError
+
+        sender = type("Sender", (), {"sendall": lambda self, _payload: None})()
+        with self.assertRaises(RemoteTransportError):
+            _send_frame(sender, b"1234", max_bytes=3)
+
+        receiver = type(
+            "Receiver",
+            (),
+            {"recv": lambda self, _length: b"\x00\x00\x00\x04"},
+        )()
+        with self.assertRaises(RemoteTransportError):
+            _recv_frame(
+                receiver,
+                max_bytes=3,
+                closed_message="connection closed before request",
+            )
+
     def test_loopback_socket_round_trip(self) -> None:
         service = _service()
         server = RemoteSocketServer(service)
@@ -451,6 +507,22 @@ class SocketTransportTests(unittest.TestCase):
                 client.hello()
         finally:
             server.stop()
+
+
+class ProcessActionCodecTests(unittest.TestCase):
+    def test_process_action_codec_round_trip(self) -> None:
+        result = ProcessActionResult(3, (42,), (43,), ("denied",))
+
+        self.assertEqual(
+            process_action_result_from_dict(process_action_result_to_dict(result)),
+            result,
+        )
+
+    def test_process_action_codec_rejects_missing_or_non_object_payload(self) -> None:
+        payloads: tuple[object, ...] = (None, [], {"requested": 1})
+        for payload in payloads:
+            with self.assertRaises(ClusterDataError):
+                process_action_result_from_dict(payload)
 
 
 def _free_port() -> int:

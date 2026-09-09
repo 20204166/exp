@@ -29,6 +29,7 @@ from maintenance.models import (
     CapabilityState,
     DashboardSnapshot,
     FileCandidate,
+    ProcessActionResult,
     ProcessCandidate,
     ResourceSummary,
 )
@@ -149,6 +150,33 @@ def resource_summary_from_dict(data: Any) -> ResourceSummary:
         capability=state,
         temperatures=tuple(temperature_sample_from_dict(item) for item in temperatures),
     )
+
+
+def process_action_result_to_dict(result: ProcessActionResult) -> dict[str, Any]:
+    """Encode one process-action result for the authenticated wire contract."""
+
+    return {
+        "requested": result.requested,
+        "stopped": list(result.stopped),
+        "force_required": list(result.force_required),
+        "errors": list(result.errors),
+    }
+
+
+def process_action_result_from_dict(data: Any) -> ProcessActionResult:
+    """Decode one process-action result without applying action policy."""
+
+    if not isinstance(data, dict):
+        raise ClusterDataError("process action result must be an object")
+    try:
+        return ProcessActionResult(
+            requested=int(data["requested"]),
+            stopped=tuple(int(pid) for pid in data["stopped"]),
+            force_required=tuple(int(pid) for pid in data["force_required"]),
+            errors=tuple(str(error) for error in data["errors"]),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ClusterDataError("invalid process action result") from error
 
 
 def dashboard_snapshot_to_dict(snapshot: DashboardSnapshot) -> dict[str, Any]:

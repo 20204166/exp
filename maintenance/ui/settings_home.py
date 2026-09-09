@@ -33,7 +33,6 @@ class SettingsHomeCallbacks:
 
     on_back: Callable[[], None]
     on_select_category: Callable[[str], None]
-    on_start_discovery: Callable[[], None] = lambda: None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,24 +126,6 @@ class SettingsHome:
 
         for spec in self.categories:
             self._build_category_card(spec)
-        self._build_discovery_action()
-
-    def _build_discovery_action(self) -> None:
-        _card, self.discovery_button = ui_layout.navigation_card(
-            self.content,
-            "Network discovery",
-            "Start local-network discovery directly without opening Nodes & Connections.",
-            "Start Discovery",
-            self.callbacks.on_start_discovery,
-            frame_cls=self.frame_cls,
-            label_cls=self.label_cls,
-            button_cls=self.button_cls,
-            colors=self.colors,
-            fonts=self.fonts,
-            wraplength=_CARD_WRAP,
-            action_id="settings:discovery:start",
-            button_coordinator=self._button_coordinator,
-        )
 
     def _build_category_card(self, spec: SettingsCategorySpec) -> None:
         _card, button = ui_layout.navigation_card(

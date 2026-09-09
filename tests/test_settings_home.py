@@ -17,7 +17,6 @@ def make_callbacks() -> Any:
     return SettingsHomeCallbacks(
         on_back=Mock(),
         on_select_category=Mock(),
-        on_start_discovery=Mock(),
     )
 
 
@@ -81,14 +80,6 @@ class SettingsHomeTests(unittest.TestCase):
         home.category_button("preferences").kwargs["command"]()
 
         callbacks.on_select_category.assert_called_once_with("preferences")
-
-    def test_discovery_button_invokes_start_discovery(self) -> None:
-        callbacks = make_callbacks()
-        home, _parent, _recorder = make_home(callbacks)
-
-        home.discovery_button.kwargs["command"]()
-
-        callbacks.on_start_discovery.assert_called_once_with()
 
     def test_category_button_registers_stable_action_id_when_coordinator_present(
         self,

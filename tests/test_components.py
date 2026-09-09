@@ -13,16 +13,12 @@ from unittest.mock import Mock, patch
 
 from maintenance.components import (
     BackgroundTaskRunner,
-    ClockCoordinator,
     DownloadScanner,
     DownloadsPathResolver,
     GpuDetector,
-    JobProfile,
-    PressureSnapshot,
     ProcessSafetyPolicy,
     ResourceFeature,
     ResourceFeatureCatalog,
-    ResourceGovernor,
     ScanCancelled,
     ScanCoordinator,
     check_cancelled,
@@ -734,6 +730,12 @@ class ScanCoordinatorTests(unittest.TestCase):
 
 
 class ComponentRefreshSchedulerTests(unittest.TestCase):
+    def test_constructor_rejects_non_positive_intervals(self) -> None:
+        with self.assertRaises(ValueError):
+            ComponentRefreshScheduler({"cpu": 0})
+        with self.assertRaises(ValueError):
+            ComponentRefreshScheduler({"cpu": -1})
+
     def test_begin_claims_due_component_and_blocks_overlap(self) -> None:
         scheduler = ComponentRefreshScheduler({"cpu": 1000})
 
@@ -811,18 +813,15 @@ class ComponentRefreshSchedulerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scheduler.set_interval("cpu", 0, 0.0)
 
-    def test_cancel_clears_in_flight_and_retry_state(self) -> None:
+    def test_cancel_clears_in_flight_and_refresh_state(self) -> None:
         scheduler = ComponentRefreshScheduler({"cpu": 1000})
         self.assertTrue(scheduler.begin("cpu", 0.0))
         scheduler.request_refresh("cpu")
-        scheduler.defer("cpu", 10.0)
 
         scheduler.cancel("cpu")
 
         self.assertFalse(scheduler.in_flight("cpu"))
-        self.assertNotIn("cpu", scheduler._in_flight)
-        self.assertNotIn("cpu", scheduler._refresh_requested)
-        self.assertNotIn("cpu", scheduler._deferred_until)
+        self.assertFalse(scheduler.has_pending_work())
 
     def test_pause_prevents_due_and_new_claims_but_not_running(self) -> None:
         scheduler = ComponentRefreshScheduler({"cpu": 1000})
@@ -873,7 +872,7 @@ class ComponentRefreshSchedulerTests(unittest.TestCase):
         self.assertFalse(scheduler.begin("cpu", 0.5))
         self.assertEqual(scheduler.due_keys(0.5), ())
 
-    def test_request_refresh_while_paused_deferred_until_resume(self) -> None:
+    def test_request_refresh_while_paused_waits_until_resume(self) -> None:
         scheduler = ComponentRefreshScheduler({"cpu": 1000})
         scheduler.pause("cpu")
 
@@ -895,205 +894,6 @@ class ComponentRefreshSchedulerTests(unittest.TestCase):
         scheduler = ComponentRefreshScheduler({"cpu": 1000})
         with self.assertRaises(ValueError):
             scheduler.request_refresh("nope")
-
-
-class ClockCoordinatorTests(unittest.TestCase):
-    def test_begin_keeps_absolute_deadlines_after_long_run(self) -> None:
-        clock = ClockCoordinator({"cpu": 1.0})
-
-        self.assertEqual(clock.due_keys(0.0), ("cpu",))
-        self.assertTrue(clock.begin("cpu", 0.0))
-        clock.finish("cpu")
-
-        self.assertEqual(clock.due_keys(0.5), ())
-        self.assertEqual(clock.due_keys(1.0), ("cpu",))
-
-        self.assertTrue(clock.begin("cpu", 3.2))
-        clock.finish("cpu")
-
-        self.assertEqual(clock.next_deadline(3.2), 4.0)
-        self.assertEqual(clock.due_keys(3.2), ())
-
-    def test_refresh_requests_and_deferrals_are_coalesced(self) -> None:
-        clock = ClockCoordinator({"cpu": 1.0})
-        clock.mark_all_refreshed(10.0)
-
-        clock.request_refresh("cpu")
-        self.assertEqual(clock.due_keys(10.0), ("cpu",))
-        self.assertTrue(clock.begin("cpu", 10.0))
-        clock.finish("cpu")
-
-        clock.defer("cpu", 12.0)
-        self.assertEqual(clock.due_keys(11.0), ())
-        self.assertEqual(clock.next_deadline(11.0), 12.0)
-        self.assertEqual(clock.due_keys(12.0), ("cpu",))
-
-    def test_clock_never_moves_backwards_for_due_calculation(self) -> None:
-        clock = ClockCoordinator({"cpu": 1.0}, clock=lambda: 10.0)
-        clock.mark_all_refreshed(10.0)
-
-        self.assertEqual(clock.next_deadline(9.0), 11.0)
-        self.assertEqual(clock.due_keys(9.0), ())
-
-
-class ResourceGovernorTests(unittest.TestCase):
-    def test_pressure_sampling_runs_off_the_caller_thread(self) -> None:
-        sampler_started = threading.Event()
-        sampler_release = threading.Event()
-        ran_on_main_thread: list[bool] = []
-
-        def sampler() -> PressureSnapshot:
-            ran_on_main_thread.append(
-                threading.current_thread() is threading.main_thread()
-            )
-            sampler_started.set()
-            sampler_release.wait(1)
-            return PressureSnapshot(
-                sampled_at=1.0,
-                memory_percent=40.0,
-                available=True,
-            )
-
-        governor = ResourceGovernor(
-            clock=lambda: 0.0,
-            pressure_sampler=sampler,
-            pressure_sample_seconds=0.0,
-        )
-
-        decision = governor.admit(JobProfile(key="component:cpu", kind="periodic"))
-
-        self.assertTrue(decision.admitted)
-        self.assertTrue(sampler_started.wait(1))
-        self.assertEqual(ran_on_main_thread, [False])
-        sampler_release.set()
-
-    def test_refresh_pressure_recovers_after_partial_missing_metrics(self) -> None:
-        samples = iter(
-            [
-                PressureSnapshot(
-                    sampled_at=1.0,
-                    memory_percent=96.0,
-                    swap_percent=15.0,
-                    rss_bytes=10,
-                    cpu_percent=90.0,
-                    available=True,
-                ),
-                PressureSnapshot(
-                    sampled_at=2.0,
-                    memory_percent=None,
-                    swap_percent=None,
-                    rss_bytes=None,
-                    cpu_percent=None,
-                    available=False,
-                    sample_error="unavailable",
-                ),
-                PressureSnapshot(
-                    sampled_at=3.0,
-                    memory_percent=40.0,
-                    swap_percent=0.0,
-                    rss_bytes=1,
-                    cpu_percent=5.0,
-                    available=True,
-                ),
-            ]
-        )
-        governor = ResourceGovernor(
-            clock=lambda: 0.0,
-            pressure_sampler=lambda: next(samples),
-            pressure_sample_seconds=0.0,
-            memory_enter_percent=90.0,
-            memory_leave_percent=80.0,
-            swap_enter_percent=10.0,
-            swap_leave_percent=5.0,
-            rss_enter_fraction=0.75,
-            rss_leave_fraction=0.65,
-        )
-
-        first = governor.refresh_pressure(1.0)
-        second = governor.refresh_pressure(2.0)
-        third = governor.refresh_pressure(3.0)
-
-        self.assertTrue(first.degraded)
-        self.assertFalse(second.degraded)
-        self.assertFalse(third.degraded)
-        self.assertEqual(first.available, True)
-        self.assertEqual(second.available, False)
-        self.assertEqual(third.available, True)
-
-    def test_pressure_clock_never_moves_backwards(self) -> None:
-        clock_values = iter([10.0, 9.0, 8.0])
-        samples = iter(
-            [
-                PressureSnapshot(
-                    sampled_at=10.0,
-                    memory_percent=40.0,
-                    available=True,
-                ),
-                PressureSnapshot(
-                    sampled_at=9.0,
-                    memory_percent=40.0,
-                    available=True,
-                ),
-            ]
-        )
-        governor = ResourceGovernor(
-            clock=lambda: next(clock_values),
-            pressure_sampler=lambda: next(samples),
-            pressure_sample_seconds=0.0,
-        )
-
-        first = governor.refresh_pressure()
-        second = governor.refresh_pressure()
-
-        self.assertEqual(first.sampled_at, 10.0)
-        self.assertEqual(second.sampled_at, 10.0)
-        self.assertEqual(governor._last_pressure_sample, 10.0)
-
-    def test_background_capacity_reserves_space_for_manual_work(self) -> None:
-        governor = ResourceGovernor(max_active=2, max_periodic=1, manual_reserve=1)
-
-        first = governor.admit(JobProfile(key="component:cpu", kind="periodic"), 0.0)
-        second = governor.admit(
-            JobProfile(key="component:memory", kind="periodic"), 0.0
-        )
-        manual = governor.admit(JobProfile(key="dashboard", kind="manual"), 0.0)
-
-        self.assertTrue(first.admitted)
-        self.assertFalse(second.admitted)
-        self.assertTrue(manual.admitted)
-
-        governor.release("component:cpu")
-        governor.release("dashboard")
-
-    def test_pressure_degrades_periodic_work_without_blocking_manual_work(self) -> None:
-        governor = ResourceGovernor(max_active=2, max_periodic=2, manual_reserve=1)
-        governor._pressure_degraded = True
-        governor._pressure = PressureSnapshot(
-            sampled_at=0.0,
-            degraded=True,
-            available=True,
-        )
-
-        periodic = governor.admit(JobProfile(key="component:cpu", kind="periodic"), 0.0)
-        manual = governor.admit(JobProfile(key="dashboard", kind="manual"), 0.0)
-
-        self.assertFalse(periodic.admitted)
-        self.assertTrue(manual.admitted)
-
-    def test_telemetry_remains_live_under_pressure(self) -> None:
-        governor = ResourceGovernor(max_active=2, max_periodic=2, manual_reserve=1)
-        governor._pressure_degraded = True
-        governor._pressure = PressureSnapshot(
-            sampled_at=0.0,
-            degraded=True,
-            available=True,
-        )
-
-        telemetry = governor.admit(
-            JobProfile(key="component:gpu", kind="telemetry"), 0.0
-        )
-
-        self.assertTrue(telemetry.admitted)
 
 
 class SharedScanHelperTests(unittest.TestCase):

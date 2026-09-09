@@ -67,6 +67,7 @@ class UICoordinator:
         self._generations: dict[str, int] = {}
         self._target_nodes: dict[str, Any | None] = {}
         self._batch_depth = 0
+        self._flushing = False
         self._closed = False
         self.render_requests = 0
         self.render_commits = 0
@@ -181,7 +182,11 @@ class UICoordinator:
                 )
         self.render_requests += 1
 
-        if self._batch_depth == 0 and self._visible.get(intent.target, True):
+        if (
+            self._batch_depth == 0
+            and not self._flushing
+            and self._visible.get(intent.target, True)
+        ):
             self._apply_target(intent.target)
         return True
 
@@ -189,24 +194,28 @@ class UICoordinator:
         if self._closed:
             return
 
-        while True:
-            ready = [
-                (target, pending)
-                for target, pending in self._pending.items()
-                if self._visible.get(target, True)
-                and pending.intent.generation >= self._generations.get(target, 0)
-            ]
-            if not ready:
-                return
-            ready.sort(
-                key=lambda item: (
-                    -item[1].intent.priority,
-                    item[1].intent.target,
+        self._flushing = True
+        try:
+            while True:
+                ready = [
+                    (target, pending)
+                    for target, pending in self._pending.items()
+                    if self._visible.get(target, True)
+                    and pending.intent.generation >= self._generations.get(target, 0)
+                ]
+                if not ready:
+                    return
+                ready.sort(
+                    key=lambda item: (
+                        -item[1].intent.priority,
+                        item[1].intent.target,
+                    )
                 )
-            )
-            target = ready[0][0]
-            if not self._apply_target(target) and target in self._pending:
-                return
+                target = ready[0][0]
+                if not self._apply_target(target) and target in self._pending:
+                    return
+        finally:
+            self._flushing = False
 
     def _apply_target(self, target: str) -> bool:
         pending = self._pending.get(target)

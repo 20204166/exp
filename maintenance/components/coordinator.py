@@ -10,12 +10,27 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from .clock_coordinator import ClockCoordinator
-
 LOGGER = logging.getLogger(__name__)
+
+
+def _make_monotonic_clock(clock: Callable[[], float]) -> Callable[[], float]:
+    """Prevent an injected clock from moving backwards between reads."""
+
+    last = float("-inf")
+
+    def read() -> float:
+        nonlocal last
+        current = float(clock())
+        if current < last:
+            return last
+        last = current
+        return current
+
+    return read
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +62,15 @@ class RefreshIntervals:
         }
 
 
+@dataclass(slots=True)
+class _RefreshEntry:
+    interval: float
+    next_due: float = 0.0
+    in_flight: bool = False
+    paused: bool = False
+    refresh_requested: bool = False
+
+
 class ComponentRefreshScheduler:
     """Track per-component refresh due times and prevent overlapping scans."""
 
@@ -56,48 +80,83 @@ class ComponentRefreshScheduler:
         *,
         clock: Callable[[], float] | None = None,
     ) -> None:
-        self.intervals = (
+        configured_intervals = (
             dict(intervals) if intervals is not None else RefreshIntervals().as_dict()
         )
-        self._clock = clock or time.monotonic
-        self._core = ClockCoordinator(
-            {
-                key: milliseconds / 1000.0
-                for key, milliseconds in self.intervals.items()
-            },
-            clock=self._clock,
-        )
-        self._next_due = self._core._next_due
-        self._in_flight = self._core._in_flight
-        self._paused = self._core._paused
-        self._refresh_requested = self._core._refresh_requested
-        self._deferred_until = self._core._deferred_until
+        for milliseconds in configured_intervals.values():
+            if milliseconds <= 0:
+                raise ValueError("Interval must be positive")
+        self.intervals = configured_intervals
+        self._clock = _make_monotonic_clock(clock or time.monotonic)
+        self._records = {
+            key: _RefreshEntry(interval=milliseconds / 1000.0)
+            for key, milliseconds in self.intervals.items()
+        }
 
     def begin(self, key: str, now: float) -> bool:
-        return self._core.begin(key, now, self.intervals.get(key, 5000) / 1000.0)
+        entry = self._records.get(key)
+        if entry is None:
+            entry = _RefreshEntry(interval=5.0)
+            self._records[key] = entry
+        if entry.in_flight or entry.paused:
+            return False
+        if not self._is_due(entry, now):
+            return False
+        entry.in_flight = True
+        entry.refresh_requested = False
+        if now >= entry.next_due:
+            periods = int((now - entry.next_due) // entry.interval) + 1
+            entry.next_due += periods * entry.interval
+        else:
+            entry.next_due = now + entry.interval
+        return True
 
     def finish(self, key: str) -> None:
-        self._core.finish(key)
+        entry = self._records.get(key)
+        if entry is None:
+            return
+        entry.in_flight = False
 
     def cancel(self, key: str) -> None:
         if key not in self.intervals:
             raise ValueError(f"Unknown component: {key}")
-        self._core.cancel(key)
+        entry = self._entry(key)
+        entry.in_flight = False
+        entry.refresh_requested = False
 
     def mark_all_refreshed(self, now: float) -> None:
-        self._core.mark_all_refreshed(now)
+        for entry in self._records.values():
+            entry.next_due = now + entry.interval
+            entry.refresh_requested = False
 
     def due_keys(self, now: float) -> tuple[str, ...]:
-        return self._core.collect_due(now)
+        return tuple(
+            key for key, entry in self._records.items() if self._is_due(entry, now)
+        )
 
     def collect_due(self, now: float | None = None) -> tuple[str, ...]:
-        return self._core.collect_due(now)
+        resolved_now = self._clock() if now is None else now
+        return self.due_keys(resolved_now)
 
     def next_deadline(self, now: float | None = None) -> float | None:
-        return self._core.next_deadline(now)
+        resolved_now = self._clock() if now is None else now
+        deadlines: list[float] = []
+        for entry in self._records.values():
+            ready_at = self._ready_at(entry, resolved_now)
+            if ready_at is not None:
+                deadlines.append(ready_at)
+        return min(deadlines) if deadlines else None
 
     def in_flight(self, key: str) -> bool:
-        return key in self._in_flight
+        return self._entry(key).in_flight
+
+    def has_pending_work(self) -> bool:
+        """Return whether a component has a lease or coalesced refresh."""
+
+        return any(
+            entry.in_flight or entry.refresh_requested
+            for entry in self._records.values()
+        )
 
     def set_interval(self, key: str, milliseconds: int, now: float) -> None:
         if key not in self.intervals:
@@ -107,30 +166,46 @@ class ComponentRefreshScheduler:
         if milliseconds <= 0:
             raise ValueError("Interval must be positive")
         self.intervals[key] = milliseconds
-        self._core.update_interval(key, milliseconds / 1000.0, now)
+        entry = self._entry(key)
+        entry.interval = milliseconds / 1000.0
+        entry.next_due = now + entry.interval
 
     def pause(self, key: str) -> None:
         if key not in self.intervals:
             raise ValueError(f"Unknown component: {key}")
-        self._core.pause(key)
+        self._entry(key).paused = True
 
     def resume(self, key: str) -> None:
         if key not in self.intervals:
             raise ValueError(f"Unknown component: {key}")
-        self._core.resume(key)
+        self._entry(key).paused = False
 
     def is_paused(self, key: str) -> bool:
-        return key in self._paused
+        return self._entry(key).paused
 
     def request_refresh(self, key: str) -> None:
         if key not in self.intervals:
             raise ValueError(f"Unknown component: {key}")
-        self._core.request_refresh(key)
+        self._entry(key).refresh_requested = True
 
-    def defer(self, key: str, retry_at: float) -> None:
-        if key not in self.intervals:
-            raise ValueError(f"Unknown component: {key}")
-        self._core.defer(key, retry_at)
+    def _entry(self, key: str) -> _RefreshEntry:
+        try:
+            return self._records[key]
+        except KeyError as error:
+            raise ValueError(f"Unknown component: {key}") from error
+
+    @staticmethod
+    def _ready_at(entry: _RefreshEntry, now: float) -> float | None:
+        if entry.paused or entry.in_flight:
+            return None
+        ready_at = entry.next_due
+        if entry.refresh_requested:
+            ready_at = min(ready_at, now)
+        return ready_at
+
+    def _is_due(self, entry: _RefreshEntry, now: float) -> bool:
+        ready_at = self._ready_at(entry, now)
+        return ready_at is not None and ready_at <= now
 
 
 @dataclass
@@ -204,10 +279,6 @@ class AppRunState:
     task_factory: Callable[..., Any] | None = None
 
 
-def _default_runner(worker: Callable[[], None]) -> None:
-    threading.Thread(target=worker, daemon=True).start()
-
-
 class AppCoordinator:
     """Universal per-key shock absorber between background work and the UI.
 
@@ -246,12 +317,20 @@ class AppCoordinator:
         deliver: Callable[[Callable[[], None]], None] | None = None,
         on_activity: Callable[[], None] | None = None,
     ) -> None:
-        self._runner = runner or _default_runner
+        self._executor = (
+            None if runner is not None else ThreadPoolExecutor(max_workers=4)
+        )
+        self._runner = runner or self._submit_default
         self._deliver = deliver or (lambda callback: callback())
         self._on_activity = on_activity
         self._states: dict[str, AppRunState] = {}
         self._discovery: Any = None
         self._discovery_handlers: dict[str, Any] = {}
+
+    def _submit_default(self, worker: Callable[[], None]) -> None:
+        if self._executor is None:
+            raise RuntimeError("default worker executor is unavailable")
+        self._executor.submit(worker)
 
     def state(self, key: str) -> AppRunState:
         return self._states.setdefault(key, AppRunState())
@@ -505,6 +584,13 @@ class AppCoordinator:
 
         for key in tuple(self._states):
             self.cancel(key, cancellation_message)
+
+    def shutdown(self) -> None:
+        """Stop accepting new default worker tasks during application teardown."""
+
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor = None
 
     def in_flight(self, key: str) -> bool:
         state = self._states.get(key)

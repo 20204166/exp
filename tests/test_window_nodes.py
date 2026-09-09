@@ -425,7 +425,7 @@ class WindowNodeSwitchingTests(unittest.TestCase):
 
         window._component_scheduler.request_refresh.assert_called_once_with("cpu")
 
-    def test_cancel_node_operations_retains_running_governor_admissions(self) -> None:
+    def test_cancel_node_operations_preserves_running_operation_state(self) -> None:
         window = _make_window(
             _trusted_context("dev", "Dev Node", cpu_value="dev", host_label="dev")
         )
@@ -436,7 +436,6 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         ]
         window._coordinator = Mock()
         window._coordinator.in_flight.return_value = True
-        window._resource_governor = Mock()
 
         window._cancel_node_operations(dev)
 
@@ -446,7 +445,6 @@ class WindowNodeSwitchingTests(unittest.TestCase):
                 call(node_operation_key(NodeId("dev"), "component:gpu")),
             ]
         )
-        window._resource_governor.release.assert_not_called()
 
     def test_switch_to_unscanned_node_clears_dashboard_cards(self) -> None:
         window = _make_window(

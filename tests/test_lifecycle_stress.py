@@ -43,10 +43,7 @@ class ComponentRefreshSchedulerStressTests(unittest.TestCase):
             elif operation == 6:
                 scheduler.mark_all_refreshed(now)
 
-            self.assertTrue(scheduler._in_flight <= keys)
-            self.assertTrue(scheduler._paused <= keys)
-            self.assertTrue(scheduler._refresh_requested <= keys)
-            self.assertLessEqual(len(scheduler._next_due), len(keys))
+            self.assertTrue(all(key in keys for key in scheduler.intervals))
             self.assertEqual(len(scheduler.intervals), len(keys))
 
         # finish is idempotent and never leaves a stale in-flight lease.
@@ -56,7 +53,7 @@ class ComponentRefreshSchedulerStressTests(unittest.TestCase):
             self.assertTrue(scheduler.begin("cpu", 0.0))
             scheduler.finish("cpu")
             scheduler.finish("cpu")
-        self.assertNotIn("cpu", scheduler._in_flight)
+        self.assertFalse(scheduler.in_flight("cpu"))
 
     def test_stuck_component_does_not_block_others(self) -> None:
         scheduler = ComponentRefreshScheduler()
@@ -70,7 +67,7 @@ class ComponentRefreshSchedulerStressTests(unittest.TestCase):
                 if scheduler.begin(key, float(cycle)):
                     cycles[key] += 1
 
-        self.assertIn("cpu", scheduler._in_flight)
+        self.assertTrue(scheduler.in_flight("cpu"))
         self.assertGreater(cycles["memory"], 150)
         self.assertGreater(cycles["storage"], 150)
 

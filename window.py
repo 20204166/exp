@@ -21,9 +21,7 @@ from maintenance.cluster import (
 )
 from maintenance.components import (
     DOWNLOADS_SCAN_CANCELLED,
-    JobProfile,
     ResourceFeatureCatalog,
-    ResourceGovernor,
     ScanCoordinator,
 )
 from maintenance.components.coordinator import (
@@ -174,8 +172,6 @@ class AppWindow:
             deliver=self._submit_ui,
             on_activity=self._start_background_poll,
         )
-        self._resource_governor = ResourceGovernor()
-        self._resource_governor.request_pressure_sample()
         self._component_scheduler = ComponentRefreshScheduler(
             self._preferences.refresh_intervals.as_dict()
         )
@@ -580,22 +576,12 @@ class AppWindow:
             callbacks=ui_settings_home.SettingsHomeCallbacks(
                 on_back=self._show_dashboard_page,
                 on_select_category=self._on_select_settings_category,
-                on_start_discovery=self._start_discovery_from_settings,
             ),
             categories=self._settings_categories(),
             version=__version__,
             button_coordinator=self._button_coordinator,
         )
         return self.settings_frame
-
-    def _start_discovery_from_settings(self) -> None:
-        """Enable and start local discovery from the Settings home page."""
-
-        if not self._cluster_state.discovery_enabled:
-            self._apply_discovery_enabled(True)
-            return
-        self._start_discovery()
-        self._show_nodes_page()
 
     def _settings_categories(self) -> list[ui_settings_home.SettingsCategorySpec]:
         return [
@@ -762,6 +748,7 @@ class AppWindow:
             callbacks=ui_nodes.NodesConnectionsCallbacks(
                 on_back=self._show_settings_page,
                 on_discovery_toggle=self._apply_discovery_enabled,
+                on_start_discovery=self._start_discovery_from_nodes,
                 on_pair=self._pair_discovered_node,
                 on_reject=self._reject_discovered_node,
                 on_rename=self._rename_node,
@@ -780,6 +767,14 @@ class AppWindow:
             button_coordinator=self._button_coordinator,
         )
         return self.nodes_frame
+
+    def _start_discovery_from_nodes(self) -> None:
+        """Enable and start local discovery from Nodes & Connections."""
+
+        if not self._cluster_state.discovery_enabled:
+            self._apply_discovery_enabled(True)
+            return
+        self._start_discovery()
 
     def _nodes_peer_specs(self) -> list[ui_nodes.DiscoveredPeerSpec]:
         registry = self.__dict__.get("_node_registry")
@@ -1677,6 +1672,7 @@ class AppWindow:
             return
         state = self.__dict__.get("_cluster_state")
         if state is not None and not state.discovery_enabled:
+            self._nodes_status("Discovery disabled")
             return
         if state is not None and not state.local_identity_persisted:
             try:
@@ -1717,11 +1713,18 @@ class AppWindow:
             on_lost=self._on_discovered_lost,
         )
         if started:
+            self._nodes_status("Discovery running - no peers found")
             self._discovery_tick_id = self._schedule_timer(
                 int(REAP_TICK_SECONDS * 1000),
                 self._tick_discovery,
             )
             self._start_background_poll()
+        else:
+            reason = discovery.unavailable_reason or "unknown error"
+            if discovery.available:
+                self._nodes_error(f"Discovery error: {reason}")
+            else:
+                self._nodes_error(f"Discovery backend unavailable: {reason}")
 
     def _tick_discovery(self) -> None:
         self._discovery_tick_id = None
@@ -1771,6 +1774,10 @@ class AppWindow:
                     discovered_candidates=registry.discovered_candidates(),
                 ),
             )
+            count = len(registry.discovered_candidates())
+            self._nodes_status(
+                f"Discovery running - {count} peer{'s' if count != 1 else ''} found"
+            )
             if trusted_updated:
                 try:
                     descriptor = registry.context(
@@ -1817,6 +1824,12 @@ class AppWindow:
                 if registry is not None
                 else (),
             ),
+        )
+        count = len(registry.discovered_candidates()) if registry is not None else 0
+        self._nodes_status(
+            f"Discovery running - {count} peers found"
+            if count != 1
+            else "Discovery running - 1 peer found"
         )
 
     def _sync_trusted_node_endpoint(self, candidate: Any) -> bool:
@@ -2097,26 +2110,7 @@ class AppWindow:
         task: Callable[[], DashboardSnapshot],
         on_success: Callable[[DashboardSnapshot], None] | None = None,
         on_error: Callable[[str], None] | None = None,
-        *,
-        job_profile: JobProfile | None = None,
-        retry_callback: Callable[[], None] | None = None,
-        admitted: bool = False,
     ) -> bool:
-        governor = self.__dict__.get("_resource_governor")
-        decision = (
-            governor.admit(job_profile, time.monotonic())
-            if governor is not None and job_profile is not None and not admitted
-            else None
-        )
-        if decision is not None and not decision.admitted:
-            if (
-                retry_callback is not None
-                and decision.retry_at is not None
-                and not self._is_closing
-            ):
-                delay = max(0, int((decision.retry_at - time.monotonic()) * 1000))
-                self._schedule_timer(delay, retry_callback)
-            return False
         self._set_busy(True)
         self._background_tasks += 1
         self._start_background_poll()
@@ -2124,8 +2118,6 @@ class AppWindow:
         error_callback = on_error or self._show_error
 
         def finish_on_ui() -> None:
-            if governor is not None and job_profile is not None:
-                governor.release(job_profile.key)
             self._background_tasks = max(0, self._background_tasks - 1)
             self._resolve_completed_worker()
 
@@ -2233,28 +2225,8 @@ class AppWindow:
         source_provider = (
             source_context.provider if source_context is not None else self.analyzer
         )
-        governor = self.__dict__.get("_resource_governor")
-        job_profile = JobProfile(
-            key=self._operation_key("dashboard"),
-            kind="manual",
-            node_id=str(source_node_id) if source_node_id is not None else None,
-            priority=10,
-        )
-        admission = (
-            governor.admit(job_profile, time.monotonic())
-            if governor is not None
-            else None
-        )
-        if admission is not None and not admission.admitted:
-            if admission.retry_at is not None and not self._is_closing:
-                delay = max(0, int((admission.retry_at - time.monotonic()) * 1000))
-                self._schedule_timer(delay, self.handle_analyze)
-            return
-
         generation, started = scan_state.begin()
         if not started:
-            if admission is not None and admission.admitted and governor is not None:
-                governor.release(job_profile.key)
             return
         coordinator = self._render_coordinator()
         if coordinator is not None:
@@ -2333,9 +2305,6 @@ class AppWindow:
             dashboard_task,
             on_success=queue_snapshot,
             on_error=queue_error,
-            job_profile=job_profile,
-            retry_callback=self.handle_analyze,
-            admitted=True,
         )
 
     def _claim_scan_resolution(self, generation: int) -> tuple[bool, bool]:
@@ -2754,11 +2723,7 @@ class AppWindow:
             getattr(self, "snapshot", None) is None
             or self.__dict__.get("_full_snapshot_applied_at") is None
         ):
-            has_pending = bool(
-                getattr(scheduler, "_refresh_requested", ())
-                or getattr(scheduler, "_deferred_until", {})
-                or getattr(scheduler, "_in_flight", ())
-            )
+            has_pending = scheduler.has_pending_work()
             if deadline is None:
                 return None if has_pending else self.COMPONENT_POLL_MILLISECONDS
             if deadline > now:
@@ -2806,30 +2771,7 @@ class AppWindow:
         if coordinator_active and scheduler_active:
             source_scheduler.request_refresh(key)
             return
-        governor = self.__dict__.get("_resource_governor")
-        admission = (
-            governor.admit(
-                JobProfile(
-                    key=operation_key,
-                    # Card telemetry remains live under pressure; the governor
-                    # still applies its active-job and per-node capacity limits.
-                    kind="telemetry",
-                    node_id=str(source_node_id) if source_node_id is not None else None,
-                    priority=1,
-                ),
-                time.monotonic(),
-            )
-            if governor is not None
-            else None
-        )
-        if admission is not None and not admission.admitted:
-            retry_at = admission.retry_at or (time.monotonic() + 0.5)
-            source_scheduler.defer(key, retry_at)
-            self._schedule_component_poll(force=True)
-            return
         if not source_scheduler.begin(key, time.monotonic()):
-            if admission is not None and admission.admitted and governor is not None:
-                governor.release(operation_key)
             return
 
         started_at = time.monotonic()
@@ -2848,8 +2790,6 @@ class AppWindow:
 
         def finish_component() -> None:
             source_scheduler.finish(key)
-            if governor is not None:
-                governor.release(operation_key)
             self._schedule_component_poll(force=True)
 
         def queue_component_snapshot(resource: ResourceSummary) -> None:
@@ -2906,8 +2846,6 @@ class AppWindow:
             # scheduler lease and retry after the existing worker settles.
             source_scheduler.finish(key)
             source_scheduler.request_refresh(key)
-            if governor is not None:
-                governor.release(operation_key)
             self._schedule_component_poll(force=True)
 
     def _queue_component_result(
@@ -3361,6 +3299,7 @@ class AppWindow:
         coordinator = self.__dict__.get("_coordinator")
         if coordinator is not None:
             coordinator.cancel_all()
+            coordinator.shutdown()
         self._cancel_all_node_operations()
         cluster_page = getattr(self, "cluster_page", None)
         if cluster_page is not None:

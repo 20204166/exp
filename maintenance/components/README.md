@@ -110,19 +110,6 @@ name requires updating `__all__` (enforced by `tests/test_package_structure.py`)
   `zeroconf` is installed with the application. Its missing-module fallback
   keeps incomplete source environments running as a single-node application.
 
-### `clock_coordinator.py` — cadence and admission policy
-- `JobProfile` — work profile used by the admission policy (`key`, `kind`,
-  `node_id`, `priority`, `estimated_cost`).
-- `AdmissionDecision` — `admit()`, `defer(retry_at, reason)`, or
-  `drop(reason)` result from the governor.
-- `PressureSnapshot` — sampled resource-pressure data used by admission.
-- `ClockCoordinator` — absolute monotonic deadline tracker for periodic work;
-  coalesces refresh requests, preserves configured intervals, supports
-  pause/resume/defer, and exposes the next wakeup time.
-- `ResourceGovernor` — bounded admission policy for background work. It tracks
-  active jobs, per-node capacity, and best-effort pressure sampling, and
-  returns `AdmissionDecision` values without executing work itself.
-
 ### `coordinator.py` — dashboard scan coordination
 - `class ScanCoordinator` — tracks the live dashboard scan: `begin()` returns
   `(generation, started)` and queues a single rerun while active; `finish()`
@@ -132,8 +119,8 @@ name requires updating `__all__` (enforced by `tests/test_package_structure.py`)
 - `class RefreshIntervals` — shared per-component refresh intervals
   (milliseconds): CPU/Network 1000, Memory 5000, GPU 3000, Storage/Battery
   30000 (chosen from measured scan cost and how quickly each metric changes).
-- `class ComponentRefreshScheduler` — per-component due-time tracking backed
-  by `ClockCoordinator`, with an in-flight flag per component so the same
+- `class ComponentRefreshScheduler` — per-component monotonic due-time tracking
+  with an in-flight flag per component so the same
   scanner never overlaps and a slow or failing component never delays the
   others; `mark_all_refreshed(now)` pushes every component past its interval
   after a full snapshot. Preferences drive live reconfiguration through
@@ -142,8 +129,9 @@ name requires updating `__all__` (enforced by `tests/test_package_structure.py`)
   pausing never cancels an in-flight worker, and coalesced refresh requests
   become due once the component is free/resumed.
 - `class AppCoordinator` — the universal per-key "shock absorber" between
-  slow background work and the Tkinter UI thread (dependency-composed: the
-  caller injects its own worker runner and UI delivery). `run(key,
+  slow background work and the Tkinter UI thread (with an optional injected
+  runner, otherwise a bounded four-worker executor, and injected UI delivery).
+  `run(key,
   task_factory, on_result=..., on_error=..., on_progress=...)` coalesces
   duplicate triggers into one in-flight run plus one pending rerun, caches the
   last good result for instant `last_result` retrieval, cancels cooperatively

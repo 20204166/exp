@@ -8,8 +8,6 @@ from unittest.mock import Mock, patch
 
 from maintenance.components import (
     DOWNLOADS_SCAN_CANCELLED,
-    AdmissionDecision,
-    JobProfile,
     ResourceFeatureCatalog,
     ScanCancelled,
     ScanCoordinator,
@@ -688,47 +686,6 @@ class AppWindowTests(unittest.TestCase):
         self.assertEqual(len(received), 1)
         self.assertIsInstance(received[0], RuntimeError)
 
-    def test_run_in_background_defers_when_governor_rejects(self) -> None:
-        window = self.make_window()
-        window._resource_governor = Mock()
-        window._resource_governor.admit.return_value = AdmissionDecision.defer(
-            102.0, "pressure"
-        )
-        window._schedule_timer = Mock()
-        window._run_daemon = Mock()
-        window._set_busy = Mock()
-        retry = Mock()
-
-        with patch("window.time.monotonic", return_value=100.0):
-            started = window._run_in_background(
-                lambda: None,
-                job_profile=JobProfile(key="dashboard"),
-                retry_callback=retry,
-            )
-
-        self.assertFalse(started)
-        window._set_busy.assert_not_called()
-        window._run_daemon.assert_not_called()
-        window._schedule_timer.assert_called_once_with(2000, retry)
-
-    def test_launch_component_scan_defers_when_governor_rejects(self) -> None:
-        window = self.make_window()
-        window.analyzer = Mock()
-        window._resource_governor = Mock()
-        window._resource_governor.admit.return_value = AdmissionDecision.defer(
-            105.0, "pressure"
-        )
-        window._coordinator = Mock()
-        window._coordinator.in_flight.return_value = False
-        window._schedule_component_poll = Mock()
-
-        with patch("window.time.monotonic", return_value=100.0):
-            window._launch_component_scan("cpu")
-
-        window._coordinator.run.assert_not_called()
-        self.assertEqual(window._component_scheduler._deferred_until["cpu"], 105.0)
-        window._schedule_component_poll.assert_called_once_with(force=True)
-
     def test_cancel_analysis_sets_cancel_event(self) -> None:
         window = self.make_window()
         window._analysis_cancel_event = threading.Event()
@@ -1035,7 +992,7 @@ class SettingsIntegrationTests(unittest.TestCase):
         window._on_card_visibility_change("network", True)
 
         self.assertFalse(window._component_scheduler.is_paused("network"))
-        self.assertTrue("network" in window._component_scheduler._refresh_requested)
+        self.assertIn("network", window._component_scheduler.due_keys(1.0))
 
     def test_unsupported_capability_auto_hides_and_pauses(self) -> None:
         window = AppWindowTests.make_window()

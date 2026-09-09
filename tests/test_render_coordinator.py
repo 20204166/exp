@@ -105,6 +105,32 @@ class UICoordinatorTests(unittest.TestCase):
         self.assertEqual(coordinator.pending_count, 0)
         self.assertEqual(coordinator.render_commits, 1)
 
+    def test_requests_during_flush_wait_for_the_same_batch(self) -> None:
+        coordinator = UICoordinator()
+        received: list[str] = []
+
+        def apply_dashboard(_intent: RenderIntent) -> None:
+            received.append("dashboard")
+            coordinator.request(
+                RenderIntent(
+                    target="thermals",
+                    payload="latest",
+                    payload_set=True,
+                ),
+                lambda intent: received.append(str(intent.payload)),
+            )
+
+        coordinator.begin_batch()
+        coordinator.request(
+            RenderIntent(target="dashboard", payload_set=True),
+            apply_dashboard,
+        )
+        coordinator.end_batch()
+
+        self.assertEqual(received, ["dashboard", "latest"])
+        self.assertEqual(coordinator.pending_count, 0)
+        self.assertEqual(coordinator.render_commits, 2)
+
     def test_shutdown_clears_pending_and_rejects_later_requests(self) -> None:
         coordinator = UICoordinator()
         received: list[str] = []
