@@ -107,7 +107,7 @@ if [ "$mode" = "system" ]; then
   fi
 else
   echo "Installing into the user environment (no venv)..."
-  clean_installed_package "$py"
+  clean_user_installed_package "$py"
   install_pip "$py" -m pip install --user "${reinstall_flag[@]}" "$wheel"
   verify_installed "$py" "$(wheel_version "$wheel")"
   bin_dir="$("$py" -c 'import sysconfig;print(sysconfig.get_path("scripts", scheme="posix_user"))' 2>/dev/null || echo "$HOME/.local/bin")"

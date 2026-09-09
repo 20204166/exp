@@ -87,7 +87,7 @@ clean_installed_package() {
   for attempt in 1 2 3; do
     if ! "$py" -m pip show system-analyzer >/dev/null 2>&1; then return 0; fi
     echo "Removing existing system-analyzer distribution (pass $attempt)..."
-    "$py" -m pip uninstall -y system-analyzer
+    uninstall_pip "$py" -m pip uninstall -y system-analyzer
   done
   "$py" -m pip show system-analyzer >/dev/null 2>&1 && {
     echo "ERROR: could not remove every system-analyzer distribution" >&2
@@ -95,7 +95,51 @@ clean_installed_package() {
   }
 }
 
-clean_installed_package
+clean_user_installed_package() {
+  local attempt
+  for attempt in 1 2 3; do
+    if ! "$py" - <<'PY' >/dev/null 2>&1
+import importlib.metadata as metadata
+import pathlib
+import site
+
+try:
+    root = pathlib.Path(metadata.distribution("system-analyzer").locate_file(""))
+except metadata.PackageNotFoundError:
+    raise SystemExit(1)
+user_root = pathlib.Path(site.getusersitepackages())
+raise SystemExit(0 if root == user_root or user_root in root.parents else 1)
+PY
+    then return 0; fi
+    echo "Removing existing user system-analyzer distribution (pass $attempt)..."
+    uninstall_pip "$py" -m pip uninstall -y system-analyzer
+  done
+  if "$py" - <<'PY' >/dev/null 2>&1
+import importlib.metadata as metadata
+import pathlib
+import site
+
+try:
+    root = pathlib.Path(metadata.distribution("system-analyzer").locate_file(""))
+except metadata.PackageNotFoundError:
+    raise SystemExit(1)
+user_root = pathlib.Path(site.getusersitepackages())
+raise SystemExit(0 if root == user_root or user_root in root.parents else 1)
+PY
+  then
+    echo "ERROR: could not remove every user system-analyzer distribution" >&2
+    return 1
+  fi
+}
+
+uninstall_pip() {
+  local err; err="$(mktemp)"
+  if "$@" --break-system-packages 2>"$err"; then rm -f "$err"; return 0; fi
+  if grep -qi "no such option" "$err"; then rm -f "$err"; "$@"; return $?; fi
+  cat "$err" >&2; rm -f "$err"; return 1
+}
+
+clean_user_installed_package
 install_pip "$py" -m pip install --user "${reinstall_flag[@]}" "$tmp/$wheel"
 expected_version="${wheel#system_analyzer-}"
 expected_version="${expected_version%-py3-none-any.whl}"

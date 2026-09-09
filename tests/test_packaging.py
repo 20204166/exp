@@ -155,10 +155,13 @@ class BuildScriptReliabilityTests(unittest.TestCase):
         install_user = (REPO / "install" / "install-user.sh").read_text()
         online = (REPO / "install" / "install-online.sh").read_text()
         self.assertIn("clean_installed_package", common)
+        self.assertIn("clean_user_installed_package", common)
         self.assertIn("verify_installed", common)
         self.assertIn('clean_installed_package "$py"', install_user)
         self.assertIn('verify_installed "$py"', install_user)
         self.assertIn("clean_installed_package", online)
+        self.assertIn("uninstall_pip", common)
+        self.assertIn("uninstall_pip", online)
         self.assertIn("--force-reinstall", install_user)
         self.assertIn("--force-reinstall", online)
 
