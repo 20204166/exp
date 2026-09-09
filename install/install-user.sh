@@ -94,6 +94,17 @@ if [ "$mode" = "system" ]; then
   fi
   [ -x "$launcher" ] || { echo "Install completed but launcher was not found at $launcher" >&2; exit 1; }
   echo "Installed. Console scripts are in: $bin_dir"
+  user_bin_dir="$($py -c 'import sysconfig;print(sysconfig.get_path("scripts", scheme="posix_user"))' 2>/dev/null || true)"
+  case ":${PATH}:" in
+    *":${user_bin_dir}:"*)
+      # Keep an already-cached user-bin command path valid after replacing a
+      # per-user install with the machine-wide one.
+      if [ -n "$user_bin_dir" ] && [ "$user_bin_dir" != "$bin_dir" ]; then
+        mkdir -p "$user_bin_dir"
+        ln -sfn "$launcher" "$user_bin_dir/system-analyzer"
+      fi
+      ;;
+  esac
   if echo "$PATH" | tr ':' '\n' | grep -qx "$bin_dir"; then
     echo "Launcher found on PATH. Run: system-analyzer"
   else
