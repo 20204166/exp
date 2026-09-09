@@ -309,6 +309,8 @@ def revoke_trusted_node(controller: Any, node_id: str) -> None:
         return
     node = NodeId(node_id)
     try:
+        previous_context = registry.context(node)
+        previous_selected = registry.selected_id() == node
         registry.revoke_trusted(node)
     except (KeyError, ValueError) as error:
         controller._nodes_error(str(error))
@@ -329,6 +331,9 @@ def revoke_trusted_node(controller: Any, node_id: str) -> None:
         ),
     )
     if not controller._save_cluster_state(state):
+        registry.register_context(previous_context)
+        if previous_selected:
+            registry.select(node)
         controller._nodes_error("Cluster settings could not be saved")
         return
     getattr(controller, "_manual_host_ids", set()).discard(node_id)
