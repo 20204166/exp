@@ -54,6 +54,7 @@ FONTS: dict[str, Font] = {
     "ui": ("Helvetica",),
     "title": ("Helvetica", 24, "bold"),
     "section": ("Helvetica", 14, "bold"),
+    "node": ("Helvetica", 9, "bold"),
     "body": ("Helvetica", 10),
     "button": ("Helvetica", 11, "bold"),
     "danger_button": ("Helvetica", 10, "bold"),
@@ -197,7 +198,7 @@ def configure_app_styles(
         STYLE_NODE,
         background=c["background"],
         foreground=c["secondary"],
-        font=("Helvetica", 9, "bold"),
+        font=f["node"],
     )
     style.configure(
         STYLE_HEALTHY,
@@ -216,9 +217,9 @@ def configure_app_styles(
         background=c["accent"],
         foreground="#FFFFFF",
         font=f["button"],
-        padding=(18, 11),
+        padding=(16, 9),
         borderwidth=0,
-        focusthickness=0,
+        focusthickness=2,
         focuscolor=c["accent"],
     )
     style.map(
@@ -234,7 +235,10 @@ def configure_app_styles(
         background=c["danger"],
         foreground="#FFFFFF",
         font=f["danger_button"],
-        padding=(12, 8),
+        padding=(12, 7),
+        borderwidth=0,
+        focusthickness=2,
+        focuscolor=c["danger"],
     )
     style.map(
         STYLE_DANGER_BUTTON,
@@ -245,7 +249,10 @@ def configure_app_styles(
         background=c["button_bg"],
         foreground=c["text"],
         font=f["danger_button"],
-        padding=(12, 8),
+        padding=(12, 7),
+        borderwidth=0,
+        focusthickness=2,
+        focuscolor=c["accent"],
         bordercolor=c["border"],
     )
     style.map(

@@ -190,8 +190,8 @@ class ThermalsPage:
         if signature == self._last_event_signature:
             return
         self._last_event_signature = signature
-        for row in self._event_rows:
-            row.destroy()
+        if self._events_body is not None:
+            ui_layout.clear_children(self._events_body)
         self._event_rows.clear()
 
         if self._events_body is None:

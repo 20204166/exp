@@ -11,6 +11,10 @@ try {
     $line = Get-Content $sumsPath | Where-Object { $_.Trim() } | Select-Object -Last 1
     $parts = $line -split "\s+"; $expected = $parts[0]; $wheel = $parts[1]
     $wheelPath = Join-Path $tmp $wheel
+    if ($wheel -notmatch "^system_analyzer-(\d+\.\d+\.\d+\.\d+)-py3-none-any\.whl$") {
+        throw "Unexpected wheel filename: $wheel"
+    }
+    $expectedVersion = $matches[1]
     Invoke-WebRequest "$base/$wheel" -OutFile $wheelPath
     $actual = (Get-FileHash $wheelPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -ne $expected) { throw "Wheel checksum mismatch" }
@@ -44,11 +48,34 @@ try {
         throw "System Analyzer requires Python 3.10 or newer. Deactivate any active virtual environment (or run outside it) and retry."
     }
     if (Test-VenvPython $py) { throw "Cannot install: '$($py -join ' ')' is inside a virtual environment (pip disables '--user' inside venvs). Deactivate the venv and retry." }
+    if ($env:VIRTUAL_ENV) {
+        Write-Warning "Active virtual environment '$env:VIRTUAL_ENV' was not modified. This online installer targets the system/user interpreter. Use install.ps1 -Python <venv-python> to update the active venv."
+    }
     $pipArgs = @("-m", "pip", "install", "--force-reinstall")
     if (-not $System) { $pipArgs += "--user" }
     $pipArgs += @("--break-system-packages", $wheelPath)
     & $py @pipArgs
     if ($LASTEXITCODE -ne 0) { throw "pip install failed (exit $LASTEXITCODE)" }
+
+    $verify = @'
+import importlib.metadata as metadata
+import sys
+
+expected = sys.argv[1]
+actual = metadata.version("system-analyzer")
+if actual != expected:
+    raise SystemExit(f"installed version {actual} does not match wheel version {expected}")
+import maintenance
+import window
+print(f"Installed system-analyzer {actual}")
+print(f"  maintenance: {maintenance.__file__}")
+print(f"  window: {window.__file__}")
+'@
+    $driveRoot = [System.IO.Path]::GetPathRoot((Get-Location).Path)
+    Push-Location $driveRoot
+    try { & $py -c $verify $expectedVersion } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { throw "installed wheel verification failed" }
+
     if ($System) {
         $launcherCmd = Get-Command system-analyzer -ErrorAction SilentlyContinue
         if ($launcherCmd) {

@@ -232,7 +232,7 @@ class NodesConnectionsPage:
     def refresh_discovered(self, specs: list[DiscoveredPeerSpec]) -> None:
         self._discovered = {spec.node_id: spec for spec in specs}
         self._clear_actions("nodes:peer:")
-        self._clear(self._discovered_body)
+        ui_layout.clear_children(self._discovered_body)
         if not specs:
             self._empty_hint(self._discovered_body, "No peers discovered yet.")
             return
@@ -302,7 +302,7 @@ class NodesConnectionsPage:
     def refresh_trusted(self, specs: list[TrustedNodeSpec]) -> None:
         self._trusted = {spec.node_id: spec for spec in specs}
         self._clear_actions("nodes:trusted:")
-        self._clear(self._trusted_body)
+        ui_layout.clear_children(self._trusted_body)
         if not specs:
             self._empty_hint(self._trusted_body, "No trusted nodes yet.")
             return
@@ -497,7 +497,7 @@ class NodesConnectionsPage:
     def refresh_manual(self, specs: list[TrustedNodeSpec]) -> None:
         self._manual = {spec.node_id: spec for spec in specs}
         self._clear_actions("nodes:manual:")
-        self._clear(self._manual_hosts_body)
+        ui_layout.clear_children(self._manual_hosts_body)
         if not specs:
             self._empty_hint(self._manual_hosts_body, "No manual hosts configured.")
             return
@@ -555,11 +555,6 @@ class NodesConnectionsPage:
             self.show_error("Name and host are required for a manual host")
             return
         self.callbacks.on_add_manual_host(name, host, port)
-
-    @staticmethod
-    def _clear(body: Any) -> None:
-        for child in tuple(body.winfo_children()):
-            child.destroy()
 
     def _clear_actions(self, prefix: str) -> None:
         coordinator = self._button_coordinator

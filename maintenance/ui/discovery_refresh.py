@@ -10,6 +10,44 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 
+def post_discovery_refresh(
+    *,
+    coordinator: Any,
+    key: str,
+    page: Any | None,
+    get_peer_specs: Callable[[], Sequence[Any]],
+    get_trusted_specs: Callable[[], Sequence[Any]],
+    should_refresh_trusted: Callable[[], bool],
+    refresh_cluster_page: Callable[[], None],
+    status_label: Any | None,
+    get_discovered_candidates: Callable[[], Sequence[Any]],
+    visible: bool = True,
+    is_active: Callable[[], bool] | None = None,
+) -> None:
+    """Coalesce only the presentation of the current discovery state."""
+
+    def render() -> None:
+        if is_active is not None and not is_active():
+            return
+        refresh_trusted = should_refresh_trusted()
+        refresh_discovery_views(
+            page=page,
+            peer_specs=get_peer_specs(),
+            trusted_specs=get_trusted_specs(),
+            refresh_trusted=refresh_trusted,
+            refresh_cluster_page=refresh_cluster_page,
+            status_label=status_label,
+            discovered_candidates=get_discovered_candidates(),
+        )
+
+    if visible:
+        coordinator.post_coalesced(key, render)
+    else:
+        # Keep the latest render trigger, but do not touch hidden widgets. The
+        # registry and trusted-state mutations happen before this helper.
+        coordinator.defer(key, lambda: coordinator.post_coalesced(key, render))
+
+
 def refresh_discovery_views(
     *,
     page: Any | None,

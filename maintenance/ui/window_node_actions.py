@@ -579,6 +579,7 @@ def activate_remote_node(
         context.scheduler = scheduler_cls()
         context.coordinator = controller._coordinator
         controller._refresh_nodes_page()
+        controller._refresh_cluster_page()
         controller._rebuild_node_selector()
         controller._switch_selected_node(node_id)
         controller._show_dashboard_page()

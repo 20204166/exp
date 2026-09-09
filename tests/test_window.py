@@ -107,6 +107,19 @@ class AppWindowTests(unittest.TestCase):
         callback.assert_called_once_with("payload")
         self.assertEqual(window._background_tasks, 0)
 
+    def test_background_service_resolves_delivery_hook_at_dispatch_time(self) -> None:
+        window = self.make_window()
+        window._background_service()
+        delivered = Mock()
+        window._invoke_delivered = delivered
+        callback = Mock()
+        window._background_queue.put((callback, ("payload",)))
+
+        window._drain_background_queue()
+
+        delivered.assert_called_once()
+        callback.assert_not_called()
+
     def test_background_queue_ignores_late_payload_after_close(self) -> None:
         window = self.make_window()
         window._is_closing = True
@@ -235,6 +248,56 @@ class AppWindowTests(unittest.TestCase):
             window.master.scheduled[-1][0],
             AppWindow.COMPONENT_POLL_MILLISECONDS,
         )
+
+    def test_hidden_non_urgent_component_refresh_is_deferred_until_visible(
+        self,
+    ) -> None:
+        window = self.make_window()
+        window._launch_component_scan = Mock()
+        window._component_scheduler = ComponentRefreshScheduler({"cpu": 1000})
+        window._page_router = Mock()
+        window._page_router.is_mapped.return_value = False
+
+        window._run_component_cycle()
+        window._run_component_cycle()
+
+        window._launch_component_scan.assert_not_called()
+
+        window._page_router.is_mapped.return_value = True
+        window._coordinator.flush_deferred("component:cpu")
+
+        window._launch_component_scan.assert_called_once_with("cpu")
+
+    def test_repeated_hidden_component_cycles_do_not_schedule_immediate_timers(
+        self,
+    ) -> None:
+        window = self.make_window()
+        window._launch_component_scan = Mock()
+        window._component_scheduler = ComponentRefreshScheduler({"cpu": 1000})
+        window._page_router = Mock()
+        window._page_router.is_mapped.return_value = False
+
+        for _ in range(20):
+            window._run_component_cycle()
+
+        delays = [entry[0] for entry in window.master.scheduled]
+        self.assertEqual(len(delays), 20)
+        self.assertNotIn(0, delays)
+        self.assertTrue(
+            all(delay == AppWindow.COMPONENT_POLL_MILLISECONDS for delay in delays)
+        )
+        window._launch_component_scan.assert_not_called()
+
+    def test_explicit_visible_component_refresh_starts_immediately(self) -> None:
+        window = self.make_window()
+        window._launch_component_scan = Mock()
+        window._component_scheduler = ComponentRefreshScheduler({"cpu": 1000})
+        window._page_router = Mock()
+        window._page_router.is_mapped.return_value = True
+
+        window._run_component_cycle()
+
+        window._launch_component_scan.assert_called_once_with("cpu")
 
     def test_switch_selected_node_cancels_old_node_component_work(self) -> None:
         window = self.make_window()

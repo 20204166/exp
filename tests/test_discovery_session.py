@@ -47,7 +47,14 @@ class DiscoverySessionTests(unittest.TestCase):
             "coordinator.stop"
         )
         self.discovery = FakeDiscovery(self.events)
-        self.schedule = Mock(side_effect=lambda _delay, _callback: "timer-1")
+        self.scheduled: list[tuple[int, Any]] = []
+
+        def schedule(delay: int, callback: Any) -> str:
+            timer_id = f"timer-{len(self.scheduled) + 1}"
+            self.scheduled.append((delay, callback))
+            return timer_id
+
+        self.schedule = Mock(side_effect=schedule)
         self.cancel = Mock(
             side_effect=lambda _timer: self.events.append("timer.cancel")
         )
@@ -63,6 +70,7 @@ class DiscoverySessionTests(unittest.TestCase):
             on_candidate=lambda _candidate: None,
             on_lost=lambda _node_id: None,
             discovery_factory=lambda *_args, **_kwargs: self.discovery,
+            on_stabilized=lambda: self.events.append("discovery.stabilized"),
         )
 
     def _set_state(self, state: ClusterState) -> None:
@@ -101,6 +109,50 @@ class DiscoverySessionTests(unittest.TestCase):
         self.session.tick()
 
         self.assertEqual(self.events, ["coordinator.tick"])
+        self.assertEqual(self.schedule.call_count, 2)
+
+    def test_discovery_events_schedule_one_bounded_stabilization(self) -> None:
+        self.session.start()
+        handlers = self.coordinator.start_discovery.call_args.kwargs
+
+        handlers["on_candidate"](object())
+        handlers["on_lost"]("peer")
+
+        self.assertEqual(self.schedule.call_count, 2)
+        self.assertEqual(self.scheduled[1][0], 100)
+        self.scheduled[1][1]()
+        self.assertEqual(self.events[-1], "discovery.stabilized")
+
+    def test_stop_cancels_pending_stabilization(self) -> None:
+        self.session.start()
+        handlers = self.coordinator.start_discovery.call_args.kwargs
+        handlers["on_candidate"](object())
+
+        self.session.stop()
+
+        self.cancel.assert_any_call("timer-2")
+
+    def test_restart_rejects_stale_stabilization_callback(self) -> None:
+        self.session.start()
+        first_handlers = self.coordinator.start_discovery.call_args.kwargs
+        first_handlers["on_candidate"](object())
+        stale_callback = self.scheduled[1][1]
+        self.session.stop()
+
+        self.session.start()
+        self.events.clear()
+        stale_callback()
+
+        self.assertNotIn("discovery.stabilized", self.events)
+
+    def test_none_timer_id_still_coalesces_stabilization(self) -> None:
+        self.session.start()
+        self.schedule.side_effect = lambda _delay, _callback: None
+        handlers = self.coordinator.start_discovery.call_args.kwargs
+
+        handlers["on_candidate"](object())
+        handlers["on_lost"]("peer")
+
         self.assertEqual(self.schedule.call_count, 2)
 
     def test_stop_cancels_timer_before_coordinator_and_is_idempotent(self) -> None:

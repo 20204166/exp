@@ -147,8 +147,7 @@ class ClusterPage:
         self._nodes = {spec.node_id: spec for spec in nodes}
         if self._button_coordinator is not None:
             self._button_coordinator.clear_prefix("cluster:node:")
-        for child in tuple(self._body.winfo_children()):
-            child.destroy()
+        ui_layout.clear_children(self._body)
         if not nodes:
             self.label_cls(
                 self._body,

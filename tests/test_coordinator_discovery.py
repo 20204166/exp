@@ -218,6 +218,58 @@ class AppCoordinatorDiscoveryTests(unittest.TestCase):
         self.assertEqual(delivered, ["posted", "delivered"])
         self.assertEqual(activity, [True])
 
+    def test_post_coalesced_delivers_latest_callback_per_key(self) -> None:
+        queued: list[Any] = []
+        activity: list[bool] = []
+        coordinator = AppCoordinator(
+            deliver=queued.append,
+            on_activity=lambda: activity.append(True),
+        )
+        delivered: list[str] = []
+
+        coordinator.post_coalesced("discovery", lambda: delivered.append("old"))
+        coordinator.post_coalesced("discovery", lambda: delivered.append("latest"))
+        coordinator.post_coalesced("status", lambda: delivered.append("status"))
+        self.assertEqual(len(queued), 2)
+
+        queued.pop(0)()
+        queued.pop(0)()
+
+        self.assertEqual(delivered, ["latest", "status"])
+        self.assertEqual(len(activity), 3)
+
+    def test_post_coalesced_keeps_one_deferred_wrapper_per_key(self) -> None:
+        queued: list[Any] = []
+        coordinator = AppCoordinator(deliver=queued.append)
+        delivered: list[int] = []
+
+        for value in range(100):
+
+            def callback(value: int = value) -> None:
+                delivered.append(value)
+
+            coordinator.post_coalesced("discovery", callback)
+
+        self.assertEqual(len(queued), 1)
+        queued.pop()()
+        self.assertEqual(delivered, [99])
+
+    def test_clear_invalidates_queued_coalesced_callback(self) -> None:
+        queued: list[Any] = []
+        coordinator = AppCoordinator(deliver=queued.append)
+        delivered: list[str] = []
+
+        coordinator.post_coalesced("discovery", lambda: delivered.append("stale"))
+        coordinator.clear("discovery")
+        coordinator.post_coalesced("discovery", lambda: delivered.append("fresh"))
+        self.assertEqual(len(queued), 2)
+
+        queued.pop(0)()
+        self.assertEqual(delivered, [])
+
+        queued.pop(0)()
+        self.assertEqual(delivered, ["fresh"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -109,7 +109,9 @@ def _make_window(
     window._feature_catalog.all = list
     window._component_poll_id = None
     window._component_queue = Queue()
-    window._coordinator = AppCoordinator(deliver=lambda callback: None)
+    window._coordinator = AppCoordinator(deliver=lambda callback: callback())
+    window._cluster_state = ClusterState()
+    window._manual_host_ids = set()
     window._capabilities = {}
     window._preferences = Mock()
     window._preferences.refresh_intervals.as_dict = dict
@@ -158,6 +160,23 @@ def _make_window(
 
 
 class WindowNodeSelectorTests(unittest.TestCase):
+    def test_cluster_specs_disambiguate_duplicate_display_names(self) -> None:
+        local = _local_context()
+        peer = _trusted_context(
+            "peer", "This System", cpu_value="peer", host_label="peer"
+        )
+        registry = NodeRegistry()
+        registry.register_context(local)
+        registry.register_context(peer)
+
+        specs = node_specs.cluster_node_specs(registry)
+
+        self.assertEqual(
+            [spec.display_name for spec in specs],
+            ["This System (local)", "This System (peer)"],
+        )
+        self.assertEqual([spec.selectable for spec in specs], [True, True])
+
     def test_identity_mismatch_is_not_openable(self) -> None:
         context = _trusted_context("peer", "Peer", cpu_value="peer", host_label="peer")
         context.descriptor = replace(
@@ -635,6 +654,17 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         window._on_discovered_lost("peer-a")
         self.assertEqual(window._node_registry.discovered_candidates(), ())
 
+    def test_discovery_presentation_waits_for_session_stabilization(self) -> None:
+        window = _make_window()
+        window._queue_discovery_presentation = Mock()
+        session = window._discovery_session
+
+        window._on_discovered_candidate(_candidate("peer-a"))
+
+        window._queue_discovery_presentation.assert_not_called()
+        session._on_stabilized()
+        window._queue_discovery_presentation.assert_called_once_with(False)
+
     def test_trusted_rediscovery_updates_saved_endpoint_after_hello(self) -> None:
         window = _make_window(
             _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer")
@@ -847,16 +877,19 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
 
     def test_discovery_status_lists_untrusted_peers_and_hides_when_lost(self) -> None:
         window = _make_window()
+        window._discovery_pages_visible = True
         window.discovery_status_label = Mock()
 
         window._on_discovered_candidate(_candidate("peer-b"))
         window._on_discovered_candidate(_candidate("peer-a"))
+        window._discovery_session._on_stabilized()
 
         window.discovery_status_label.config.assert_called_with(
             text="Discovered 2 untrusted peers: peer-a-host, peer-b-host"
         )
         window._on_discovered_lost("peer-a")
         window._on_discovered_lost("peer-b")
+        window._discovery_session._on_stabilized()
         window.discovery_status_label.pack_forget.assert_called_once()
 
     def test_shutdown_stops_discovery(self) -> None:

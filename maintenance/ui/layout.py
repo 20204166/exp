@@ -23,6 +23,13 @@ SCROLLBAR_GUTTER = 6
 FOOTER_GUTTER = 16
 
 
+def clear_children(container: Any) -> None:
+    """Destroy the direct widget children of a presentation container."""
+
+    for child in tuple(container.winfo_children()):
+        child.destroy()
+
+
 def resize_aware(widget: Any, handler: Callable[[Any], None]) -> Callable[[Any], None]:
     """Coalesce one widget's ``<Configure>`` events into per-frame layout calls.
 
@@ -500,6 +507,8 @@ def section_card(
         highlightthickness=1,
         highlightbackground=colors["border"],
         highlightcolor=colors["border"],
+        padx=18,
+        pady=14,
     )
     card.pack(fill="x", pady=(0, 14))
     label_cls(
@@ -548,6 +557,8 @@ def navigation_card(
         highlightthickness=1,
         highlightbackground=colors["border"],
         highlightcolor=colors["border"],
+        padx=18,
+        pady=14,
     )
     card.pack(fill="x", pady=(0, 14))
     text_column = frame_cls(card, bg=colors["card"])

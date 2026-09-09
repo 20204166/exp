@@ -1,6 +1,8 @@
 """Pure projections from node models to the settings-page view specs."""
 
+from collections import Counter
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any
 
 from maintenance.nodes import NodeId, NodeIdentityStatus, is_trusted_descriptor
@@ -153,4 +155,15 @@ def cluster_node_specs(registry: Any) -> list[ui_cluster.ClusterNodeSpec]:
                 pairing_state=registry.pairing_state(NodeId(candidate.stable_id)).value,
             )
         )
-    return specs
+    name_counts = Counter(spec.display_name for spec in specs)
+    return [
+        replace(
+            spec,
+            display_name=(
+                f"{spec.display_name} ({spec.node_id})"
+                if name_counts[spec.display_name] > 1
+                else spec.display_name
+            ),
+        )
+        for spec in specs
+    ]

@@ -292,6 +292,18 @@ class MetricRowPrimitiveTests(unittest.TestCase):
         label.config.assert_called_once_with(cursor="hand2")
 
 
+class ClearChildrenTests(unittest.TestCase):
+    def test_destroys_only_direct_children(self) -> None:
+        container = Mock()
+        children = (Mock(), Mock())
+        container.winfo_children.return_value = children
+
+        ui_layout.clear_children(container)
+
+        for child in children:
+            child.destroy.assert_called_once_with()
+
+
 class ScrollableAreaPrimitiveTests(unittest.TestCase):
     class FakeCanvas:
         def __init__(self) -> None:

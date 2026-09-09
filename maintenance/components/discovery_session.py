@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from maintenance.cluster import ClusterState
 
 LOGGER = logging.getLogger(__name__)
+_MAX_STABILIZATION_MILLISECONDS = 250
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +57,8 @@ class DiscoverySession:
             False,
             None,
         ),
+        on_stabilized: Callable[[], None] | None = None,
+        stabilization_milliseconds: int = 100,
     ) -> None:
         self._coordinator = coordinator
         self._registry = registry
@@ -71,8 +74,15 @@ class DiscoverySession:
         self._app_version = app_version
         self._is_closing = is_closing
         self._get_listener_endpoint = get_listener_endpoint
+        self._on_stabilized = on_stabilized or (lambda: None)
+        self._stabilization_milliseconds = min(
+            max(stabilization_milliseconds, 0), _MAX_STABILIZATION_MILLISECONDS
+        )
         self.timer_id: str | None = None
+        self._stabilization_timer_id: str | None = None
+        self._stabilization_scheduled = False
         self._active = False
+        self._lifecycle_generation: object | None = None
 
     def start(self) -> DiscoveryStartResult:
         if self._active:
@@ -119,8 +129,8 @@ class DiscoverySession:
         )
         started = self._coordinator.start_discovery(
             discovery,
-            on_candidate=self._on_candidate,
-            on_lost=self._on_lost,
+            on_candidate=self._handle_candidate,
+            on_lost=self._handle_lost,
         )
         if not started:
             return DiscoveryStartResult(
@@ -130,9 +140,41 @@ class DiscoverySession:
             )
 
         self._active = True
+        self._lifecycle_generation = object()
         self.timer_id = self._schedule_timer(int(REAP_TICK_SECONDS * 1000), self.tick)
         self._start_background_poll()
         return DiscoveryStartResult(started=True, available=True)
+
+    def _handle_candidate(self, candidate: Any) -> None:
+        self._on_candidate(candidate)
+        self._schedule_stabilization()
+
+    def _handle_lost(self, stable_id: str) -> None:
+        self._on_lost(stable_id)
+        self._schedule_stabilization()
+
+    def _schedule_stabilization(self) -> None:
+        if not self._active or self._is_closing():
+            return
+        if self._stabilization_scheduled:
+            return
+        generation = self._lifecycle_generation
+        self._stabilization_scheduled = True
+        self._stabilization_timer_id = self._schedule_timer(
+            self._stabilization_milliseconds,
+            lambda: self._run_stabilization(generation),
+        )
+
+    def _run_stabilization(self, generation: object | None) -> None:
+        if (
+            not self._active
+            or self._is_closing()
+            or generation is not self._lifecycle_generation
+        ):
+            return
+        self._stabilization_timer_id = None
+        self._stabilization_scheduled = False
+        self._on_stabilized()
 
     def tick(self) -> None:
         self.timer_id = None
@@ -144,5 +186,10 @@ class DiscoverySession:
     def stop(self) -> None:
         self._cancel_timer(self.timer_id)
         self.timer_id = None
+        if self._stabilization_scheduled:
+            self._cancel_timer(self._stabilization_timer_id)
+        self._stabilization_timer_id = None
+        self._stabilization_scheduled = False
+        self._lifecycle_generation = None
         self._active = False
         self._coordinator.stop_discovery()

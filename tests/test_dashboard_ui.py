@@ -270,6 +270,26 @@ class DashboardWindowTests(unittest.TestCase):
 
         self.assertIsNotNone(window._full_snapshot_applied_at)
 
+    def test_show_snapshot_refreshes_all_systems_projection(self) -> None:
+        window = make_window()
+        window.snapshot = None
+        window.cluster_page = Mock()
+
+        window._show_snapshot(snapshot())
+
+        window.cluster_page.refresh_nodes.assert_called_once_with([])
+
+    def test_show_snapshot_defers_hidden_all_systems_projection(self) -> None:
+        window = make_window()
+        window.snapshot = None
+        window.cluster_page = Mock()
+        window._page_router = Mock()
+        window._page_router.is_mapped.return_value = False
+
+        window._show_snapshot(snapshot())
+
+        window.cluster_page.refresh_nodes.assert_not_called()
+
     def test_close_stops_background_workers_when_available(self) -> None:
         window = make_window()
         window.analyzer = Mock()

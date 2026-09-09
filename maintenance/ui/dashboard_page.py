@@ -46,13 +46,19 @@ def build(controller: Any, parent: Any) -> Any:
         controller._node_registry.discovered_candidates(),
     )
 
+    navigation_buttons = controller.ttk.Frame(
+        controller.header_actions,
+        style="App.TFrame",
+    )
+    navigation_buttons.pack(anchor="e")
+
     for attribute, text, callback in (
-        ("settings_button", "Settings", controller._show_settings_page),
         ("cluster_button", "All Systems", controller._show_cluster_page),
         ("thermals_button", "Thermals", controller._show_thermals_page),
+        ("settings_button", "Settings", controller._show_settings_page),
     ):
         button = controller.ttk.Button(
-            controller.header_actions,
+            navigation_buttons,
             text=text,
             command=callback,
             style="Neutral.TButton",
@@ -76,9 +82,9 @@ def build(controller: Any, parent: Any) -> Any:
         controller._button_coordinator.register(action_id, callback, replace=True)
         controller._button_coordinator.bind(button, action_id)
     controller._build_node_selector(controller.header_actions)
-    controller.settings_button.pack(anchor="e")
-    controller.cluster_button.pack(anchor="e", padx=(8, 0))
-    controller.thermals_button.pack(anchor="e", padx=(8, 0))
+    controller.settings_button.pack(side="left")
+    controller.cluster_button.pack(side="left", padx=(8, 0))
+    controller.thermals_button.pack(side="left", padx=(8, 0))
 
     controller.status_label = controller.ttk.Label(
         controller.header_actions,
@@ -86,14 +92,6 @@ def build(controller: Any, parent: Any) -> Any:
         style="Ready.Status.TLabel",
     )
     controller.status_label.pack(anchor="e", pady=(9, 0))
-    controller.progress_bar = controller.ttk.Progressbar(
-        controller.main_frame,
-        mode="determinate",
-        maximum=len(controller._feature_catalog.all()),
-        style="Analysis.Horizontal.TProgressbar",
-    )
-    controller.progress_bar.pack(fill="x", pady=(22, 20))
-
     controller.overview_frame = controller.ttk.Frame(
         controller.main_frame, style="App.TFrame"
     )

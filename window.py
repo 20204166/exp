@@ -419,8 +419,8 @@ class AppWindow:
             ),
             get_task_count=lambda: self._background_tasks,
             set_task_count=lambda count: setattr(self, "_background_tasks", count),
-            set_busy=self._set_busy,
-            resolve_completed_worker=self._resolve_completed_worker,
+            set_busy=lambda busy: self._set_busy(busy),
+            resolve_completed_worker=lambda: self._resolve_completed_worker(),
             get_render_coordinator=self._render_coordinator,
             has_pending_coordinator_work=lambda: (
                 (coordinator := self.__dict__.get("_coordinator")) is not None
@@ -429,7 +429,7 @@ class AppWindow:
             has_discovery_tick=lambda: (
                 self.__dict__.get("_discovery_tick_id") is not None
             ),
-            invoke_delivered=self._invoke_delivered,
+            invoke_delivered=lambda callback: self._invoke_delivered(callback),
             poll_milliseconds=self.BACKGROUND_POLL_MILLISECONDS,
             logger=LOGGER,
         )
@@ -453,24 +453,37 @@ class AppWindow:
         return coordinator.request(intent, apply)
 
     def _sync_render_visibility(self, active_page: str | None) -> None:
-        coordinator = self._render_coordinator()
-        if coordinator is None:
+        discovery_pages_visible = active_page in {NODES_PAGE, CLUSTER_PAGE}
+        self.__dict__["_discovery_pages_visible"] = discovery_pages_visible
+        app_coordinator = self.__dict__.get("_coordinator")
+        if discovery_pages_visible and app_coordinator is not None:
+            app_coordinator.flush_deferred("discovery-pages")
+        render_coordinator = self._render_coordinator()
+        if render_coordinator is None:
             return
         dashboard_visible = active_page == DASHBOARD_PAGE
-        coordinator.set_visible("dashboard-snapshot", dashboard_visible)
-        coordinator.set_visible(
+        render_coordinator.set_visible("dashboard-snapshot", dashboard_visible)
+        render_coordinator.set_visible(
             "scan-status",
             active_page in {DASHBOARD_PAGE, PREFERENCES_PAGE},
         )
-        coordinator.set_visible("dashboard-discovery", active_page == DASHBOARD_PAGE)
-        coordinator.set_visible(THERMALS_PAGE, active_page == THERMALS_PAGE)
-        coordinator.set_visible(
-            "discovery-pages",
-            active_page in {NODES_PAGE, CLUSTER_PAGE},
+        render_coordinator.set_visible(
+            "dashboard-discovery", active_page == DASHBOARD_PAGE
         )
-        coordinator.set_visible("nodes-status", active_page == NODES_PAGE)
+        render_coordinator.set_visible(THERMALS_PAGE, active_page == THERMALS_PAGE)
+        render_coordinator.set_visible(
+            "discovery-pages",
+            discovery_pages_visible,
+        )
+        render_coordinator.set_visible("nodes-status", active_page == NODES_PAGE)
         for feature in self._feature_catalog.all():
-            coordinator.set_visible(f"component:{feature.key}", dashboard_visible)
+            render_coordinator.set_visible(
+                f"component:{feature.key}", dashboard_visible
+            )
+            if dashboard_visible and app_coordinator is not None:
+                app_coordinator.flush_deferred(
+                    self._operation_key(f"component:{feature.key}")
+                )
 
     def _build_dashboard_page(self, parent: Any) -> Any:
         self.ttk = ttk
@@ -932,6 +945,7 @@ class AppWindow:
                 start_background_poll=self._start_background_poll,
                 on_candidate=self._on_discovered_candidate,
                 on_lost=self._on_discovered_lost,
+                on_stabilized=lambda: self._queue_discovery_presentation(False),
                 discovery_factory=NetworkDiscovery,
                 app_version=__version__,
                 is_closing=lambda: self._is_closing,
@@ -1035,27 +1049,8 @@ class AppWindow:
             if context is not None and is_trusted_descriptor(context.descriptor):
                 trusted_descriptor = context.descriptor
             trusted_updated = self._sync_trusted_node_endpoint(candidate)
-            trusted_specs = self._nodes_trusted_specs() if trusted_descriptor else ()
-            self._request_render(
-                ui_render.RenderIntent(
-                    target="discovery-pages",
-                    node_id=self._selected_node_id,
-                    components=frozenset({"nodes", "cluster"}),
-                    layout_changed=True,
-                    payload=(trusted_descriptor, trusted_specs),
-                    payload_set=True,
-                    priority=2,
-                ),
-                lambda _intent: ui_discovery_refresh.refresh_discovery_views(
-                    page=getattr(self, "nodes_page", None),
-                    peer_specs=self._nodes_peer_specs(),
-                    trusted_specs=trusted_specs,
-                    refresh_trusted=trusted_descriptor is not None,
-                    refresh_cluster_page=self._refresh_cluster_page,
-                    status_label=getattr(self, "discovery_status_label", None),
-                    discovered_candidates=registry.discovered_candidates(),
-                ),
-            )
+            if trusted_descriptor is not None:
+                self.__dict__["_discovery_trusted_refresh_pending"] = True
             count = len(registry.discovered_candidates())
             self._nodes_status(
                 f"Discovery running - {count} peer{'s' if count != 1 else ''} found"
@@ -1085,33 +1080,39 @@ class AppWindow:
                 context = None
             if context is not None and is_trusted_descriptor(context.descriptor):
                 trusted_descriptor = context.descriptor
-        self._request_render(
-            ui_render.RenderIntent(
-                target="discovery-pages",
-                node_id=self._selected_node_id,
-                components=frozenset({"nodes", "cluster"}),
-                layout_changed=True,
-                payload=stable_id,
-                payload_set=True,
-                priority=2,
-            ),
-            lambda _intent: ui_discovery_refresh.refresh_discovery_views(
-                page=getattr(self, "nodes_page", None),
-                peer_specs=self._nodes_peer_specs(),
-                trusted_specs=(),
-                refresh_trusted=trusted_descriptor is not None,
-                refresh_cluster_page=self._refresh_cluster_page,
-                status_label=getattr(self, "discovery_status_label", None),
-                discovered_candidates=registry.discovered_candidates()
-                if registry is not None
-                else (),
-            ),
-        )
+        if trusted_descriptor is not None:
+            self.__dict__["_discovery_trusted_refresh_pending"] = True
         count = len(registry.discovered_candidates()) if registry is not None else 0
         self._nodes_status(
             f"Discovery running - {count} peers found"
             if count != 1
             else "Discovery running - 1 peer found"
+        )
+
+    def _queue_discovery_presentation(self, trusted_involved: bool) -> None:
+        """Keep discovery mutations immediate while batching their rendering."""
+
+        if trusted_involved:
+            self.__dict__["_discovery_trusted_refresh_pending"] = True
+        coordinator = self.__dict__.get("_coordinator")
+        registry = self.__dict__.get("_node_registry")
+        if coordinator is None or registry is None:
+            return
+
+        ui_discovery_refresh.post_discovery_refresh(
+            coordinator=coordinator,
+            key="discovery-pages",
+            page=getattr(self, "nodes_page", None),
+            get_peer_specs=self._nodes_peer_specs,
+            get_trusted_specs=self._nodes_trusted_specs,
+            should_refresh_trusted=lambda: bool(
+                self.__dict__.pop("_discovery_trusted_refresh_pending", False)
+            ),
+            refresh_cluster_page=self._refresh_cluster_page,
+            status_label=getattr(self, "discovery_status_label", None),
+            get_discovered_candidates=registry.discovered_candidates,
+            visible=bool(self.__dict__.get("_discovery_pages_visible", False)),
+            is_active=lambda: not self._is_closing,
         )
 
     def _sync_trusted_node_endpoint(self, candidate: Any) -> bool:
@@ -1754,6 +1755,9 @@ class AppWindow:
         for resource in merged.resources:
             self.cards[resource.key].update_summary(resource)
         self._full_snapshot_applied_at = time.monotonic()
+        router = self.__dict__.get("_page_router")
+        if router is None or router.is_mapped(CLUSTER_PAGE):
+            self._refresh_cluster_page()
 
         scanned_time = snapshot.scanned_at.strftime("%H:%M:%S")
         self.scan_time_label.config(
@@ -1955,10 +1959,16 @@ class AppWindow:
             return None
         return max(0, int((deadline - now) * 1000))
 
-    def _schedule_component_poll(self, *, force: bool = False) -> None:
+    def _schedule_component_poll(
+        self, *, force: bool = False, delay_override: int | None = None
+    ) -> None:
         if self._is_closing:
             return
-        delay = self._component_poll_delay()
+        delay = (
+            delay_override
+            if delay_override is not None
+            else self._component_poll_delay()
+        )
         if delay is None:
             if self._component_poll_id is not None:
                 self._cancel_timer(self._component_poll_id)
@@ -1975,9 +1985,29 @@ class AppWindow:
         self._component_poll_id = None
         if self._is_closing:
             return
+        router = self.__dict__.get("_page_router")
+        dashboard_visible = router is None or router.is_mapped(DASHBOARD_PAGE)
+        deferred_work = False
         for key in self._component_scheduler.due_keys(time.monotonic()):
-            self._launch_component_scan(key)
-        self._schedule_component_poll(force=True)
+            operation_key = self._operation_key(f"component:{key}")
+            if dashboard_visible:
+                self._launch_component_scan(key)
+            else:
+                deferred_work = True
+
+                def launch_deferred_component(component_key: str = key) -> None:
+                    self._launch_component_scan(component_key)
+
+                self._coordinator.defer(
+                    operation_key,
+                    launch_deferred_component,
+                )
+        self._schedule_component_poll(
+            force=True,
+            delay_override=(
+                self.COMPONENT_POLL_MILLISECONDS if deferred_work else None
+            ),
+        )
 
     def _launch_component_scan(self, key: str) -> None:
         source_context = self._selected_context()

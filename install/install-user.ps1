@@ -45,7 +45,7 @@ if ($already) {
 } else {
     Write-Host "Add it to PATH once:"
     if ($env:OS -eq "Windows_NT") {
-        Write-Host "  setx PATH \"$binDir;%PATH%\""
+        Write-Host "  setx PATH `"$binDir;%PATH%`""
     } else {
         Write-Host "  echo 'export PATH=\"$binDir:`$PATH\"' >> `$HOME/.zshrc   # (or ~/.bashrc for bash)"
     }

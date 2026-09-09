@@ -324,6 +324,10 @@ class AppCoordinator:
         self._deliver = deliver or (lambda callback: callback())
         self._on_activity = on_activity
         self._states: dict[str, AppRunState] = {}
+        self._coalesced_generations: dict[str, int] = {}
+        self._coalesced_callbacks: dict[str, Callable[[], None]] = {}
+        self._coalesced_pending: set[str] = set()
+        self._deferred_triggers: dict[str, Callable[[], None]] = {}
         self._discovery: Any = None
         self._discovery_generation: object | None = None
         self._discovery_handlers: dict[str, Any] = {}
@@ -560,6 +564,7 @@ class AppCoordinator:
         """
 
         state = self._states.get(key)
+        self._deferred_triggers.pop(key, None)
         if state is None:
             return
         already_cancelled = state.cancelled
@@ -640,6 +645,11 @@ class AppCoordinator:
 
     def clear(self, key: str) -> None:
         self._states.pop(key, None)
+        if key in self._coalesced_generations:
+            self._coalesced_generations[key] += 1
+        self._coalesced_callbacks.pop(key, None)
+        self._coalesced_pending.discard(key)
+        self._deferred_triggers.pop(key, None)
 
     def post(self, callback: Callable[[], None]) -> None:
         """Deliver one callback onto the UI thread and keep the poll alive.
@@ -653,6 +663,42 @@ class AppCoordinator:
 
         self._note_activity()
         self._deliver(callback)
+
+    def post_coalesced(self, key: str, callback: Callable[[], None]) -> None:
+        """Schedule at most one pending callback for ``key``."""
+
+        self._note_activity()
+        self._coalesced_callbacks[key] = callback
+        if key in self._coalesced_pending:
+            return
+
+        generation = self._coalesced_generations.get(key, 0) + 1
+        self._coalesced_generations[key] = generation
+        self._coalesced_pending.add(key)
+
+        def deliver() -> None:
+            if self._coalesced_generations.get(key) != generation:
+                self._coalesced_pending.discard(key)
+                return
+            self._coalesced_pending.discard(key)
+            current = self._coalesced_callbacks.pop(key, None)
+            if current is None:
+                return
+            current()
+
+        self._deliver(deliver)
+
+    def defer(self, key: str, trigger: Callable[[], None]) -> None:
+        """Keep one non-urgent trigger until its owning surface is visible."""
+
+        self._deferred_triggers[key] = trigger
+
+    def flush_deferred(self, key: str) -> None:
+        """Run and remove one deferred trigger, if one is pending."""
+
+        trigger = self._deferred_triggers.pop(key, None)
+        if trigger is not None:
+            trigger()
 
     def start_discovery(
         self,
