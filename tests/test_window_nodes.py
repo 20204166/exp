@@ -157,6 +157,81 @@ def _make_window(
 
 
 class WindowNodeSelectorTests(unittest.TestCase):
+    def test_permission_toggle_preserves_unmanaged_permissions(self) -> None:
+        context = _trusted_context("peer", "Peer", cpu_value="peer", host_label="peer")
+        context.descriptor = replace(
+            context.descriptor,
+            permissions=frozenset(
+                {
+                    NodePermission.DASHBOARD_READ,
+                    NodePermission.COMPONENT_READ,
+                    NodePermission.PROCESS_REVIEW,
+                    NodePermission.STORAGE_REVIEW,
+                }
+            ),
+        )
+        window = _make_window(context, start_discovery=False)
+        window._cluster_state = ClusterState(
+            trusted_nodes=(
+                trusted_node_record(
+                    node_id="peer",
+                    display_name="Peer",
+                    hostname="peer",
+                    host="peer",
+                    permissions=context.descriptor.permissions,
+                ),
+            )
+        )
+        window._save_cluster_state = Mock(return_value=True)
+
+        window._set_node_permissions("peer", frozenset({"process_termination"}))
+
+        self.assertEqual(
+            window._node_registry.context(NodeId("peer")).descriptor.permissions,
+            frozenset(
+                {
+                    NodePermission.DASHBOARD_READ,
+                    NodePermission.COMPONENT_READ,
+                    NodePermission.PROCESS_TERMINATION,
+                    NodePermission.STORAGE_REVIEW,
+                }
+            ),
+        )
+
+    def test_color_save_failure_restores_previous_color(self) -> None:
+        context = _trusted_context("peer", "Peer", cpu_value="peer", host_label="peer")
+        context.descriptor = replace(context.descriptor, color="rose")
+        window = _make_window(context, start_discovery=False)
+        window._cluster_state = ClusterState()
+        window._save_cluster_state = Mock(return_value=False)
+        window._nodes_error = Mock()
+
+        window._set_node_color("peer", "sky")
+
+        self.assertEqual(
+            window._node_registry.context(NodeId("peer")).descriptor.color,
+            "rose",
+        )
+
+    def test_invalid_manual_port_is_rejected(self) -> None:
+        window = _make_window(start_discovery=False)
+        window._cluster_state = ClusterState()
+        window._nodes_error = Mock()
+
+        window._add_manual_host("Peer", "peer", 70000)
+
+        window._nodes_error.assert_called_once_with("Port must be between 0 and 65535")
+        self.assertIsNone(window._cluster_state.record("manual-peer:70000"))
+
+    def test_non_integer_manual_port_is_rejected_at_controller_boundary(self) -> None:
+        window = _make_window(start_discovery=False)
+        window._cluster_state = ClusterState()
+        window._nodes_error = Mock()
+
+        window._add_manual_host("Peer", "peer", "5000")
+
+        window._nodes_error.assert_called_once_with("Port must be between 0 and 65535")
+
     def test_selector_absent_for_single_local_node(self) -> None:
         window = _make_window()
         window._build_node_selector(Mock())
@@ -487,6 +562,30 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         _, kwargs = factory.call_args
         self.assertEqual(kwargs["advertisement"].stable_id, LOCAL_NODE_ID)
         self.assertFalse(kwargs["advertisement"].connectable)
+
+    def test_manual_hostname_and_ip_fallback_registers_trusted_endpoint(self) -> None:
+        window = _make_window(start_discovery=False)
+        window._cluster_state = ClusterState()
+        window._cluster_store = Mock()
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._nodes_status = Mock()
+
+        window._add_manual_host("Lab Box", "lab-box.local", None)
+        window._add_manual_host("IP Box", "192.168.1.20", 5000)
+
+        hostname_record = window._cluster_state.record("manual-lab-box.local")
+        ip_record = window._cluster_state.record("manual-192.168.1.20:5000")
+        self.assertIsNotNone(hostname_record)
+        self.assertIsNotNone(ip_record)
+        assert hostname_record is not None
+        assert ip_record is not None
+        self.assertEqual(
+            window._node_registry.contexts()[-1].descriptor.trust,
+            NodeTrustState.TRUSTED,
+        )
+        self.assertEqual(hostname_record.host, "lab-box.local")
+        self.assertEqual(ip_record.host, "192.168.1.20")
 
     def test_discovered_candidate_never_becomes_selectable(self) -> None:
         window = _make_window()

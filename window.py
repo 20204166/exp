@@ -1,11 +1,10 @@
 import logging
-import platform
 import threading
 import time
 import tkinter as tk
 from collections.abc import Callable
 from dataclasses import replace
-from queue import Empty, Queue
+from queue import Queue
 from tkinter import messagebox, simpledialog, ttk
 from typing import Any, cast
 
@@ -21,17 +20,23 @@ from maintenance.cluster import (
 )
 from maintenance.components import (
     DOWNLOADS_SCAN_CANCELLED,
+    DashboardScanLifecycle,
+    NodeSelection,
     ResourceFeatureCatalog,
     ScanCoordinator,
+    node_context,
+)
+from maintenance.components.background_orchestration import (
+    BackgroundItem,
+    BackgroundOrchestrator,
+    run_daemon,
 )
 from maintenance.components.coordinator import (
     AppCoordinator,
     ComponentRefreshScheduler,
 )
+from maintenance.components.discovery_session import DiscoverySession
 from maintenance.components.network_discovery import (
-    PROTOCOL_VERSION,
-    REAP_TICK_SECONDS,
-    DiscoveryAdvertisement,
     NetworkDiscovery,
 )
 from maintenance.components.scan_support import (
@@ -57,7 +62,6 @@ from maintenance.models import (
     unavailable_summary,
 )
 from maintenance.nodes import (
-    LOCAL_NODE_ID,
     READ_PERMISSIONS,
     NodeCapability,
     NodeContext,
@@ -68,9 +72,7 @@ from maintenance.nodes import (
     NodeRegistry,
     NodeStatus,
     NodeTrustState,
-    generate_stable_node_id,
     is_trusted_descriptor,
-    local_node_descriptor,
     node_identity_fingerprint,
     node_operation_key,
 )
@@ -100,6 +102,8 @@ from maintenance.ui import thermals_page as ui_thermals
 from maintenance.ui import transition as ui_transition
 from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.navigation import PageRouter, PageSpec
+from maintenance.ui.window_supports import card_policy, snapshot_state
+from maintenance.ui.window_supports.timer_delivery import TimerDelivery
 
 LOGGER = logging.getLogger(__name__)
 
@@ -165,9 +169,7 @@ class AppWindow:
         self._lease_grace_id: str | None = None
         self._timed_out_generation: int | None = None
         self._resolved_scan_generation = 0
-        self._background_queue: Queue[
-            tuple[Callable[..., None], tuple[object, ...]] | None | tuple[str, Any]
-        ] = Queue()
+        self._background_queue: Queue[BackgroundItem] = Queue()
         self._coordinator = AppCoordinator(
             deliver=self._submit_ui,
             on_activity=self._start_background_poll,
@@ -177,6 +179,7 @@ class AppWindow:
         )
         self._button_coordinator = ButtonCoordinator()
         self._ui_coordinator = ui_render.UICoordinator()
+        self._background_orchestrator = self._make_background_orchestrator()
         self._feature_catalog = ResourceFeatureCatalog()
         self._component_poll_id: str | None = None
         self._capabilities: dict[str, CapabilityState] = {}
@@ -187,6 +190,12 @@ class AppWindow:
         self._restore_trusted_nodes()
 
         self.master = master or tk.Tk()
+        self._timer_delivery = TimerDelivery(
+            master=self.master,
+            is_closing=lambda: self._is_closing,
+            pending_ids=self._pending_after_ids,
+            logger=LOGGER,
+        )
         self.master.title("System Analyzer")
         self.master.geometry("1040x760")
         self.master.minsize(900, 680)
@@ -208,21 +217,9 @@ class AppWindow:
         re-syncs the mirrors from the newly selected context.
         """
 
-        descriptor = local_node_descriptor(
-            hostname=platform.node(),
-            display_name="This System",
-            platform_name=platform.system(),
-        )
-        descriptor = replace(
-            descriptor,
-            id=NodeId(self._cluster_state.local_node_id or generate_stable_node_id()),
-            identity_fingerprint=node_identity_fingerprint(
-                self._cluster_state.local_node_id
-            ),
-        )
-        context = NodeContext(
-            descriptor=descriptor,
-            provider=self.analyzer,
+        context = node_context.build_local_node_context(
+            cluster_state=self._cluster_state,
+            analyzer=self.analyzer,
             process_manager=self.process_manager,
             file_manager=self.file_manager,
             scheduler=self._component_scheduler,
@@ -247,47 +244,11 @@ class AppWindow:
         state = self.__dict__.get("_cluster_state")
         if registry is None or state is None:
             return
-        for record in state.trusted_nodes:
-            if record.node_id in {LOCAL_NODE_ID, self._cluster_state.local_node_id}:
-                continue
-            node_id = NodeId(record.node_id)
-            try:
-                registry.context(node_id)
-                continue
-            except KeyError:
-                pass
-            descriptor = NodeDescriptor(
-                id=node_id,
-                display_name=record.display_name,
-                hostname=record.hostname,
-                is_local=False,
-                trust=NodeTrustState.TRUSTED,
-                status=NodeStatus.UNKNOWN,
-                capabilities=record.capabilities,
-                platform=record.platform,
-                color=record.color,
-                identity_fingerprint=record.identity_fingerprint,
-                identity_status=(
-                    NodeIdentityStatus.VERIFIED
-                    if record.identity_fingerprint
-                    else NodeIdentityStatus.UNVERIFIED
-                ),
-                permissions=record.permissions,
-            )
-            context = NodeContext(
-                descriptor=descriptor,
-                provider=None,
-                process_manager=None,
-                file_manager=None,
-                scheduler=None,
-                coordinator=None,
-            )
-            try:
-                registry.register_context(context)
-            except ValueError as error:
-                LOGGER.warning(
-                    "Failed to restore trusted node %s: %s", record.node_id, error
-                )
+        node_context.restore_trusted_nodes(
+            registry=registry,
+            cluster_state=state,
+            logger=LOGGER,
+        )
 
     @property
     def colors(self) -> dict[str, str]:
@@ -307,6 +268,42 @@ class AppWindow:
             self.__dict__["_scan_coordinator"] = coordinator
         return coordinator
 
+    def _dashboard_scan_lifecycle(self) -> DashboardScanLifecycle:
+        lifecycle = self.__dict__.get("_dashboard_scan_lifecycle_obj")
+        if lifecycle is None:
+            lifecycle = DashboardScanLifecycle(
+                coordinator=self._scan_coordinator_state(),
+                is_closing=lambda: self._is_closing,
+                schedule_timer=self._schedule_timer,
+                cancel_timer=self._cancel_timer,
+                show_timeout_error=self._show_error,
+                schedule_rerun=lambda: self._schedule_rerun_if_requested(True),
+                timeout_callback=self._handle_scan_timeout,
+                grace_callback=self._release_lease_after_grace,
+                timeout_milliseconds=self.SCAN_TIMEOUT_MILLISECONDS,
+                grace_milliseconds=self.SCAN_LEASE_GRACE_MILLISECONDS,
+                timeout_message=self.SCAN_TIMEOUT_MESSAGE,
+            )
+            lifecycle.cancel_event = self.__dict__.get("_analysis_cancel_event")
+            lifecycle.timeout_id = self.__dict__.get("_scan_timeout_id")
+            lifecycle.lease_grace_id = self.__dict__.get("_lease_grace_id")
+            lifecycle.timed_out_generation = self.__dict__.get("_timed_out_generation")
+            lifecycle.resolved_generation = self.__dict__.get(
+                "_resolved_scan_generation", 0
+            )
+            self.__dict__["_dashboard_scan_lifecycle_obj"] = lifecycle
+        return lifecycle
+
+    def _sync_dashboard_scan_state(self) -> None:
+        lifecycle = self._dashboard_scan_lifecycle()
+        self.__dict__.update(
+            _analysis_cancel_event=lifecycle.cancel_event,
+            _scan_timeout_id=lifecycle.timeout_id,
+            _lease_grace_id=lifecycle.lease_grace_id,
+            _timed_out_generation=lifecycle.timed_out_generation,
+            _resolved_scan_generation=lifecycle.resolved_generation,
+        )
+
     def _selected_context(self) -> NodeContext | None:
         """Return the selected node's runtime context, or None outside the app.
 
@@ -314,14 +311,10 @@ class AppWindow:
         so callers must treat ``None`` as the legacy single-node behaviour.
         """
 
-        registry = self.__dict__.get("_node_registry")
-        selected = self.__dict__.get("_selected_node_id")
-        if registry is None or selected is None:
+        selection = self._node_selection()
+        if selection is None:
             return None
-        try:
-            return registry.context(selected)
-        except KeyError:
-            return None
+        return selection.selected_context()
 
     def _operation_key(self, operation: str) -> str:
         """Return a node-qualified coordinator key for the selected node.
@@ -332,15 +325,50 @@ class AppWindow:
         overwrite each other's work.
         """
 
-        registry = self.__dict__.get("_node_registry")
-        selected = self.__dict__.get("_selected_node_id")
-        if registry is None or selected is None:
+        selection = self._node_selection()
+        if selection is None:
             return operation
-        return node_operation_key(selected, operation)
+        return selection.operation_key(operation)
 
     def _multi_node_selectable(self) -> bool:
+        selection = self._node_selection()
+        return selection is not None and selection.multi_node_selectable()
+
+    def _node_selection(self) -> NodeSelection | None:
+        selection = self.__dict__.get("_node_selection_component")
+        if selection is not None:
+            return cast(NodeSelection, selection)
         registry = self.__dict__.get("_node_registry")
-        return registry is not None and len(registry.selectable_descriptors()) > 1
+        if registry is None:
+            return None
+        selection = NodeSelection(
+            registry=registry,
+            selected_id=lambda: self.__dict__.get("_selected_node_id"),
+            set_selected_id=lambda node_id: self.__dict__.__setitem__(
+                "_selected_node_id", node_id
+            ),
+            cancel_active_scan=lambda: self._cancel_active_scan(),
+            invalidate_render_targets=lambda node_id: (
+                self._invalidate_node_render_targets(node_id)
+            ),
+            cancel_node_operations=lambda context: self._cancel_node_operations(
+                context
+            ),
+            sync_selected_context=lambda context: self._sync_selected_context_mirrors(
+                context
+            ),
+            render_selected_node=lambda context: self._render_selected_node(context),
+            refresh_thermals=lambda context: self._refresh_selected_node_thermals(
+                context
+            ),
+            schedule_scan=self._schedule_selected_node_scan,
+            logger=LOGGER,
+        )
+        self.__dict__["_node_selection_component"] = selection
+        return selection
+
+    def _schedule_selected_node_scan(self) -> None:
+        self._schedule_timer(0, self.handle_analyze)
 
     def _build_window(self) -> None:
         self._page_router = PageRouter(self.master)
@@ -360,6 +388,41 @@ class AppWindow:
 
     def _render_coordinator(self) -> ui_render.UICoordinator | None:
         return getattr(self, "_ui_coordinator", None)
+
+    def _make_background_orchestrator(self) -> BackgroundOrchestrator:
+        return BackgroundOrchestrator(
+            queue=self._background_queue,
+            is_closing=lambda: self._is_closing,
+            schedule_timer=lambda delay, callback: self._schedule_timer(
+                delay, callback
+            ),
+            get_poll_id=lambda: self._background_poll_id,
+            set_poll_id=lambda identifier: setattr(
+                self, "_background_poll_id", identifier
+            ),
+            get_task_count=lambda: self._background_tasks,
+            set_task_count=lambda count: setattr(self, "_background_tasks", count),
+            set_busy=self._set_busy,
+            resolve_completed_worker=self._resolve_completed_worker,
+            get_render_coordinator=self._render_coordinator,
+            has_pending_coordinator_work=lambda: (
+                (coordinator := self.__dict__.get("_coordinator")) is not None
+                and coordinator.has_pending_work
+            ),
+            has_discovery_tick=lambda: (
+                self.__dict__.get("_discovery_tick_id") is not None
+            ),
+            invoke_delivered=self._invoke_delivered,
+            poll_milliseconds=self.BACKGROUND_POLL_MILLISECONDS,
+            logger=LOGGER,
+        )
+
+    def _background_service(self) -> BackgroundOrchestrator:
+        service = self.__dict__.get("_background_orchestrator")
+        if service is None:
+            service = self._make_background_orchestrator()
+            self.__dict__["_background_orchestrator"] = service
+        return service
 
     def _request_render(
         self,
@@ -1159,10 +1222,21 @@ class AppWindow:
         except KeyError:
             return
         allowed = {permission.value for permission in NodePermission}
-        permissions = frozenset(
-            NodePermission(value) for value in raw_permissions if value in allowed
-        )
         previous = context.descriptor.permissions
+        process_permissions = {
+            NodePermission.PROCESS_REVIEW,
+            NodePermission.PROCESS_TERMINATION,
+            NodePermission.PROCESS_FORCE_TERMINATION,
+        }
+        permissions = frozenset(
+            permission
+            for permission in previous
+            if permission not in process_permissions
+        ) | frozenset(
+            NodePermission(value)
+            for value in raw_permissions
+            if value in allowed and NodePermission(value) in process_permissions
+        )
         context.descriptor = replace(context.descriptor, permissions=permissions)
         records = [
             replace(record, permissions=permissions)
@@ -1188,6 +1262,8 @@ class AppWindow:
         if registry is None:
             return
         try:
+            context = registry.context(NodeId(node_id))
+            previous = context.descriptor.color
             registry.set_color(NodeId(node_id), color)
         except KeyError as error:
             self._nodes_error(str(error))
@@ -1203,7 +1279,7 @@ class AppWindow:
             local_identity_persisted=self._cluster_state.local_identity_persisted,
         )
         if not self._save_cluster_state(state):
-            registry.set_color(NodeId(node_id), None)
+            registry.set_color(NodeId(node_id), previous)
             self._nodes_error("Cluster settings could not be saved")
             return
         self._cluster_state = state
@@ -1253,6 +1329,13 @@ class AppWindow:
     ) -> None:
         registry = self.__dict__.get("_node_registry")
         if registry is None:
+            return
+        if port is not None and (
+            not isinstance(port, int)
+            or isinstance(port, bool)
+            or not 0 <= port <= 65535
+        ):
+            self._nodes_error("Port must be between 0 and 65535")
             return
         node_id = f"manual-{host}:{port}" if port is not None else f"manual-{host}"
         node = NodeId(node_id)
@@ -1527,36 +1610,24 @@ class AppWindow:
         defensively.
         """
 
-        registry = self.__dict__.get("_node_registry")
-        if registry is None:
+        selection = self._node_selection()
+        if selection is None:
             return
-        if node_id == self.__dict__.get("_selected_node_id"):
-            return
-        old_context = self._selected_context()
-        try:
-            registry.select(node_id)
-        except (KeyError, ValueError):
-            LOGGER.warning("Ignoring selection of unavailable node: %s", node_id)
-            return
-        self.__dict__["_selected_node_id"] = node_id
-        context = registry.selected_context()
-        self._cancel_active_scan()
+        selection.switch(node_id)
+
+    def _invalidate_node_render_targets(self, node_id: NodeId) -> None:
         coordinator = self._render_coordinator()
-        if coordinator is not None:
-            generation = self._scan_coordinator_state().generation
-            coordinator.invalidate(DASHBOARD_PAGE, generation, node_id=node_id)
-            coordinator.invalidate("scan-status", generation, node_id=node_id)
-            coordinator.invalidate("discovery-pages", 0, node_id=node_id)
-            coordinator.invalidate(THERMALS_PAGE, 0, node_id=node_id)
-            for feature in self._feature_catalog.all():
-                coordinator.invalidate(
-                    f"component:{feature.key}",
-                    0,
-                    node_id=node_id,
-                )
-        self._cancel_node_operations(old_context)
-        self._sync_selected_context_mirrors(context)
-        self._render_selected_node(context)
+        if coordinator is None:
+            return
+        generation = self._scan_coordinator_state().generation
+        coordinator.invalidate(DASHBOARD_PAGE, generation, node_id=node_id)
+        coordinator.invalidate("scan-status", generation, node_id=node_id)
+        coordinator.invalidate("discovery-pages", 0, node_id=node_id)
+        coordinator.invalidate(THERMALS_PAGE, 0, node_id=node_id)
+        for feature in self._feature_catalog.all():
+            coordinator.invalidate(f"component:{feature.key}", 0, node_id=node_id)
+
+    def _refresh_selected_node_thermals(self, context: NodeContext) -> None:
         thermals_page = getattr(self, "thermals_page", None)
         router = getattr(self, "_page_router", None)
         if (
@@ -1568,20 +1639,12 @@ class AppWindow:
                 self._thermal_render_state(context),
                 context.capabilities,
             )
-        self._schedule_timer(0, self.handle_analyze)
 
     def _cancel_active_scan(self) -> None:
         """Cancel the in-flight full scan so its result cannot land on another node."""
 
-        cancel_event = self.__dict__.get("_analysis_cancel_event")
-        if cancel_event is not None:
-            cancel_event.set()
-        self._analysis_cancel_event = None
-        self._scan_coordinator_state().cancel()
-        self._cancel_scan_timeout()
-        self.__dict__["_timed_out_generation"] = None
-        self._cancel_timer(self.__dict__.get("_lease_grace_id"))
-        self.__dict__["_lease_grace_id"] = None
+        self._dashboard_scan_lifecycle().cancel()
+        self._sync_dashboard_scan_state()
 
     def _cancel_node_operations(self, context: NodeContext | None) -> None:
         """Cancel every known component operation owned by one node context."""
@@ -1658,6 +1721,28 @@ class AppWindow:
         self.refreshed_label.config(text=f"Last refreshed: {scanned_time}")
         self._refresh_health()
 
+    def _get_discovery_session(self) -> DiscoverySession:
+        session = self.__dict__.get("_discovery_session")
+        if session is None:
+            session = DiscoverySession(
+                coordinator=self._coordinator,
+                registry=self._node_registry,
+                get_cluster_state=lambda: self.__dict__.get("_cluster_state"),
+                set_cluster_state=lambda state: setattr(self, "_cluster_state", state),
+                save_cluster_state=self._save_cluster_state,
+                schedule_timer=self._schedule_timer,
+                cancel_timer=self._cancel_timer,
+                start_background_poll=self._start_background_poll,
+                on_candidate=self._on_discovered_candidate,
+                on_lost=self._on_discovered_lost,
+                discovery_factory=NetworkDiscovery,
+                app_version=__version__,
+                is_closing=lambda: self._is_closing,
+            )
+            session.timer_id = self.__dict__.get("_discovery_tick_id")
+            self._discovery_session = session
+        return session
+
     def _start_discovery(self) -> None:
         """Advertise this node and browse for peers via the shared coordinator.
 
@@ -1667,74 +1752,30 @@ class AppWindow:
         simply has no discovered candidates.
         """
 
-        registry = self.__dict__.get("_node_registry")
-        if registry is None:
+        if self.__dict__.get("_node_registry") is None:
             return
-        state = self.__dict__.get("_cluster_state")
-        if state is not None and not state.discovery_enabled:
+        if self.__dict__.get("_coordinator") is None:
+            return
+        session = self._get_discovery_session()
+        result = session.start()
+        self._discovery_tick_id = session.timer_id
+        if result.reason == "disabled":
             self._nodes_status("Discovery disabled")
             return
-        if state is not None and not state.local_identity_persisted:
-            try:
-                self._cluster_store.save(state)
-            except ClusterSaveError as error:
-                LOGGER.warning(
-                    "Discovery waiting for durable local identity: %s", error
-                )
-                return
-            state = replace(state, local_identity_persisted=True)
-            self._cluster_state = state
-        try:
-            local_context = registry.context(
-                registry.local_id() or NodeId(LOCAL_NODE_ID)
-            )
-        except KeyError:
-            return
-        descriptor = local_context.descriptor
-        advertisement = DiscoveryAdvertisement(
-            stable_id=descriptor.id.value,
-            display_name=descriptor.display_name,
-            hostname=descriptor.hostname,
-            app_version=__version__,
-            protocol_version=PROTOCOL_VERSION,
-            platform=descriptor.platform,
-            connectable=False,
-            port=None,
-            identity_fingerprint=local_context.descriptor.identity_fingerprint
-            or node_identity_fingerprint(descriptor.id),
-        )
-        discovery = NetworkDiscovery(
-            descriptor.id,
-            advertisement=advertisement,
-        )
-        started = self._coordinator.start_discovery(
-            discovery,
-            on_candidate=self._on_discovered_candidate,
-            on_lost=self._on_discovered_lost,
-        )
-        if started:
+        if result.started:
             self._nodes_status("Discovery running - no peers found")
-            self._discovery_tick_id = self._schedule_timer(
-                int(REAP_TICK_SECONDS * 1000),
-                self._tick_discovery,
-            )
-            self._start_background_poll()
         else:
-            reason = discovery.unavailable_reason or "unknown error"
-            if discovery.available:
-                self._nodes_error(f"Discovery error: {reason}")
+            if result.reason in {"identity persistence", "local node unavailable"}:
+                return
+            if result.available:
+                self._nodes_error(f"Discovery error: {result.reason}")
             else:
-                self._nodes_error(f"Discovery backend unavailable: {reason}")
+                self._nodes_error(f"Discovery backend unavailable: {result.reason}")
 
     def _tick_discovery(self) -> None:
-        self._discovery_tick_id = None
-        if self._is_closing:
-            return
-        self._coordinator.discovery_tick()
-        self._discovery_tick_id = self._schedule_timer(
-            int(REAP_TICK_SECONDS * 1000),
-            self._tick_discovery,
-        )
+        session = self._get_discovery_session()
+        session.tick()
+        self._discovery_tick_id = session.timer_id
 
     def _on_discovered_candidate(self, candidate: Any) -> None:
         if self._is_closing:
@@ -1957,11 +1998,17 @@ class AppWindow:
         )
 
     def _stop_discovery(self) -> None:
-        self._cancel_timer(self.__dict__.get("_discovery_tick_id"))
-        self._discovery_tick_id = None
-        coordinator = self.__dict__.get("_coordinator")
-        if coordinator is not None:
-            coordinator.stop_discovery()
+        if "_node_registry" not in self.__dict__:
+            self._cancel_timer(self.__dict__.get("_discovery_tick_id"))
+            self._discovery_tick_id = None
+            return
+        if self.__dict__.get("_coordinator") is None:
+            self._cancel_timer(self.__dict__.get("_discovery_tick_id"))
+            self._discovery_tick_id = None
+            return
+        session = self._get_discovery_session()
+        session.stop()
+        self._discovery_tick_id = session.timer_id
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self.master)
@@ -2087,23 +2134,10 @@ class AppWindow:
         on_error: Callable[[Exception], None],
         on_finished: Callable[[], None] | None = None,
     ) -> None:
-        """Run one task off the UI thread and deliver its result or error.
-
-        Shared by the full-scan worker and the per-component workers, so the
-        daemon-thread + queue delivery semantics live in one place.
-        """
-
-        def worker() -> None:
-            try:
-                on_success(task())
-            except Exception as error:  # noqa: BLE001 - failures reach the queue.
-                LOGGER.warning("Background task failed: %s", error)
-                on_error(error)
-            finally:
-                if on_finished is not None:
-                    on_finished()
-
-        threading.Thread(target=worker, daemon=True).start()
+        if "_background_queue" not in self.__dict__:
+            run_daemon(task, on_success, on_error, on_finished, logger=LOGGER)
+            return
+        self._background_service().run_daemon(task, on_success, on_error, on_finished)
 
     def _run_in_background(
         self,
@@ -2111,35 +2145,12 @@ class AppWindow:
         on_success: Callable[[DashboardSnapshot], None] | None = None,
         on_error: Callable[[str], None] | None = None,
     ) -> bool:
-        self._set_busy(True)
-        self._background_tasks += 1
-        self._start_background_poll()
-        success_callback = on_success or self._show_snapshot
-        error_callback = on_error or self._show_error
-
-        def finish_on_ui() -> None:
-            self._background_tasks = max(0, self._background_tasks - 1)
-            self._resolve_completed_worker()
-
-        def on_finished() -> None:
-            self._background_queue.put(("finished", finish_on_ui))
-
-        try:
-            self._run_daemon(
-                task,
-                lambda result: self._background_queue.put(
-                    (success_callback, (result,))
-                ),
-                lambda error: self._background_queue.put(
-                    (error_callback, (str(error),))
-                ),
-                on_finished=on_finished,
-            )
-        except RuntimeError as error:
-            finish_on_ui()
-            error_callback(str(error))
-            return False
-        return True
+        return self._background_service().run_in_background(
+            task,
+            on_success or self._show_snapshot,
+            on_error or self._show_error,
+            daemon_runner=self._run_daemon,
+        )
 
     def _submit_ui(self, callback: Callable[[], None]) -> None:
         """Deliver one UI callback through the shared background queue.
@@ -2148,164 +2159,104 @@ class AppWindow:
         ``_drain_background_queue``; worker threads never touch widgets.
         """
 
-        self._background_queue.put(("ui", callback))
+        self._background_service().submit_ui(callback)
 
     def _start_background_poll(self) -> None:
-        # Transport callbacks only enqueue; the UI-owned poll drains discovery too.
-        if threading.current_thread() is not threading.main_thread():
-            return
-        if self._background_poll_id is None and not self._is_closing:
-            self._background_poll_id = self._schedule_timer(
-                self.BACKGROUND_POLL_MILLISECONDS,
-                self._drain_background_queue,
-            )
+        self._background_service().start_poll()
 
     def _drain_background_queue(self) -> None:
-        self._background_poll_id = None
-
-        coordinator = self._render_coordinator()
-        if coordinator is not None:
-            coordinator.begin_batch()
-        try:
-            while True:
-                try:
-                    item = self._background_queue.get_nowait()
-                except Empty:
-                    break
-
-                if item is None:
-                    self._background_tasks = max(0, self._background_tasks - 1)
-                    self._resolve_completed_worker()
-                    continue
-
-                if isinstance(item, tuple) and len(item) == 2 and item[0] == "finished":
-                    self._invoke_delivered(cast(Callable[[], None], item[1]))
-                    continue
-
-                if isinstance(item, tuple) and len(item) == 2 and item[0] == "ui":
-                    if not self._is_closing:
-                        self._invoke_delivered(cast(Callable[[], None], item[1]))
-                    continue
-
-                callback, args = cast(
-                    tuple[Callable[..., None], tuple[object, ...]],
-                    item,
-                )
-                if not self._is_closing:
-                    callback(*args)
-        finally:
-            if coordinator is not None:
-                coordinator.end_batch()
-
-        coordinator = self.__dict__.get("_coordinator")
-        pending = coordinator is not None and coordinator.has_pending_work
-        if not self._is_closing and (
-            self._background_tasks > 0
-            or pending
-            or self.__dict__.get("_discovery_tick_id") is not None
-        ):
-            self._start_background_poll()
+        self._background_service().drain_queue()
 
     @staticmethod
     def _invoke_delivered(callback: Callable[[], None]) -> None:
-        try:
-            callback()
-        except Exception as error:  # noqa: BLE001 - a dead widget must not kill the drain.
-            LOGGER.warning("Dropped UI delivery callback: %s", error)
+        TimerDelivery.invoke(callback, LOGGER)
 
     def handle_analyze(self) -> None:
         if self._is_closing:
-            return
-        scan_state = self._scan_coordinator_state()
-        if scan_state.active:
-            scan_state.begin()
             return
         source_node_id = self.__dict__.get("_selected_node_id")
         source_context = self._selected_context()
         source_provider = (
             source_context.provider if source_context is not None else self.analyzer
         )
-        generation, started = scan_state.begin()
-        if not started:
-            return
-        coordinator = self._render_coordinator()
-        if coordinator is not None:
-            coordinator.invalidate("scan-status", generation, node_id=source_node_id)
-            coordinator.invalidate(
-                "dashboard-snapshot",
-                generation,
-                node_id=source_node_id,
+
+        def on_started(generation: int, _cancel_event: threading.Event) -> None:
+            coordinator = self._render_coordinator()
+            if coordinator is not None:
+                coordinator.invalidate(
+                    "scan-status", generation, node_id=source_node_id
+                )
+                coordinator.invalidate(
+                    "dashboard-snapshot", generation, node_id=source_node_id
+                )
+
+        def start_worker(generation: int, cancel_event: threading.Event) -> None:
+            def report_progress(message: str) -> None:
+                self._submit_ui(lambda: apply_progress(message))
+
+            def apply_progress(message: str) -> None:
+                if generation <= self._resolved_scan_generation:
+                    return
+                self._request_render(
+                    ui_render.RenderIntent(
+                        target="scan-status",
+                        generation=generation,
+                        node_id=source_node_id,
+                        components=frozenset({"progress"}),
+                        payload=message,
+                        payload_set=True,
+                        priority=1,
+                    ),
+                    lambda intent: self._show_progress(cast(str, intent.payload)),
+                )
+
+            def dashboard_task() -> DashboardSnapshot:
+                return call_legacy_compatible(
+                    lambda: source_provider.dashboard_snapshot(
+                        cancel_event=cancel_event,
+                        progress_callback=report_progress,
+                    ),
+                    lambda: source_provider.dashboard_snapshot(),
+                )
+
+            def queue_snapshot(snapshot: DashboardSnapshot) -> None:
+                # Lifecycle completion cannot wait for a hidden page to render.
+                rerun_requested = self._resolution_for_generation(generation)
+                if rerun_requested is None:
+                    return
+                self._set_busy(False)
+                self._request_render(
+                    ui_render.RenderIntent(
+                        target="dashboard-snapshot",
+                        generation=generation,
+                        node_id=source_node_id,
+                        components=frozenset({"snapshot"}),
+                        layout_changed=True,
+                        payload=snapshot,
+                        payload_set=True,
+                        priority=3,
+                    ),
+                    lambda intent: self._show_snapshot_if_current(
+                        generation,
+                        cast(DashboardSnapshot, intent.payload),
+                        node_id=source_node_id,
+                    ),
+                )
+                self._schedule_rerun_if_requested(rerun_requested)
+
+            self._run_in_background(
+                dashboard_task,
+                on_success=queue_snapshot,
+                on_error=lambda message: self._show_error_for_generation(
+                    generation, message, node_id=source_node_id
+                ),
             )
 
-        cancel_event = threading.Event()
-        self._analysis_cancel_event = cancel_event
-        self._scan_timeout_id = self._schedule_timer(
-            self.SCAN_TIMEOUT_MILLISECONDS,
-            self._handle_scan_timeout,
-            generation,
+        self._dashboard_scan_lifecycle().start(
+            on_started,
+            start_worker,
         )
-
-        def report_progress(message: str) -> None:
-            self._submit_ui(lambda: apply_progress(message))
-
-        def apply_progress(message: str) -> None:
-            if generation <= self._resolved_scan_generation:
-                return
-            self._request_render(
-                ui_render.RenderIntent(
-                    target="scan-status",
-                    generation=generation,
-                    node_id=source_node_id,
-                    components=frozenset({"progress"}),
-                    payload=message,
-                    payload_set=True,
-                    priority=1,
-                ),
-                lambda intent: self._show_progress(cast(str, intent.payload)),
-            )
-
-        def dashboard_task() -> DashboardSnapshot:
-            return call_legacy_compatible(
-                lambda: source_provider.dashboard_snapshot(
-                    cancel_event=cancel_event,
-                    progress_callback=report_progress,
-                ),
-                lambda: source_provider.dashboard_snapshot(),
-            )
-
-        def queue_snapshot(snapshot: DashboardSnapshot) -> None:
-            # Lifecycle completion cannot wait for a hidden page to be rendered.
-            rerun_requested = self._resolution_for_generation(generation)
-            if rerun_requested is None:
-                return
-            self._set_busy(False)
-            self._request_render(
-                ui_render.RenderIntent(
-                    target="dashboard-snapshot",
-                    generation=generation,
-                    node_id=source_node_id,
-                    components=frozenset({"snapshot"}),
-                    layout_changed=True,
-                    payload=snapshot,
-                    payload_set=True,
-                    priority=3,
-                ),
-                lambda intent: self._show_snapshot_if_current(
-                    generation,
-                    cast(DashboardSnapshot, intent.payload),
-                    node_id=source_node_id,
-                ),
-            )
-            self._schedule_rerun_if_requested(rerun_requested)
-
-        def queue_error(message: str) -> None:
-            self._show_error_for_generation(generation, message, node_id=source_node_id)
-
-        self._run_in_background(
-            dashboard_task,
-            on_success=queue_snapshot,
-            on_error=queue_error,
-        )
+        self._sync_dashboard_scan_state()
 
     def _claim_scan_resolution(self, generation: int) -> tuple[bool, bool]:
         """Resolve a scan generation once and report its finish state.
@@ -2315,35 +2266,13 @@ class AppWindow:
         double-report the same scan.
         """
 
-        if generation <= self._resolved_scan_generation:
-            return False, False
-        finished, rerun_requested = self._scan_coordinator_state().finish(generation)
-        if not finished:
-            return False, False
-        self._resolved_scan_generation = generation
-        return finished, rerun_requested
+        result = self._dashboard_scan_lifecycle().claim_resolution(generation)
+        self._sync_dashboard_scan_state()
+        return result
 
     def _handle_scan_timeout(self, generation: int) -> None:
-        if self._is_closing:
-            return
-        if generation != self._scan_coordinator_state().generation:
-            return
-        if generation <= self._resolved_scan_generation:
-            return
-        if self.__dict__.get("_timed_out_generation") is not None:
-            return
-        self._scan_timeout_id = None
-        self.__dict__["_timed_out_generation"] = generation
-        self.__dict__["_lease_grace_id"] = self._schedule_timer(
-            self.SCAN_LEASE_GRACE_MILLISECONDS,
-            self._release_lease_after_grace,
-            generation,
-        )
-        cancel_event = self._analysis_cancel_event
-        self._analysis_cancel_event = None
-        if cancel_event is not None:
-            cancel_event.set()
-        self._show_error(self.SCAN_TIMEOUT_MESSAGE)
+        self._dashboard_scan_lifecycle().handle_timeout(generation)
+        self._sync_dashboard_scan_state()
 
     def _release_timed_out_lease(
         self,
@@ -2359,14 +2288,10 @@ class AppWindow:
         itself is that timer, so it must not cancel it).
         """
 
-        self._resolved_scan_generation = generation
-        self.__dict__["_timed_out_generation"] = None
-        if cancel_grace_timer:
-            self._cancel_timer(self.__dict__.get("_lease_grace_id"))
-        self.__dict__["_lease_grace_id"] = None
-        finished, rerun_requested = self._scan_coordinator_state().finish(generation)
-        if finished:
-            self._schedule_rerun_if_requested(rerun_requested)
+        self._dashboard_scan_lifecycle().release_timed_out_lease(
+            generation, cancel_grace_timer=cancel_grace_timer
+        )
+        self._sync_dashboard_scan_state()
 
     def _release_lease_after_grace(self, generation: int) -> None:
         """Force-release a timed-out scan lease after a bounded grace window.
@@ -2377,16 +2302,8 @@ class AppWindow:
         over a permanent lockout.
         """
 
-        if self._is_closing:
-            return
-        if self.__dict__.get("_timed_out_generation") != generation:
-            return
-        if generation <= self._resolved_scan_generation:
-            return
-        self._release_timed_out_lease(
-            generation,
-            cancel_grace_timer=False,
-        )
+        self._dashboard_scan_lifecycle().release_lease_after_grace(generation)
+        self._sync_dashboard_scan_state()
 
     def _resolve_completed_worker(self) -> None:
         """Release the timed-out scan lease once its worker actually finishes.
@@ -2397,21 +2314,12 @@ class AppWindow:
         rerun is honoured.
         """
 
-        if self._is_closing:
-            return
-        timed_out = self.__dict__.get("_timed_out_generation")
-        if timed_out is None:
-            return
-        if timed_out <= self._resolved_scan_generation:
-            return
-        self._release_timed_out_lease(
-            timed_out,
-            cancel_grace_timer=True,
-        )
+        self._dashboard_scan_lifecycle().resolve_completed_worker()
+        self._sync_dashboard_scan_state()
 
     def _cancel_scan_timeout(self) -> None:
-        self._cancel_timer(self._scan_timeout_id)
-        self._scan_timeout_id = None
+        self._dashboard_scan_lifecycle().cancel_timeout()
+        self._sync_dashboard_scan_state()
 
     def _resolve_generation(self, generation: int) -> tuple[bool, bool]:
         """Resolve one scan generation, clearing its timeout and cancel event.
@@ -2420,12 +2328,9 @@ class AppWindow:
         already resolved, nothing is cleared.
         """
 
-        finished, rerun_requested = self._claim_scan_resolution(generation)
-        if not finished:
-            return False, False
-        self._cancel_scan_timeout()
-        self._analysis_cancel_event = None
-        return True, rerun_requested
+        result = self._dashboard_scan_lifecycle().resolve_generation(generation)
+        self._sync_dashboard_scan_state()
+        return result
 
     def _schedule_rerun_if_requested(self, rerun_requested: bool) -> None:
         """Re-run one coalesced scan when the finished generation requested it.
@@ -2446,12 +2351,9 @@ class AppWindow:
         resolution preamble exist in one place.
         """
 
-        if self.__dict__.get("_timed_out_generation") == generation:
-            return None
-        resolved, rerun_requested = self._resolve_generation(generation)
-        if not resolved:
-            return None
-        return rerun_requested
+        result = self._dashboard_scan_lifecycle().resolution_for_generation(generation)
+        self._sync_dashboard_scan_state()
+        return result
 
     def _show_snapshot_for_generation(
         self,
@@ -2594,13 +2496,11 @@ class AppWindow:
         failing metric never erases unrelated information.
         """
 
-        return DashboardSnapshot(
-            system_label=snapshot.system_label,
-            scanned_at=snapshot.scanned_at,
-            resources=tuple(
-                self._merge_resource(resource.key, resource)
-                for resource in snapshot.resources
-            ),
+        return snapshot_state.merge_snapshot(
+            previous_snapshot=self.snapshot,
+            failed_counts=self.__dict__.setdefault("_failed_card_counts", {}),
+            snapshot=snapshot,
+            failed_card_keep_limit=self.FAILED_CARD_KEEP_LIMIT,
         )
 
     def _merge_resource(
@@ -2610,23 +2510,13 @@ class AppWindow:
     ) -> ResourceSummary:
         """Merge one incoming card against its last valid value."""
 
-        previous = self.snapshot
-        prior = (
-            next((item for item in previous.resources if item.key == key), None)
-            if previous is not None
-            else None
+        return snapshot_state.merge_resource(
+            previous_snapshot=self.snapshot,
+            failed_counts=self.__dict__.setdefault("_failed_card_counts", {}),
+            key=key,
+            resource=resource,
+            failed_card_keep_limit=self.FAILED_CARD_KEEP_LIMIT,
         )
-        counts = self.__dict__.setdefault("_failed_card_counts", {})
-
-        if not resource.failed:
-            counts[key] = 0
-            return resource
-        if prior is None:
-            return resource
-        counts[key] = counts.get(key, 0) + 1
-        if counts[key] >= self.FAILED_CARD_KEEP_LIMIT:
-            return resource
-        return prior
 
     def open_resource(self, resource_key: str) -> None:
         if self.snapshot is None:
@@ -2985,17 +2875,10 @@ class AppWindow:
             self._reconcile_cards_and_polling()
 
     def _is_card_visible(self, key: str) -> bool:
-        preferences = self.__dict__.get("_preferences")
-        if preferences is None:
-            return True
-        if key not in preferences.visible_cards:
-            return False
-        if not preferences.hide_unavailable_cards:
-            return True
-        capabilities = self.__dict__.get("_capabilities", {})
-        return (
-            capabilities.get(key, CapabilityState.UNKNOWN)
-            != CapabilityState.UNSUPPORTED
+        return card_policy.is_card_visible(
+            key,
+            preferences=self.__dict__.get("_preferences"),
+            capabilities=self.__dict__.get("_capabilities", {}),
         )
 
     def _polling_policy(self, key: str) -> bool:
@@ -3007,22 +2890,11 @@ class AppWindow:
         hidden or when proven absent and auto-hiding is enabled.
         """
 
-        preferences = self.__dict__.get("_preferences")
-        manually_hidden = (
-            preferences is not None and key not in preferences.visible_cards
+        return card_policy.should_pause_polling(
+            key,
+            preferences=self.__dict__.get("_preferences"),
+            capabilities=self.__dict__.get("_capabilities", {}),
         )
-        capabilities = self.__dict__.get("_capabilities", {})
-        auto_hidden = (
-            preferences is not None
-            and preferences.hide_unavailable_cards
-            and capabilities.get(key, CapabilityState.UNKNOWN)
-            == CapabilityState.UNSUPPORTED
-        )
-        if key in ("network", "battery"):
-            return manually_hidden or auto_hidden
-        if key == "gpu":
-            return auto_hidden
-        return False
 
     def _grid_card(self, card: Any, index: int, columns: int) -> None:
         """Place one dashboard card in the responsive grid.
@@ -3220,16 +3092,10 @@ class AppWindow:
         key: str,
         resource: ResourceSummary,
     ) -> None:
-        if self.snapshot is None:
+        updated = snapshot_state.replace_snapshot_resource(self.snapshot, key, resource)
+        if updated is None:
             return
-        self.snapshot = DashboardSnapshot(
-            system_label=self.snapshot.system_label,
-            scanned_at=self.snapshot.scanned_at,
-            resources=tuple(
-                resource if current.key == key else current
-                for current in self.snapshot.resources
-            ),
-        )
+        self.snapshot = updated
         context = self._selected_context()
         if context is not None:
             context.snapshot = self.snapshot
@@ -3240,46 +3106,25 @@ class AppWindow:
         callback: Callable[..., None],
         *args: object,
     ) -> str | None:
-        if self._is_closing:
-            return None
-
-        identifier: str | None = None
-
-        def run_callback() -> None:
-            if identifier is not None:
-                self._pending_after_ids.discard(identifier)
-            if not self._is_closing:
-                callback(*args)
-
-        try:
-            identifier = self.master.after(delay, run_callback)
-        except (RuntimeError, tk.TclError):
-            if not self._is_closing:
-                LOGGER.exception("Failed to schedule Tkinter work")
-            return None
-
-        self._pending_after_ids.add(identifier)
-        return identifier
+        return self._timer_delivery_for_window().schedule(delay, callback, *args)
 
     def _cancel_timer(self, identifier: str | None) -> bool:
-        if identifier is None:
-            return True
-
-        try:
-            self.master.after_cancel(identifier)
-        except (RuntimeError, tk.TclError):
-            if not self._is_closing:
-                LOGGER.exception("Failed to cancel Tkinter work")
-            else:
-                self._pending_after_ids.discard(identifier)
-            return False
-
-        self._pending_after_ids.discard(identifier)
-        return True
+        return self._timer_delivery_for_window().cancel(identifier)
 
     def _cancel_pending_timers(self) -> None:
-        for identifier in tuple(self._pending_after_ids):
-            self._cancel_timer(identifier)
+        self._timer_delivery_for_window().cancel_all()
+
+    def _timer_delivery_for_window(self) -> TimerDelivery:
+        timer_delivery = self.__dict__.get("_timer_delivery")
+        if timer_delivery is None:
+            timer_delivery = TimerDelivery(
+                master=self.master,
+                is_closing=lambda: self._is_closing,
+                pending_ids=self._pending_after_ids,
+                logger=LOGGER,
+            )
+            self.__dict__["_timer_delivery"] = timer_delivery
+        return timer_delivery
 
     def _finalize_shutdown(self) -> None:
         """Release the scan lease and cancel every pending timer.
@@ -3293,9 +3138,8 @@ class AppWindow:
         """
 
         self._stop_discovery()
-        self._scan_coordinator_state().cancel()
-        self.__dict__["_timed_out_generation"] = None
-        self.__dict__["_lease_grace_id"] = None
+        self._dashboard_scan_lifecycle().cancel()
+        self._sync_dashboard_scan_state()
         coordinator = self.__dict__.get("_coordinator")
         if coordinator is not None:
             coordinator.cancel_all()

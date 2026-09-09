@@ -52,8 +52,13 @@ def build_telemetry_graph_layout(
     top = 18.0
     bottom = float(max(height, 1) - 18)
     right = float(max(width, 1) - 14)
-    lowest = min(values)
-    highest = max(values)
+    threshold_values = tuple(
+        value
+        for value in (snapshot.warning_celsius, snapshot.critical_celsius)
+        if value is not None and isfinite(value)
+    )
+    lowest = min((*values, *threshold_values))
+    highest = max((*values, *threshold_values))
     if lowest == highest:
         lowest -= 1.0
         highest += 1.0
@@ -73,7 +78,7 @@ def build_telemetry_graph_layout(
     )
 
     def threshold_y(value: float | None) -> float | None:
-        return None if value is None else y_for(value)
+        return None if value is None or not isfinite(value) else y_for(value)
 
     return TelemetryGraphLayout(
         points=points,

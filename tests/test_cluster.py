@@ -174,6 +174,37 @@ class ProcessAndFileCodecTests(unittest.TestCase):
 
 
 class ClusterStoreTests(unittest.TestCase):
+    def test_invalid_utf8_file_falls_back_to_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            path.write_bytes(b"\xff")
+            state = ClusterStore(path).load()
+            self.assertEqual(state.trusted_nodes, ())
+
+    def test_out_of_range_port_record_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            payload = {
+                "schema_version": 1,
+                "discovery_enabled": True,
+                "local_node_id": "local",
+                "trusted_nodes": [
+                    {
+                        "node_id": "peer",
+                        "display_name": "Peer",
+                        "hostname": "peer",
+                        "host": "peer",
+                        "port": 70000,
+                        "secret": "a" * 64,
+                    }
+                ],
+            }
+            path.write_text(json.dumps(payload))
+
+            state = ClusterStore(path).load()
+
+            self.assertEqual(state.trusted_nodes, ())
+
     def _store(self) -> tuple[ClusterStore, Path]:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)

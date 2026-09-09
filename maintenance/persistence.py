@@ -27,6 +27,9 @@ def read_text_or_none(
         return path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
+    except UnicodeError as error:
+        logger.warning(warning_template, error)
+        return None
     except OSError as error:
         logger.warning(warning_template, error)
         return None

@@ -107,6 +107,12 @@ class PreferencesStoreRoundTripTests(unittest.TestCase):
             store = PreferencesStore(Path(directory) / "nope.json")
             self.assertEqual(store.load(), AppPreferences.defaults())
 
+    def test_load_invalid_utf8_returns_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences.json"
+            path.write_bytes(b"\xff")
+            self.assertEqual(PreferencesStore(path).load(), AppPreferences.defaults())
+
     def test_load_malformed_payloads_return_defaults(self) -> None:
         valid = RefreshIntervals().as_dict()
         cases: list[tuple[str, object]] = [

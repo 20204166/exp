@@ -29,6 +29,7 @@ import time
 import warnings
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from threading import RLock
 from typing import Any, Protocol, cast
 
 from maintenance.nodes import DiscoveredNodeCandidate
@@ -249,12 +250,23 @@ class NetworkDiscovery:
         )
         self._peers: dict[str, _PeerRecord] = {}
         self._service_nodes: dict[str, str] = {}
+        self._peer_lock = RLock()
         self._active = False
         self._unavailable_reason: str | None = None
 
     @property
     def available(self) -> bool:
         return self._backend.available
+
+    @property
+    def on_event(self) -> Callable[[EventKind, Any], None] | None:
+        """Return the lifecycle bridge used by ``AppCoordinator``."""
+
+        return self._on_event
+
+    @on_event.setter
+    def on_event(self, callback: Callable[[EventKind, Any], None] | None) -> None:
+        self._on_event = callback
 
     @property
     def unavailable_reason(self) -> str | None:
@@ -265,6 +277,10 @@ class NetworkDiscovery:
         return None
 
     def start(self) -> bool:
+        with self._peer_lock:
+            return self._start_locked()
+
+    def _start_locked(self) -> bool:
         """Advertise this instance and begin browsing peers.
 
         Returns whether discovery became active. When the transport is
@@ -297,24 +313,33 @@ class NetworkDiscovery:
         return True
 
     def stop(self) -> None:
-        if not self._active:
-            return
-        try:
-            self._backend.stop()
-        except Exception as error:  # noqa: BLE001 - shutdown is best-effort.
-            LOGGER.warning("Network discovery stop failed: %s", error)
-        self._active = False
-        self._peers.clear()
-        self._service_nodes.clear()
+        with self._peer_lock:
+            if not self._active:
+                return
+            self._active = False
+            try:
+                self._backend.stop()
+            except Exception as error:  # noqa: BLE001 - shutdown is best-effort.
+                LOGGER.warning("Network discovery stop failed: %s", error)
+            self._peers.clear()
+            self._service_nodes.clear()
 
     @property
     def active(self) -> bool:
-        return self._active
+        with self._peer_lock:
+            return self._active
 
     def peers(self) -> tuple[DiscoveredNodeCandidate, ...]:
-        return tuple(record.candidate for record in self._peers.values())
+        with self._peer_lock:
+            return tuple(record.candidate for record in self._peers.values())
 
     def _handle_transport_event(
+        self, event: EventKind, service_name: str, info: Any
+    ) -> None:
+        with self._peer_lock:
+            self._handle_transport_event_locked(event, service_name, info)
+
+    def _handle_transport_event_locked(
         self, event: EventKind, service_name: str, info: Any
     ) -> None:
         if not self._active:
@@ -367,9 +392,10 @@ class NetworkDiscovery:
         self._emit(EVENT_CANDIDATE, candidate)
 
     def _drop_peer(self, node_id: str) -> None:
-        if node_id in self._peers:
-            del self._peers[node_id]
-            self._emit(EVENT_LOST, node_id)
+        with self._peer_lock:
+            if node_id in self._peers:
+                del self._peers[node_id]
+                self._emit(EVENT_LOST, node_id)
 
     def expire_stale(self, now: float | None = None) -> None:
         """Drop peers whose TTL has lapsed, emitting one lost event each.
@@ -380,13 +406,14 @@ class NetworkDiscovery:
 
         if now is None:
             now = self._clock()
-        stale = [
-            node_id
-            for node_id, record in self._peers.items()
-            if now - record.last_seen > self._ttl_seconds
-        ]
-        for node_id in stale:
-            self._drop_peer(node_id)
+        with self._peer_lock:
+            stale = [
+                node_id
+                for node_id, record in self._peers.items()
+                if now - record.last_seen > self._ttl_seconds
+            ]
+            for node_id in stale:
+                self._drop_peer(node_id)
 
     def _emit(self, kind: EventKind, payload: Any) -> None:
         if self._on_event is not None:
@@ -427,10 +454,13 @@ class NetworkDiscovery:
 
         port: int | None = None
         raw_port = _attr(info, "port")
-        try:
-            port = int(raw_port)
-        except (TypeError, ValueError):
-            port = None
+        port = (
+            raw_port
+            if isinstance(raw_port, int)
+            and not isinstance(raw_port, bool)
+            and 0 <= raw_port <= 65535
+            else None
+        )
 
         addresses = tuple(_service_address_texts(info))
 

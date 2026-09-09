@@ -543,7 +543,11 @@ class ClusterStore:
                 LOGGER.warning("Ignoring malformed trusted-node record %s", node_id)
                 return None
         port = item.get("port")
-        if port is not None and not isinstance(port, int):
+        if port is not None and (
+            not isinstance(port, int)
+            or isinstance(port, bool)
+            or not 0 <= port <= 65535
+        ):
             LOGGER.warning("Ignoring malformed trusted-node port for %s", node_id)
             return None
         secret = item.get("secret")

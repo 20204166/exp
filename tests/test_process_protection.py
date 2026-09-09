@@ -22,6 +22,29 @@ def _manager_with(
 
 
 class ProcessProtectionTests(unittest.TestCase):
+    def test_create_time_change_before_action_is_rejected(self) -> None:
+        class ChangingProcess(FakeProcess):
+            def __init__(self) -> None:
+                super().__init__(50001, "Example App", getpass.getuser())
+                self._create_time_reads = 0
+
+            def create_time(self) -> float:
+                self._create_time_reads += 1
+                return 1000.0 if self._create_time_reads == 1 else 2000.0
+
+        process = ChangingProcess()
+        manager, fake, patcher = _manager_with({50001: process})
+
+        try:
+            result = manager.request_quit(
+                [50001], expected_create_times={50001: 1000.0}
+            )
+        finally:
+            patcher.stop()
+
+        self.assertFalse(fake.processes[50001].terminated)
+        self.assertTrue(any("changed" in error for error in result.errors))
+
     def test_protected_by_pid_is_not_terminated(self) -> None:
         manager, fake, patcher = _manager_with(
             {os.getpid(): FakeProcess(os.getpid(), "python", getpass.getuser())}
@@ -141,6 +164,35 @@ class ProcessProtectionTests(unittest.TestCase):
 
 
 class ProcessTerminationTests(unittest.TestCase):
+    def test_force_quit_rejects_child_identity_change(self) -> None:
+        class ChangingChild(FakeProcess):
+            def __init__(self) -> None:
+                super().__init__(50002, "worker", getpass.getuser(), create_time=2000.0)
+                self._create_time_reads = 0
+
+            def create_time(self) -> float:
+                self._create_time_reads += 1
+                return 2000.0 if self._create_time_reads == 1 else 3000.0
+
+        child = ChangingChild()
+        parent = FakeProcess(
+            50001,
+            "Example App",
+            getpass.getuser(),
+            create_time=1000.0,
+            children=[child],
+        )
+        fake = FakePsutil({50001: parent, 50002: child})
+
+        with patch("maintenance.actions.psutil", fake):
+            result = ProcessManager().force_quit(
+                [50001], expected_create_times={50001: 1000.0}
+            )
+
+        self.assertFalse(child.killed)
+        self.assertTrue(parent.killed)
+        self.assertTrue(any("changed" in error for error in result.errors))
+
     def test_request_quit_terminates_but_does_not_kill_children(self) -> None:
         child = FakeProcess(50002, "worker", getpass.getuser())
         parent = FakeProcess(50001, "Example App", getpass.getuser(), children=[child])

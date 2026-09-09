@@ -44,7 +44,7 @@ try {
         throw "System Analyzer requires Python 3.10 or newer. Deactivate any active virtual environment (or run outside it) and retry."
     }
     if (Test-VenvPython $py) { throw "Cannot install: '$($py -join ' ')' is inside a virtual environment (pip disables '--user' inside venvs). Deactivate the venv and retry." }
-    $pipArgs = @("-m", "pip", "install")
+    $pipArgs = @("-m", "pip", "install", "--force-reinstall")
     if (-not $System) { $pipArgs += "--user" }
     $pipArgs += @("--break-system-packages", $wheelPath)
     & $py @pipArgs

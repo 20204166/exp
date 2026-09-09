@@ -1,6 +1,7 @@
 """NetworkDiscovery component tests (no real LAN required)."""
 
 import unittest
+from threading import Event, Thread
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -36,7 +37,7 @@ def _info(
     app_version: str = "1.2.2.0",
     platform: str = "Linux",
     connectable: str = "false",
-    port: int = 5000,
+    port: Any = 5000,
     addresses: list[str] | None = None,
     fingerprint: str | None = None,
 ) -> dict[str, Any]:
@@ -414,6 +415,85 @@ class NetworkDiscoveryTests(unittest.TestCase):
         kind, candidate = events[0]
         self.assertEqual(kind, "candidate")
         self.assertIsNone(candidate.port)
+
+    def test_out_of_range_or_boolean_port_is_tolerated_as_none(self) -> None:
+        for port in (-1, 65536, True):
+            with self.subTest(port=port):
+                discovery, backend, events, _clock = _discovery()
+                discovery.start()
+                backend.add(f"bad-{port}.{SERVICE_TYPE}", _info("bad", port=port))
+                self.assertEqual(len(events), 1)
+                self.assertIsNone(events[0][1].port)
+
+    def test_fractional_port_is_tolerated_as_none(self) -> None:
+        discovery, backend, events, _clock = _discovery()
+        discovery.start()
+        backend.add(f"fractional.{SERVICE_TYPE}", _info("fractional", port=1.9))
+
+        self.assertEqual(len(events), 1)
+        self.assertIsNone(events[0][1].port)
+
+    def test_stop_serializes_with_start(self) -> None:
+        started = Event()
+        release = Event()
+
+        class BlockingBackend(FakeBackend):
+            def start(self, advertisement: DiscoveryAdvertisement) -> None:
+                started.set()
+                release.wait(1)
+                super().start(advertisement)
+
+        backend = BlockingBackend(None)
+        discovery = NetworkDiscovery(
+            NodeId("local"),
+            advertisement=_advertisement(),
+            backend_factory=lambda _listener: backend,
+        )
+        start_thread = Thread(target=discovery.start)
+        start_thread.start()
+        self.assertTrue(started.wait(1))
+
+        stop_thread = Thread(target=discovery.stop)
+        stop_thread.start()
+        release.set()
+        start_thread.join(1)
+        stop_thread.join(1)
+
+        self.assertFalse(discovery.active)
+        self.assertTrue(backend.stopped)
+
+    def test_start_serializes_with_blocked_stop(self) -> None:
+        stop_started = Event()
+        release_stop = Event()
+
+        class BlockingBackend(FakeBackend):
+            def stop(self) -> None:
+                stop_started.set()
+                release_stop.wait(1)
+                super().stop()
+
+        backend = BlockingBackend(None)
+        discovery = NetworkDiscovery(
+            NodeId("local"),
+            advertisement=_advertisement(),
+            backend_factory=lambda _listener: backend,
+        )
+        discovery.start()
+
+        stop_thread = Thread(target=discovery.stop)
+        stop_thread.start()
+        self.assertTrue(stop_started.wait(1))
+
+        start_results: list[bool] = []
+        start_thread = Thread(target=lambda: start_results.append(discovery.start()))
+        start_thread.start()
+        release_stop.set()
+        stop_thread.join(1)
+        start_thread.join(1)
+
+        self.assertEqual(start_results, [True])
+        self.assertTrue(discovery.active)
+        self.assertTrue(backend.stopped)
 
     def test_missing_stable_id_is_rejected(self) -> None:
         discovery, backend, events, _clock = _discovery()

@@ -175,6 +175,9 @@ class BuildScriptReliabilityTests(unittest.TestCase):
         self.assertIn("Verify-InstalledWheel", install_user)
         self.assertIn("Remove-InstalledPackage $py", upgrade)
 
+        online = (REPO / "install" / "install-online.ps1").read_text()
+        self.assertIn('"--force-reinstall"', online)
+
     def test_common_sh_build_backend_version_gate_requires_68(self) -> None:
         import re
 

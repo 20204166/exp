@@ -146,6 +146,53 @@ class TelemetryGraphTests(unittest.TestCase):
         self.assertEqual(layout.points[-1][0], layout.right)
         self.assertIsNotNone(layout.warning_y)
 
+    def test_thresholds_remain_inside_plot_for_cool_samples(self) -> None:
+        snapshot = TemperatureSeriesSnapshot(
+            component="cpu",
+            title="CPU Temperature",
+            state=TemperatureState.VALID,
+            current_celsius=45.0,
+            minimum_celsius=40.0,
+            maximum_celsius=45.0,
+            warning_celsius=90.0,
+            critical_celsius=95.0,
+            samples=(
+                make_temperature_sample("cpu", 40.0, sampled_monotonic=1.0),
+                make_temperature_sample("cpu", 45.0, sampled_monotonic=2.0),
+            ),
+            events=(),
+        )
+
+        layout = build_telemetry_graph_layout(snapshot, 200, 100)
+
+        self.assertIsNotNone(layout)
+        assert layout is not None
+        assert layout.warning_y is not None
+        assert layout.critical_y is not None
+        self.assertTrue(layout.top <= layout.warning_y <= layout.bottom)
+        self.assertTrue(layout.top <= layout.critical_y <= layout.bottom)
+
+    def test_non_finite_thresholds_are_not_drawn(self) -> None:
+        snapshot = TemperatureSeriesSnapshot(
+            component="cpu",
+            title="CPU Temperature",
+            state=TemperatureState.VALID,
+            current_celsius=45.0,
+            minimum_celsius=40.0,
+            maximum_celsius=45.0,
+            warning_celsius=float("nan"),
+            critical_celsius=float("inf"),
+            samples=(make_temperature_sample("cpu", 45.0),),
+            events=(),
+        )
+
+        layout = build_telemetry_graph_layout(snapshot, 200, 100)
+
+        self.assertIsNotNone(layout)
+        assert layout is not None
+        self.assertIsNone(layout.warning_y)
+        self.assertIsNone(layout.critical_y)
+
 
 if __name__ == "__main__":
     unittest.main()

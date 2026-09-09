@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 from .catalog import ResourceFeature, ResourceFeatureCatalog
 from .coordinator import ScanCoordinator
+from .dashboard_scan import DashboardScanLifecycle
+from .discovery_session import DiscoverySession, DiscoveryStartResult
 from .downloads import (
     DownloadScanner,
     DownloadsPathResolver,
@@ -29,6 +31,7 @@ from .network_discovery import (
     DiscoveryEndpoint,
     NetworkDiscovery,
 )
+from .node_selection import NodeSelection
 from .process_safety import (
     PROTECTED_PROCESS_NAMES,
     ProcessSafetyPolicy,
@@ -71,13 +74,17 @@ __all__ = [
     "PROTECTED_PROCESS_NAMES",
     "SERVICE_TYPE",
     "BackgroundTaskRunner",
+    "DashboardScanLifecycle",
     "DiscoveryAdvertisement",
     "DiscoveryEndpoint",
+    "DiscoverySession",
+    "DiscoveryStartResult",
     "DownloadScanner",
     "DownloadsPathResolver",
     "GpuDetector",
     "HashFingerprint",
     "NetworkDiscovery",
+    "NodeSelection",
     "ProcessSafetyPolicy",
     "ProgressCallback",
     "ProgressTask",

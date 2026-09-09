@@ -120,6 +120,56 @@ class AppWindowTests(unittest.TestCase):
         callback.assert_not_called()
         self.assertEqual(window._background_tasks, 0)
 
+    def test_closed_partial_window_does_not_start_analysis(self) -> None:
+        window: Any = object.__new__(AppWindow)
+        window._is_closing = True
+
+        window.handle_analyze()
+
+    def test_partial_window_without_registry_does_not_start_discovery(self) -> None:
+        window: Any = object.__new__(AppWindow)
+        window._is_closing = True
+
+        window._start_discovery()
+
+    def test_partial_window_without_coordinator_stops_discovery_timer(self) -> None:
+        window: Any = object.__new__(AppWindow)
+        window.master = TimerMaster()
+        window._is_closing = True
+        window._pending_after_ids = {"after#1"}
+        window._node_registry = Mock()
+        window._discovery_tick_id = "after#1"
+
+        window._stop_discovery()
+
+        self.assertEqual(window.master.cancelled, ["after#1"])
+        self.assertIsNone(window._discovery_tick_id)
+
+    def test_partial_window_without_registry_stops_discovery_timer(self) -> None:
+        window: Any = object.__new__(AppWindow)
+        window.master = TimerMaster()
+        window._is_closing = True
+        window._pending_after_ids = {"after#1"}
+        window._discovery_tick_id = "after#1"
+
+        window._stop_discovery()
+
+        self.assertEqual(window.master.cancelled, ["after#1"])
+        self.assertIsNone(window._discovery_tick_id)
+
+    def test_partial_window_can_run_daemon_without_background_queue(self) -> None:
+        window: Any = object.__new__(AppWindow)
+        finished = threading.Event()
+
+        window._run_daemon(
+            lambda: "result",
+            lambda result: self.assertEqual(result, "result"),
+            self.fail,
+            finished.set,
+        )
+
+        self.assertTrue(finished.wait(1))
+
     def test_unexpected_timer_failure_is_logged(self) -> None:
         window = self.make_window(FailingMaster())
 

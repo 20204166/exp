@@ -80,6 +80,7 @@ class ProcessManager:
         )
         current_user = getpass.getuser()
         protected_pids = self._protected_pids(psutil_module)
+        target_create_times = dict(expected_create_times or {})
 
         targets: list[Any] = []
         for process in processes:
@@ -94,13 +95,24 @@ class ProcessManager:
                         current_user,
                         protected_pids,
                     ):
-                        targets.append(child)
+                        try:
+                            target_create_times[child.pid] = float(child.create_time())
+                        except process_errors as error:
+                            errors.append(f"PID {child.pid}: {error}")
+                        else:
+                            targets.append(child)
                     else:
                         errors.append(f"PID {child.pid} is protected.")
             targets.append(process)
 
         for target in targets:
             try:
+                expected_create_time = target_create_times.get(target.pid)
+                if expected_create_time is not None and float(
+                    target.create_time()
+                ) != float(expected_create_time):
+                    errors.append(f"PID {target.pid} changed since it was scanned.")
+                    continue
                 action(target)
             except process_errors as error:
                 errors.append(f"PID {target.pid}: {error}")
@@ -252,6 +264,7 @@ class FileManager:
 
             try:
                 resolved_path = path.resolve(strict=True)
+                initial_stat = resolved_path.stat()
             except (OSError, RuntimeError) as error:
                 errors.append(f"{path}: {error}")
                 continue
@@ -265,6 +278,14 @@ class FileManager:
                 continue
 
             try:
+                current_stat = resolved_path.stat()
+                if (
+                    current_stat.st_dev != initial_stat.st_dev
+                    or current_stat.st_ino != initial_stat.st_ino
+                    or not resolved_path.is_file()
+                ):
+                    errors.append(f"{path}: file changed during validation.")
+                    continue
                 send2trash_fn(str(resolved_path))
             except OSError as error:
                 errors.append(f"{path}: {error}")

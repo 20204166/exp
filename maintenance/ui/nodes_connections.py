@@ -544,6 +544,9 @@ class NodesConnectionsPage:
             except ValueError:
                 self.show_error("Port must be a whole number or empty")
                 return
+            if not 0 <= port <= 65535:
+                self.show_error("Port must be between 0 and 65535")
+                return
         if not name or not host:
             self.show_error("Name and host are required for a manual host")
             return

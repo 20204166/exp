@@ -173,6 +173,36 @@ class AppCoordinatorDiscoveryTests(unittest.TestCase):
         discovery.emit("candidate", _candidate())
         self.assertEqual(delivered, [])
 
+    def test_queued_event_is_dropped_after_stop_and_restart(self) -> None:
+        queued: list[Any] = []
+        coordinator = AppCoordinator(deliver=queued.append)
+        discovery = FakeDiscovery()
+        candidates: list[Any] = []
+
+        self.assertTrue(
+            coordinator.start_discovery(
+                discovery,
+                on_candidate=candidates.append,
+                on_lost=lambda _node_id: None,
+            )
+        )
+        discovery.emit("candidate", _candidate())
+        self.assertEqual(len(queued), 1)
+        coordinator.stop_discovery()
+        self.assertTrue(
+            coordinator.start_discovery(
+                discovery,
+                on_candidate=candidates.append,
+                on_lost=lambda _node_id: None,
+            )
+        )
+
+        queued.pop(0)()
+        self.assertEqual(candidates, [])
+        discovery.emit("candidate", _candidate())
+        queued.pop(0)()
+        self.assertEqual(len(candidates), 1)
+
     def test_discovery_tick_expires_stale_peers(self) -> None:
         coordinator, _delivered, _activity = self._make()
         discovery = FakeDiscovery()

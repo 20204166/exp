@@ -325,6 +325,7 @@ class AppCoordinator:
         self._on_activity = on_activity
         self._states: dict[str, AppRunState] = {}
         self._discovery: Any = None
+        self._discovery_generation: object | None = None
         self._discovery_handlers: dict[str, Any] = {}
 
     def _submit_default(self, worker: Callable[[], None]) -> None:
@@ -677,13 +678,24 @@ class AppCoordinator:
         def bridge(kind: str, payload: Any) -> None:
             if self._discovery is not discovery:
                 return  # late transport event after stop is ignored
-            if kind == "candidate":
-                self.post(lambda: on_candidate(payload))
-            else:
-                self.post(lambda: on_lost(str(payload)))
+            generation = self._discovery_generation
+
+            def deliver_event() -> None:
+                if (
+                    self._discovery is not discovery
+                    or self._discovery_generation is not generation
+                ):
+                    return  # queued event from an old lifecycle generation
+                if kind == "candidate":
+                    on_candidate(payload)
+                else:
+                    on_lost(str(payload))
+
+            self.post(deliver_event)
 
         discovery.on_event = bridge
         self._discovery = discovery
+        self._discovery_generation = object()
         self._discovery_handlers = {"candidate": on_candidate, "lost": on_lost}
         if not discovery.start():
             LOGGER.warning(
@@ -694,6 +706,7 @@ class AppCoordinator:
             # becomes available.
             if self._discovery is discovery:
                 self._discovery = None
+                self._discovery_generation = None
                 self._discovery_handlers = {}
                 discovery.on_event = None
             return False
@@ -720,6 +733,7 @@ class AppCoordinator:
 
         discovery = self._discovery
         self._discovery = None
+        self._discovery_generation = None
         self._discovery_handlers = {}
         if discovery is not None:
             discovery.stop()
