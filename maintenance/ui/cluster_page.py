@@ -27,6 +27,14 @@ _TRUST_TEXT: dict[str, str] = {
     "discovered": "Discovered",
 }
 
+_PAIRING_TEXT = {
+    "discovered": "Discovered",
+    "pairing": "Pairing",
+    "trusted": "Trusted",
+    "pairing_failed": "Pairing failed",
+    "identity_changed": "Identity changed",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ClusterPageCallbacks:
@@ -50,6 +58,7 @@ class ClusterNodeSpec:
     is_local: bool
     selectable: bool
     last_refresh: str | None = None
+    pairing_state: str = "trusted"
 
 
 class ClusterPage:
@@ -195,7 +204,8 @@ class ClusterPage:
         ).pack(anchor="w")
 
         trust_text = _TRUST_TEXT.get(spec.trust, spec.trust)
-        meta = f"{trust_text}  ·  {spec.status}"
+        pairing_text = _PAIRING_TEXT.get(spec.pairing_state, spec.pairing_state)
+        meta = f"{pairing_text}  ·  {trust_text}  ·  {spec.status}"
         if spec.capabilities:
             meta += f"  ·  {', '.join(spec.capabilities)}"
         if spec.last_refresh:

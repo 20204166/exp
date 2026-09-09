@@ -278,6 +278,7 @@ class DiscoveredBoundaryTests(unittest.TestCase):
     def test_promote_to_trusted_is_explicit_and_read_only_by_default(self) -> None:
         registry = NodeRegistry(_local_context())
         registry.update_discovered(_candidate("peer-a"))
+        registry.begin_pairing(NodeId("peer-a"))
         descriptor = registry.promote_to_trusted(NodeId("peer-a"))
         self.assertEqual(descriptor.trust, NodeTrustState.TRUSTED)
         self.assertEqual(descriptor.capabilities, frozenset())
@@ -291,6 +292,7 @@ class DiscoveredBoundaryTests(unittest.TestCase):
     def test_operational_context_replaces_trusted_placeholder(self) -> None:
         registry = NodeRegistry(_local_context())
         registry.update_discovered(_candidate("peer-a"))
+        registry.begin_pairing(NodeId("peer-a"))
         registry.promote_to_trusted(NodeId("peer-a"))
 
         registry.register_context(
@@ -305,6 +307,7 @@ class DiscoveredBoundaryTests(unittest.TestCase):
     ) -> None:
         registry = NodeRegistry(_local_context())
         registry.update_discovered(_candidate("peer-a"))
+        registry.begin_pairing(NodeId("peer-a"))
         registry.promote_to_trusted(NodeId("peer-a"))
 
         with self.assertRaises(ValueError):
@@ -327,6 +330,52 @@ class DiscoveredBoundaryTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             registry.promote_to_trusted(NodeId("never-seen"))
 
+    def test_promotion_requires_explicit_pairing_transition(self) -> None:
+        registry = NodeRegistry(_local_context())
+        registry.update_discovered(_candidate("peer-a"))
+
+        with self.assertRaises(ValueError):
+            registry.promote_to_trusted(NodeId("peer-a"))
+
+        self.assertEqual(
+            registry.pairing_state(NodeId("peer-a")).value,
+            "discovered",
+        )
+        registry.begin_pairing(NodeId("peer-a"))
+        self.assertEqual(
+            registry.pairing_state(NodeId("peer-a")).value,
+            "pairing",
+        )
+
+    def test_failed_pairing_does_not_create_trust(self) -> None:
+        registry = NodeRegistry(_local_context())
+        registry.update_discovered(_candidate("peer-a"))
+        registry.begin_pairing(NodeId("peer-a"))
+        registry.fail_pairing(NodeId("peer-a"))
+
+        self.assertEqual(
+            registry.pairing_state(NodeId("peer-a")).value,
+            "pairing_failed",
+        )
+        self.assertNotIn(
+            NodeId("peer-a"),
+            {descriptor.id for descriptor in registry.selectable_descriptors()},
+        )
+
+    def test_incompatible_peer_cannot_enter_pairing(self) -> None:
+        registry = NodeRegistry(_local_context())
+        registry.update_discovered(
+            _candidate("peer-a", protocol_version="99", compatible=False)
+        )
+
+        with self.assertRaises(ValueError):
+            registry.begin_pairing(NodeId("peer-a"))
+
+        self.assertEqual(
+            registry.pairing_state(NodeId("peer-a")).value,
+            "pairing_failed",
+        )
+
     def test_promotion_requires_a_peer_fingerprint(self) -> None:
         registry = NodeRegistry(_local_context())
         registry.update_discovered(
@@ -342,6 +391,7 @@ class DiscoveredBoundaryTests(unittest.TestCase):
         registry.update_discovered(
             _candidate("peer-a", identity_fingerprint=fingerprint)
         )
+        registry.begin_pairing(NodeId("peer-a"))
 
         descriptor = registry.promote_to_trusted(NodeId("peer-a"))
 
@@ -352,6 +402,7 @@ class DiscoveredBoundaryTests(unittest.TestCase):
         registry = NodeRegistry(_local_context())
         original = node_identity_fingerprint("peer-a")
         registry.update_discovered(_candidate("peer-a", identity_fingerprint=original))
+        registry.begin_pairing(NodeId("peer-a"))
         registry.promote_to_trusted(NodeId("peer-a"))
 
         registry.update_discovered(
@@ -392,11 +443,13 @@ class DiscoveredBoundaryTests(unittest.TestCase):
         registry.update_discovered(
             _candidate("peer-a", identity_fingerprint="original")
         )
+        registry.begin_pairing(NodeId("peer-a"))
         registry.promote_to_trusted(NodeId("peer-a"))
         registry.revoke_trusted(NodeId("peer-a"))
         registry.update_discovered(
             _candidate("peer-a", identity_fingerprint="replacement")
         )
+        registry.begin_pairing(NodeId("peer-a"))
 
         descriptor = registry.promote_to_trusted(NodeId("peer-a"))
 
@@ -406,6 +459,7 @@ class DiscoveredBoundaryTests(unittest.TestCase):
     def test_revoke_trusted_removes_node_and_deselects_to_local(self) -> None:
         registry = NodeRegistry(_local_context())
         registry.update_discovered(_candidate("peer-a"))
+        registry.begin_pairing(NodeId("peer-a"))
         registry.promote_to_trusted(NodeId("peer-a"))
         registry.register_context(
             _peer_context("peer-a", "Peer A", NodeTrustState.TRUSTED)

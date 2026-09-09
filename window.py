@@ -852,6 +852,7 @@ class AppWindow:
                 connectable=candidate.connectable,
                 port=candidate.port,
                 identity_fingerprint=candidate.identity_fingerprint,
+                pairing_state=registry.pairing_state(NodeId(candidate.stable_id)).value,
             )
             for candidate in registry.discovered_candidates()
         ]
@@ -890,6 +891,7 @@ class AppWindow:
                             permission.value for permission in descriptor.permissions
                         )
                     ),
+                    pairing_state=descriptor.pairing_state.value,
                 )
             )
         return specs
@@ -925,6 +927,7 @@ class AppWindow:
                             permission.value for permission in descriptor.permissions
                         )
                     ),
+                    pairing_state=descriptor.pairing_state.value,
                 )
             )
         return specs
@@ -1031,6 +1034,9 @@ class AppWindow:
                     capabilities=(),
                     is_local=False,
                     selectable=False,
+                    pairing_state=registry.pairing_state(
+                        NodeId(candidate.stable_id)
+                    ).value,
                 )
             )
         return specs
@@ -1085,6 +1091,11 @@ class AppWindow:
         if not candidate.identity_fingerprint:
             self._nodes_error("That peer did not provide an identity fingerprint")
             return
+        try:
+            registry.begin_pairing(NodeId(node_id))
+        except (KeyError, ValueError) as error:
+            self._nodes_error(str(error))
+            return
         if not messagebox.askyesno(
             "Confirm peer fingerprint",
             (
@@ -1095,6 +1106,8 @@ class AppWindow:
             ),
             parent=self.master,
         ):
+            registry.fail_pairing(NodeId(node_id))
+            self._refresh_nodes_page()
             self._nodes_status(f"Pairing cancelled for {candidate.hostname}")
             return
         node = NodeId(node_id)
@@ -1110,6 +1123,8 @@ class AppWindow:
                 node, capabilities=READ_CAPABILITIES
             )
         except (KeyError, ValueError) as error:
+            registry.fail_pairing(node)
+            self._refresh_nodes_page()
             self._nodes_error(str(error))
             return
         descriptor = replace(descriptor, permissions=READ_PERMISSIONS)
@@ -1146,6 +1161,9 @@ class AppWindow:
                 registry.update_discovered(candidate)
                 if previous_selected:
                     registry.select(node)
+            else:
+                registry.update_discovered(candidate)
+                registry.fail_pairing(node)
             self._nodes_error("Cluster settings could not be saved")
             return
         self._cluster_state = state
@@ -1422,6 +1440,23 @@ class AppWindow:
             return provider.hello()
 
         def on_success(result: dict[str, Any]) -> None:
+            if result.get("node_id") != node_id:
+                messagebox.showerror(
+                    "Connection Failed",
+                    f"{record.display_name} answered as a different node.",
+                    parent=self.master,
+                )
+                return
+            if (
+                record.identity_fingerprint is not None
+                and result.get("identity_fingerprint") != record.identity_fingerprint
+            ):
+                messagebox.showerror(
+                    "Connection Failed",
+                    f"{record.display_name} presented a changed identity.",
+                    parent=self.master,
+                )
+                return
             version = result.get("app_version") or "peer"
             messagebox.showinfo(
                 "Connection OK",
@@ -1480,6 +1515,16 @@ class AppWindow:
             result = provider.hello()
             if result.get("node_id") != node_id.value:
                 raise RuntimeError("authenticated peer returned the wrong node ID")
+            expected_fingerprint = record.identity_fingerprint
+            actual_fingerprint = result.get("identity_fingerprint")
+            if not isinstance(actual_fingerprint, str) or not actual_fingerprint:
+                raise RuntimeError(
+                    "authenticated peer returned no identity fingerprint"
+                )
+            if expected_fingerprint is not None and actual_fingerprint != (
+                expected_fingerprint
+            ):
+                raise RuntimeError("authenticated peer identity fingerprint changed")
             capabilities = frozenset(
                 NodeCapability(raw)
                 for raw in result.get("capabilities", [])
@@ -1927,7 +1972,20 @@ class AppWindow:
                 secret=record.secret,
                 transport=SocketRemoteTransport(address, port),
             )
-            provider.hello()
+            hello = provider.hello()
+            if not isinstance(hello, dict):
+                raise TypeError("authenticated peer returned invalid hello metadata")
+            if hello.get("node_id") != descriptor.id.value:
+                raise RuntimeError("authenticated peer returned the wrong node ID")
+            actual_fingerprint = hello.get("identity_fingerprint")
+            if not isinstance(actual_fingerprint, str) or not actual_fingerprint:
+                raise RuntimeError(
+                    "authenticated peer returned no identity fingerprint"
+                )
+            if record.identity_fingerprint is not None and actual_fingerprint != (
+                record.identity_fingerprint
+            ):
+                raise RuntimeError("authenticated peer identity fingerprint changed")
         except Exception as error:  # noqa: BLE001 - failed verification means no update.
             LOGGER.info(
                 "Trusted node %s could not be verified at %s:%s: %s",

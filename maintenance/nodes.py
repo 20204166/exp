@@ -68,6 +68,16 @@ class NodeIdentityStatus(str, Enum):
     MISMATCH = "mismatch"
 
 
+class NodePairingState(str, Enum):
+    """Explicit lifecycle state for one discovered peer."""
+
+    DISCOVERED = "discovered"
+    PAIRING = "pairing"
+    TRUSTED = "trusted"
+    PAIRING_FAILED = "pairing_failed"
+    IDENTITY_CHANGED = "identity_changed"
+
+
 class NodeTrustState(str, Enum):
     """How a node entered the registry and what may be done with it.
 
@@ -153,6 +163,7 @@ class NodeDescriptor:
     identity_fingerprint: str | None = None
     identity_status: NodeIdentityStatus = NodeIdentityStatus.UNVERIFIED
     permissions: frozenset[NodePermission] = frozenset()
+    pairing_state: NodePairingState = NodePairingState.TRUSTED
 
     def has(self, capability: NodeCapability) -> bool:
         return capability in self.capabilities
@@ -445,6 +456,7 @@ class NodeRegistry:
     def __init__(self, local_context: NodeContext | None = None) -> None:
         self._contexts: dict[NodeId, NodeContext] = {}
         self._discovered: dict[NodeId, DiscoveredNodeCandidate] = {}
+        self._pairing_states: dict[NodeId, NodePairingState] = {}
         self._selected_id: NodeId | None = None
         self._local_id: NodeId | None = None
         if local_context is not None:
@@ -569,6 +581,8 @@ class NodeRegistry:
                     if candidate.identity_fingerprint == descriptor.identity_fingerprint
                     else NodeIdentityStatus.MISMATCH
                 )
+                if identity_status is NodeIdentityStatus.MISMATCH:
+                    self._pairing_states[node_id] = NodePairingState.IDENTITY_CHANGED
             display_name = descriptor.display_name
             if display_name == descriptor.hostname:
                 display_name = candidate.hostname
@@ -580,6 +594,11 @@ class NodeRegistry:
                 platform=candidate.platform,
                 identity_fingerprint=descriptor.identity_fingerprint,
                 identity_status=identity_status,
+                pairing_state=(
+                    NodePairingState.IDENTITY_CHANGED
+                    if identity_status is NodeIdentityStatus.MISMATCH
+                    else descriptor.pairing_state
+                ),
             )
             if identity_status is NodeIdentityStatus.MISMATCH:
                 self._discovered[node_id] = candidate
@@ -587,6 +606,7 @@ class NodeRegistry:
                     self._selected_id = self._local_id
             return known_context.descriptor
         self._discovered[node_id] = candidate
+        self._pairing_states.setdefault(node_id, NodePairingState.DISCOVERED)
         descriptor = NodeDescriptor(
             id=node_id,
             display_name=candidate.hostname,
@@ -598,6 +618,7 @@ class NodeRegistry:
             platform=candidate.platform,
             identity_fingerprint=candidate.identity_fingerprint,
             identity_status=NodeIdentityStatus.UNVERIFIED,
+            pairing_state=NodePairingState.DISCOVERED,
         )
         return descriptor
 
@@ -623,6 +644,40 @@ class NodeRegistry:
     def discovered_candidates(self) -> tuple[DiscoveredNodeCandidate, ...]:
         return tuple(self._discovered.values())
 
+    def pairing_state(self, node_id: NodeId) -> NodePairingState:
+        """Return the explicit pairing state, defaulting safely to discovery."""
+
+        context = self._contexts.get(node_id)
+        if context is not None:
+            return context.descriptor.pairing_state
+        return self._pairing_states.get(node_id, NodePairingState.DISCOVERED)
+
+    def begin_pairing(self, node_id: NodeId) -> NodePairingState:
+        """Enter pairing only after a caller deliberately starts the flow."""
+
+        if node_id not in self._discovered:
+            raise KeyError(f"No discovered node: {node_id}")
+        candidate = self._discovered[node_id]
+        if not candidate.identity_fingerprint:
+            self._pairing_states[node_id] = NodePairingState.PAIRING_FAILED
+            raise ValueError("Peer identity fingerprint is unavailable")
+        if not candidate.compatible:
+            self._pairing_states[node_id] = NodePairingState.PAIRING_FAILED
+            raise ValueError("Peer protocol version is incompatible")
+        state = self._pairing_states.get(node_id, NodePairingState.DISCOVERED)
+        if state is NodePairingState.IDENTITY_CHANGED:
+            # A replacement identity may only recover through a fresh,
+            # deliberate pairing confirmation; it is never restored silently.
+            self._pairing_states[node_id] = NodePairingState.PAIRING
+            return NodePairingState.PAIRING
+        self._pairing_states[node_id] = NodePairingState.PAIRING
+        return NodePairingState.PAIRING
+
+    def fail_pairing(self, node_id: NodeId) -> NodePairingState:
+        if node_id in self._discovered:
+            self._pairing_states[node_id] = NodePairingState.PAIRING_FAILED
+        return self.pairing_state(node_id)
+
     def remove_discovered(self, node_id: NodeId) -> None:
         self._discovered.pop(node_id, None)
         context = self._contexts.get(node_id)
@@ -633,6 +688,7 @@ class NodeRegistry:
         """Explicitly reject one discovered peer candidate."""
 
         self.remove_discovered(node_id)
+        self._pairing_states.pop(node_id, None)
 
     def promote_to_trusted(
         self,
@@ -655,6 +711,8 @@ class NodeRegistry:
             raise ValueError(
                 "Peer identity fingerprint is unavailable; re-pair manually"
             )
+        if self._pairing_states.get(node_id) is not NodePairingState.PAIRING:
+            raise ValueError("Pairing must be deliberately initiated first")
         identity_fingerprint = candidate.identity_fingerprint
         read_capabilities = frozenset(
             {
@@ -680,6 +738,7 @@ class NodeRegistry:
             platform=candidate.platform,
             identity_fingerprint=identity_fingerprint,
             identity_status=NodeIdentityStatus.VERIFIED,
+            pairing_state=NodePairingState.TRUSTED,
         )
         context = NodeContext(
             descriptor=descriptor,
@@ -690,6 +749,7 @@ class NodeRegistry:
             coordinator=None,
         )
         self._discovered.pop(node_id, None)
+        self._pairing_states.pop(node_id, None)
         self._contexts[node_id] = context
         return descriptor
 
@@ -710,6 +770,7 @@ class NodeRegistry:
         ):
             raise ValueError(f"Node is not trusted: {node_id}")
         del self._contexts[node_id]
+        self._pairing_states.pop(node_id, None)
         if self._selected_id == node_id:
             self._selected_id = self._local_id
 

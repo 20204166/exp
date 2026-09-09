@@ -49,6 +49,7 @@ from maintenance.nodes import (
     NodePermission,
     NodeSnapshot,
     NodeStatus,
+    node_identity_fingerprint,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -332,6 +333,12 @@ def verify_response(
         raise RemoteAuthError("response identity fields are invalid")
     if status not in ("ok", "error"):
         raise RemoteProtocolError("response status is invalid")
+    payload = envelope.get("payload")
+    if payload is not None and not isinstance(payload, dict):
+        raise RemoteProtocolError("response payload must be an object or null")
+    error = envelope.get("error")
+    if error is not None and not isinstance(error, str):
+        raise RemoteProtocolError("response error must be a string or null")
     if not isinstance(timestamp, (int, float)) or not math.isfinite(timestamp):
         raise RemoteAuthError("response timestamp is invalid")
     age = clock() - float(timestamp)
@@ -341,8 +348,8 @@ def verify_response(
         node_id=NodeId(node_id),
         request_id=request_id,
         status=status,
-        payload=envelope.get("payload"),
-        error=envelope.get("error"),
+        payload=payload,
+        error=error,
         timestamp=float(timestamp),
     )
 
@@ -406,6 +413,7 @@ class RemoteService:
         permissions: frozenset[NodePermission] | None = None,
         process_manager: Any | None = None,
         expected_caller_id: NodeId | None = None,
+        identity_fingerprint: str | None = None,
     ) -> None:
         self._node_id = node_id
         self._display_name = display_name
@@ -416,6 +424,9 @@ class RemoteService:
         self._provider = provider
         self._process_manager = process_manager
         self._expected_caller_id = expected_caller_id
+        self._identity_fingerprint = identity_fingerprint or node_identity_fingerprint(
+            node_id
+        )
         self._secret = secret
         self._app_version = app_version
         self._clock = clock
@@ -456,6 +467,8 @@ class RemoteService:
             and request.caller_node_id != self._expected_caller_id
         ):
             raise RemoteAuthError("request caller identity is invalid")
+        if request.node_id != self._node_id:
+            raise RemoteAuthError("request target identity is invalid")
         try:
             payload = self._solve(request)
         except RemoteProtocolError:
@@ -500,6 +513,8 @@ class RemoteService:
             return {
                 "ok": True,
                 "node_id": self._node_id.value,
+                "identity_fingerprint": self._identity_fingerprint,
+                "protocol_version": REMOTE_PROTOCOL_VERSION,
                 "app_version": self._app_version,
                 "capabilities": sorted(
                     capability.value for capability in self._capabilities
@@ -624,7 +639,10 @@ class SocketRemoteTransport:
             raise
         except OSError as error:
             raise RemoteTransportError(f"remote transport failed: {error}") from error
-        return body.decode("utf-8")
+        try:
+            return body.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise RemoteProtocolError("response is not valid UTF-8") from error
 
 
 class RemoteSocketServer:
@@ -834,8 +852,12 @@ class AuthenticatedNodeProvider:
         )
         envelope_text = json.dumps(envelope)
         response_text = self._transport.request(envelope_text)
+        try:
+            response_envelope = json.loads(response_text)
+        except (TypeError, ValueError) as error:
+            raise RemoteProtocolError("response is not valid JSON") from error
         response = verify_response(
-            json.loads(response_text),
+            response_envelope,
             secret=self._secret,
             clock=self._clock,
             freshness_seconds=self._freshness_seconds,

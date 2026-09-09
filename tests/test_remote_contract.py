@@ -6,6 +6,7 @@ import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, cast
 
 from maintenance.cluster import (
     ClusterDataError,
@@ -384,6 +385,52 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
         service = _service()
         with self.assertRaises(RemoteProtocolError):
             service.handle('{"v": "1"}')
+
+    def test_request_for_a_different_target_identity_is_rejected(self) -> None:
+        service = _service()
+        request = sign_request(
+            node_id="other-target",
+            op="hello",
+            params={},
+            request_id="target-test",
+            nonce="target-test-nonce",
+            timestamp=time.time(),
+            secret=SECRET,
+        )
+        with self.assertRaises(RemoteAuthError):
+            service.handle(json.dumps(request))
+
+    def test_response_with_non_object_payload_is_rejected(self) -> None:
+        from maintenance.remote import verify_response
+
+        response = sign_response(
+            node_id="peer",
+            request_id="payload-test",
+            status="ok",
+            payload=cast(Any, ["not", "an", "object"]),
+            timestamp=100.0,
+            secret=SECRET,
+        )
+        with self.assertRaises(RemoteProtocolError):
+            verify_response(
+                response,
+                secret=SECRET,
+                clock=lambda: 100.0,
+                freshness_seconds=DEFAULT_FRESHNESS_SECONDS,
+            )
+
+    def test_malformed_remote_json_is_rejected_as_protocol_error(self) -> None:
+        class MalformedTransport:
+            def request(self, _envelope_text: str) -> str:
+                return "not-json"
+
+        client = AuthenticatedNodeProvider(
+            node_id=NodeId("peer"),
+            secret=SECRET,
+            transport=MalformedTransport(),
+        )
+        with self.assertRaises(RemoteProtocolError):
+            client.hello()
 
     def test_execution_failure_returns_signed_error(self) -> None:
         class BoomProvider(FakeProvider):

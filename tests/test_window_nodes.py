@@ -633,6 +633,7 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         provider.hello.return_value = {
             "ok": True,
             "node_id": "peer-a",
+            "identity_fingerprint": node_identity_fingerprint("peer-a"),
             "app_version": "1.2.2.0",
             "capabilities": ["dashboard_read"],
         }
@@ -683,7 +684,11 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
             ),
         )
         provider = Mock()
-        provider.hello.return_value = {"ok": True, "node_id": "peer-a"}
+        provider.hello.return_value = {
+            "ok": True,
+            "node_id": "peer-a",
+            "identity_fingerprint": node_identity_fingerprint("peer-a"),
+        }
         candidate = DiscoveredNodeCandidate(
             stable_id="peer-a",
             hostname="peer-a",
@@ -766,7 +771,13 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         )
 
         matching = replace(candidate, identity_fingerprint="original")
-        with patch("window.AuthenticatedNodeProvider", return_value=Mock()):
+        provider = Mock()
+        provider.hello.return_value = {
+            "ok": True,
+            "node_id": "peer-a",
+            "identity_fingerprint": "original",
+        }
+        with patch("window.AuthenticatedNodeProvider", return_value=provider):
             window._on_discovered_candidate(matching)
 
         self.assertEqual(

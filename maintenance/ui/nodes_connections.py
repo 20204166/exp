@@ -54,6 +54,7 @@ class DiscoveredPeerSpec:
     connectable: bool
     port: int | None
     identity_fingerprint: str | None = None
+    pairing_state: str = "discovered"
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +74,7 @@ class TrustedNodeSpec:
     identity_fingerprint: str | None = None
     identity_status: str = "unverified"
     permissions: tuple[str, ...] = ()
+    pairing_state: str = "trusted"
 
 
 class NodesConnectionsPage:
@@ -248,6 +250,7 @@ class NodesConnectionsPage:
         text += f"  ·  ID {spec.node_id}"
         if spec.identity_fingerprint:
             text += f"  ·  fingerprint {spec.identity_fingerprint}"
+        text += f"  ·  {spec.pairing_state.replace('_', ' ').title()}"
         self.label_cls(
             row,
             text=text,
@@ -331,6 +334,7 @@ class NodesConnectionsPage:
         text += f"  ·  {spec.status}"
         if spec.identity_status == "mismatch":
             text += "  ·  IDENTITY MISMATCH"
+        text += f"  ·  {spec.pairing_state.replace('_', ' ').title()}"
         self.label_cls(
             row,
             text=text,
