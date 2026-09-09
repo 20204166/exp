@@ -75,6 +75,9 @@ install_pip() {
 if [ "$mode" = "system" ]; then
   command -v sudo >/dev/null 2>&1 || { echo "sudo is required for --system" >&2; exit 1; }
   echo "Installing machine-wide (system Python, no venv)..."
+  # A user-site copy shadows the machine-wide package on the normal Python
+  # import path, so remove it before verifying the system installation.
+  clean_user_installed_package "$py"
   clean_installed_package "$py" sudo -H
   # The existing application is removed above. Do not force-reinstall
   # dependencies: distro-managed packages such as Debian's psutil may satisfy
