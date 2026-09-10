@@ -33,6 +33,13 @@ from .network_discovery import (
 )
 from .node_selection import NodeSelection
 from .peer_connection import PeerConnectionManager
+from .placement import (
+    JobClass,
+    PlacementDecision,
+    PlacementPolicy,
+    PlacementRequest,
+    PlacementView,
+)
 from .process_safety import (
     PROTECTED_PROCESS_NAMES,
     ProcessSafetyPolicy,
@@ -84,9 +91,14 @@ __all__ = [
     "DownloadsPathResolver",
     "GpuDetector",
     "HashFingerprint",
+    "JobClass",
     "NetworkDiscovery",
     "NodeSelection",
     "PeerConnectionManager",
+    "PlacementDecision",
+    "PlacementPolicy",
+    "PlacementRequest",
+    "PlacementView",
     "ProcessSafetyPolicy",
     "ProgressCallback",
     "ProgressTask",

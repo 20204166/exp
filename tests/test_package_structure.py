@@ -16,6 +16,7 @@ from maintenance.components import (
     network_discovery,
     node_selection,
     peer_connection,
+    placement,
     process_safety,
     scan_support,
     temperature,
@@ -41,6 +42,7 @@ class ComponentPackageLayoutTests(unittest.TestCase):
             "node_selection.py",
             "node_context.py",
             "peer_connection.py",
+            "placement.py",
             "process_safety.py",
             "scan_support.py",
             "temperature.py",
@@ -98,6 +100,11 @@ class ComponentFacadeReexportTests(unittest.TestCase):
             "SERVICE_TYPE": network_discovery,
             "NodeSelection": node_selection,
             "PeerConnectionManager": peer_connection,
+            "JobClass": placement,
+            "PlacementDecision": placement,
+            "PlacementPolicy": placement,
+            "PlacementRequest": placement,
+            "PlacementView": placement,
         }
         for name, home in moved.items():
             with self.subTest(name=name):
@@ -143,6 +150,11 @@ class ComponentFacadeReexportTests(unittest.TestCase):
             "DiscoveryStartResult",
             "NodeSelection",
             "PeerConnectionManager",
+            "JobClass",
+            "PlacementDecision",
+            "PlacementPolicy",
+            "PlacementRequest",
+            "PlacementView",
             "DashboardScanLifecycle",
             "windows_windll",
         }
