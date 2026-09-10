@@ -1339,6 +1339,42 @@ class AppCoordinatorRunTests(unittest.TestCase):
 
         self.assertEqual(coordinator.last_result("storage"), ["good"])
 
+    def test_failed_submission_delivers_error_and_settles_run(self) -> None:
+        delivered: list[object] = []
+
+        def reject(_worker: object) -> None:
+            raise RuntimeError("executor closed")
+
+        coordinator = AppCoordinator(
+            runner=reject,
+            deliver=lambda callback: (delivered.append(callback), callback())[1],
+        )
+        errors: list[str] = []
+
+        generation = coordinator.run(
+            "storage",
+            lambda _event, _progress: "never runs",
+            on_error=lambda _key, message: errors.append(message),
+        )
+
+        self.assertEqual(generation, 1)
+        self.assertEqual(errors, ["executor closed"])
+        self.assertFalse(coordinator.in_flight("storage"))
+        self.assertEqual(len(delivered), 1)
+
+    def test_repeated_failed_submissions_do_not_grow_state(self) -> None:
+        coordinator = AppCoordinator(
+            runner=lambda _worker: (_ for _ in ()).throw(RuntimeError("closed")),
+            deliver=lambda callback: callback(),
+        )
+
+        for _ in range(200):
+            coordinator.run("storage", lambda _event, _progress: None)
+
+        self.assertEqual(len(coordinator._states), 1)
+        self.assertFalse(coordinator.has_pending_work)
+        self.assertIsNone(coordinator.state("storage").cancel_event)
+
     def test_cancel_notifies_owner_and_holds_in_flight_until_completion(self) -> None:
         coordinator, runner = self._make()
         errors: list[str] = []
