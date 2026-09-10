@@ -41,6 +41,11 @@ def settings_categories(
             "All Systems",
             "Overview of every known machine and its connection, trust, and capability state.",
         ),
+        ui_settings_home.SettingsCategorySpec(
+            "diagnostics",
+            "Diagnostics",
+            "See current work, recent failures, node reasons, and component health.",
+        ),
     ]
 
 

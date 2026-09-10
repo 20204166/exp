@@ -1260,13 +1260,13 @@ class SettingsIntegrationTests(unittest.TestCase):
 
         window._page_router.show.assert_called_with("preferences")
 
-    def test_settings_category_dispatch_ignores_unknown_keys(self) -> None:
+    def test_settings_category_dispatch_opens_diagnostics(self) -> None:
         window = AppWindowTests.make_window()
         window._page_router = Mock()
 
         window._on_select_settings_category("diagnostics")
 
-        window._page_router.show.assert_not_called()
+        window._page_router.show.assert_called_with("diagnostics")
 
     def test_preferences_back_returns_to_settings(self) -> None:
         window = AppWindowTests.make_window()

@@ -69,6 +69,8 @@ class _RefreshEntry:
     in_flight: bool = False
     paused: bool = False
     refresh_requested: bool = False
+    last_success: float | None = None
+    last_error: tuple[str, str] | None = None
 
 
 class ComponentRefreshScheduler:
@@ -116,6 +118,20 @@ class ComponentRefreshScheduler:
         if entry is None:
             return
         entry.in_flight = False
+
+    def record_success(self, key: str, completed_at: float) -> None:
+        entry = self._entry(key)
+        entry.last_success = completed_at
+        entry.last_error = None
+
+    def record_error(self, key: str, category: str, detail: str) -> None:
+        self._entry(key).last_error = (category, detail[:160])
+
+    def diagnostic_state(
+        self, key: str
+    ) -> tuple[bool, bool, float | None, tuple[str, str] | None]:
+        entry = self._entry(key)
+        return entry.in_flight, entry.paused, entry.last_success, entry.last_error
 
     def cancel(self, key: str) -> None:
         if key not in self.intervals:
@@ -277,6 +293,9 @@ class AppRunState:
     on_progress: Callable[[str, str], None] | None = None
     on_finished: Callable[[], None] | None = None
     task_factory: Callable[..., Any] | None = None
+    last_error: str | None = None
+    last_finished: float | None = None
+    last_success: float | None = None
 
 
 class AppCoordinator:
@@ -339,6 +358,9 @@ class AppCoordinator:
 
     def state(self, key: str) -> AppRunState:
         return self._states.setdefault(key, AppRunState())
+
+    def diagnostic_states(self) -> tuple[tuple[str, AppRunState], ...]:
+        return tuple(self._states.items())
 
     @property
     def has_pending_work(self) -> bool:
@@ -478,9 +500,13 @@ class AppCoordinator:
             return
         if error is None:
             state.last_result = result
+            state.last_success = time.time()
+            state.last_error = None
             self._notify_subscribers(state, key, result)
             self._safe_invoke(state.on_result, key, result)
         else:
+            state.last_error = error[:160]
+            state.last_finished = time.time()
             self._notify_subscribers(state, key, None)
             self._safe_invoke(state.on_error, key, error)
         self._invoke_finished(key, state)
@@ -548,6 +574,11 @@ class AppCoordinator:
             return False, rerun_requested
         if result is not None:
             state.last_result = result
+            state.last_success = time.time()
+            state.last_error = None
+        else:
+            state.last_error = "operation did not produce a result"
+            state.last_finished = time.time()
         self._notify_subscribers(state, key, result)
         return True, rerun_requested
 

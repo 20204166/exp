@@ -153,11 +153,19 @@ def launch_component_scan(controller: Any, key: str) -> None:
             ),
         )
 
+    def record_success(_operation: str, _resource: ResourceSummary) -> None:
+        source_scheduler.record_success(key, time.time())
+        queue_result(_resource)
+
+    def record_error(_operation: str, message: str) -> None:
+        source_scheduler.record_error(key, "execution_failed", message)
+        queue_result(RuntimeError(message))
+
     run_generation = controller._coordinator.run(
         operation_key,
         task_factory,
-        on_result=lambda _operation, resource: queue_result(resource),
-        on_error=lambda _operation, message: queue_result(RuntimeError(message)),
+        on_result=record_success,
+        on_error=record_error,
         on_finished=finish_component,
     )
     if run_generation is None:

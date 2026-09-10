@@ -4,6 +4,7 @@ from typing import Any, cast
 
 from maintenance import __version__
 from maintenance.ui import cluster_page as ui_cluster
+from maintenance.ui import diagnostics_page as ui_diagnostics
 from maintenance.ui import nodes_connections as ui_nodes
 from maintenance.ui import preferences_page as ui_preferences
 from maintenance.ui import render_coordinator as ui_render
@@ -64,6 +65,25 @@ def build_preferences(controller: Any, parent: Any) -> Any:
         controller.preferences_page.manual_progress_bar
     )
     return controller.preferences_frame
+
+
+def build_diagnostics(controller: Any, parent: Any) -> Any:
+    controller.diagnostics_frame = controller.ttk.Frame(
+        parent,
+        padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
+        style="App.TFrame",
+    )
+    controller.diagnostics_page = ui_diagnostics.DiagnosticsPage(
+        controller.diagnostics_frame,
+        callbacks=ui_diagnostics.DiagnosticsPageCallbacks(
+            on_back=controller._show_settings_page,
+            on_copy=controller._copy_diagnostics,
+        ),
+        snapshot=controller._diagnostics_snapshot(),
+        button_coordinator=controller._button_coordinator,
+        colors=controller.colors,
+    )
+    return controller.diagnostics_frame
 
 
 def build_thermals(controller: Any, parent: Any) -> Any:
@@ -137,6 +157,7 @@ def select_settings_category(controller: Any, key: str) -> None:
         "preferences": controller._show_preferences_page,
         "nodes": controller._show_nodes_page,
         "cluster": controller._show_cluster_page,
+        "diagnostics": controller._show_diagnostics_page,
     }.get(key)
     if handler is not None:
         handler()
@@ -145,6 +166,7 @@ def select_settings_category(controller: Any, key: str) -> None:
 def show_page(controller: Any, page_name: str, focus_attribute: str) -> None:
     controller._page_router.show(page_name)
     controller._sync_render_visibility(page_name)
+    controller._set_diagnostics_visibility(page_name == "diagnostics")
     page = getattr(controller, focus_attribute, None)
     if page is not None:
         page.focus_back()
@@ -153,6 +175,7 @@ def show_page(controller: Any, page_name: str, focus_attribute: str) -> None:
 def show_dashboard(controller: Any) -> None:
     controller._page_router.show("dashboard")
     controller._sync_render_visibility("dashboard")
+    controller._set_diagnostics_visibility(False)
     button = getattr(controller, "settings_button", None)
     if button is not None:
         button.focus_set()

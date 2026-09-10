@@ -45,6 +45,7 @@ from maintenance.components.temperature import (
     TemperatureRenderState,
     TemperatureTelemetryUpdate,
 )
+from maintenance.diagnostics import build_diagnostics_snapshot
 from maintenance.dialogs import (
     InfoDialog,  # noqa: F401 - retained dialog patch seam
     ProcessDialog,  # noqa: F401 - retained dialog patch seam
@@ -118,6 +119,7 @@ PREFERENCES_PAGE = "preferences"
 NODES_PAGE = "nodes"
 CLUSTER_PAGE = "cluster"
 THERMALS_PAGE = "thermals"
+DIAGNOSTICS_PAGE = "diagnostics"
 
 
 class AppWindow:
@@ -202,6 +204,7 @@ class AppWindow:
         self._background_orchestrator = self._make_background_orchestrator()
         self._feature_catalog = ResourceFeatureCatalog()
         self._component_poll_id: str | None = None
+        self._diagnostics_refresh_id: str | None = None
         self._capabilities: dict[str, CapabilityState] = {}
         self._node_registry = NodeRegistry()
         self._selected_node_id: NodeId | None = None
@@ -277,6 +280,9 @@ class AppWindow:
         self._page_router.register(PageSpec(NODES_PAGE, self._build_nodes_page))
         self._page_router.register(PageSpec(CLUSTER_PAGE, self._build_cluster_page))
         self._page_router.register(PageSpec(THERMALS_PAGE, self._build_thermals_page))
+        self._page_router.register(
+            PageSpec(DIAGNOSTICS_PAGE, self._build_diagnostics_page)
+        )
         self._page_router.show(DASHBOARD_PAGE)
         self._sync_render_visibility(DASHBOARD_PAGE)
         self._reconcile_cards_and_polling()
@@ -328,6 +334,9 @@ class AppWindow:
     def _show_preferences_page(self) -> None:
         ui_window_pages.show_page(self, PREFERENCES_PAGE, "preferences_page")
 
+    def _show_diagnostics_page(self) -> None:
+        ui_window_pages.show_page(self, DIAGNOSTICS_PAGE, "diagnostics_page")
+
     def _show_dashboard_page(self) -> None:
         ui_window_pages.show_dashboard(self)
 
@@ -337,6 +346,49 @@ class AppWindow:
     def _build_thermals_page(self, parent: Any) -> Any:
         self.ttk = ttk
         return ui_window_pages.build_thermals(self, parent)
+
+    def _build_diagnostics_page(self, parent: Any) -> Any:
+        self.ttk = ttk
+        return ui_window_pages.build_diagnostics(self, parent)
+
+    def _diagnostics_snapshot(self) -> Any:
+        context = self._selected_context()
+        scheduler = (
+            context.scheduler if context is not None else self._component_scheduler
+        )
+        return build_diagnostics_snapshot(
+            scheduler=scheduler,
+            coordinator=self._coordinator,
+            registry=self._node_registry,
+            ui_coordinator=self._ui_coordinator,
+            capabilities=getattr(context, "capabilities", self._capabilities),
+            discovery_reason=getattr(
+                self._coordinator.discovery, "unavailable_reason", None
+            ),
+        )
+
+    def _copy_diagnostics(self, text: str) -> None:
+        self.master.clipboard_clear()
+        self.master.clipboard_append(text)
+
+    def _set_diagnostics_visibility(self, visible: bool) -> None:
+        if not visible:
+            refresh_id = getattr(self, "_diagnostics_refresh_id", None)
+            if refresh_id is not None:
+                self._cancel_timer(refresh_id)
+                self._diagnostics_refresh_id = None
+            return
+        self._refresh_diagnostics_page()
+
+    def _refresh_diagnostics_page(self) -> None:
+        if self._is_closing or not self._page_router.is_mapped(DIAGNOSTICS_PAGE):
+            return
+        page = getattr(self, "diagnostics_page", None)
+        if page is not None:
+            page.render(self._diagnostics_snapshot())
+        self._diagnostics_refresh_id = self._schedule_timer(
+            1000, self._refresh_diagnostics_page
+        )
 
     def _on_select_settings_category(self, key: str) -> None:
         ui_window_pages.select_settings_category(self, key)
