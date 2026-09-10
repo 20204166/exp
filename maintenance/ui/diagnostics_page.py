@@ -49,6 +49,8 @@ class DiagnosticsPage:
         self.canvas_cls = canvas_cls
         self.scrollbar_cls = scrollbar_cls
         self._button_coordinator = button_coordinator
+        self._section_rows: dict[Any, list[tuple[Any, Any, Any]]] = {}
+        self._empty_labels: dict[Any, Any] = {}
         self._build(parent)
         self.render(snapshot)
 
@@ -97,80 +99,97 @@ class DiagnosticsPage:
 
     def render(self, snapshot: DiagnosticsSnapshot) -> None:
         self._snapshot = snapshot
-        bodies = (
+        self._render_rows(
             self._summary_body,
+            [
+                (
+                    "Most recent failure",
+                    snapshot.most_recent_failure or "No recent failures",
+                ),
+                (
+                    "Active work",
+                    str(sum(item.in_flight for item in snapshot.operations)),
+                ),
+            ],
+        )
+        self._render_rows(
             self._components_body,
-            self._operations_body,
-            self._nodes_body,
-            self._render_body,
+            [
+                (
+                    item.key,
+                    (
+                        f"{item.state} · {item.capability} · "
+                        f"{item.last_error or ('Last success: ' + str(item.last_success) if item.last_success else 'No data yet')}"
+                    ),
+                )
+                for item in snapshot.components
+            ],
+            empty_text="No data yet",
         )
-        for body in bodies:
-            ui_layout.clear_children(body)
-        self._row(
-            self._summary_body,
-            "Most recent failure",
-            snapshot.most_recent_failure or "No recent failures",
-        )
-        self._row(
-            self._summary_body,
-            "Active work",
-            str(sum(item.in_flight for item in snapshot.operations)),
-        )
-        self._render_components(snapshot)
-        self._render_operations(snapshot)
-        self._render_nodes(snapshot)
-        self._row(
-            self._render_body,
-            "Stale result rejections",
-            str(snapshot.render.stale_rejections),
-        )
-        self._row(
-            self._render_body, "Pending render targets", str(snapshot.render.pending)
-        )
-
-    def _render_components(self, snapshot: DiagnosticsSnapshot) -> None:
-        if not snapshot.components:
-            self._empty(self._components_body, "No data yet")
-            return
-        for item in snapshot.components:
-            detail = item.last_error or (
-                "Last success: " + str(item.last_success)
-                if item.last_success
-                else "No data yet"
-            )
-            self._row(
-                self._components_body,
-                item.key,
-                f"{item.state} · {item.capability} · {detail}",
-            )
-
-    def _render_operations(self, snapshot: DiagnosticsSnapshot) -> None:
         active = [item for item in snapshot.operations if item.in_flight]
-        if not active:
-            self._empty(self._operations_body, "Nothing currently running")
-            return
-        for item in active:
-            self._row(self._operations_body, item.key, f"generation {item.generation}")
+        self._render_rows(
+            self._operations_body,
+            [(item.key, f"generation {item.generation}") for item in active],
+            empty_text="Nothing currently running",
+        )
+        self._render_rows(
+            self._nodes_body,
+            [
+                (item.display_name, f"{item.trust} · {item.reason or item.connection}")
+                for item in snapshot.nodes
+            ],
+            empty_text="No remote nodes configured",
+        )
+        self._render_rows(
+            self._render_body,
+            [
+                ("Stale result rejections", str(snapshot.render.stale_rejections)),
+                ("Pending render targets", str(snapshot.render.pending)),
+            ],
+        )
 
-    def _render_nodes(self, snapshot: DiagnosticsSnapshot) -> None:
-        if not snapshot.nodes:
-            self._empty(self._nodes_body, "No remote nodes configured")
-            return
-        for item in snapshot.nodes:
-            detail = item.reason or item.connection
-            self._row(self._nodes_body, item.display_name, f"{item.trust} · {detail}")
+    def _render_rows(
+        self,
+        parent: Any,
+        rows: list[tuple[str, str]],
+        *,
+        empty_text: str | None = None,
+    ) -> None:
+        existing = self._section_rows.setdefault(parent, [])
+        if empty_text is not None:
+            empty = self._empty_labels.get(parent)
+            if not rows:
+                if empty is None:
+                    empty = self._empty(parent, empty_text)
+                    self._empty_labels[parent] = empty
+                else:
+                    empty.configure(text=empty_text)
+            elif empty is not None:
+                empty.destroy()
+                del self._empty_labels[parent]
+        for index, (title, value) in enumerate(rows):
+            if index >= len(existing):
+                existing.append(self._row(parent, title, value))
+            else:
+                _frame, title_label, value_label = existing[index]
+                title_label.configure(text=title)
+                value_label.configure(text=value)
+        while len(existing) > len(rows):
+            frame, _title_label, _value_label = existing.pop()
+            frame.destroy()
 
-    def _row(self, parent: Any, title: str, value: str) -> None:
+    def _row(self, parent: Any, title: str, value: str) -> tuple[Any, Any, Any]:
         row = self.frame_cls(parent, bg=self.colors["card"])
         row.pack(fill="x", pady=(0, 5))
-        self.label_cls(
+        title_label = self.label_cls(
             row,
             text=title,
             bg=self.colors["card"],
             fg=self.colors["text"],
             font=self.fonts["body"],
-        ).pack(side="left")
-        self.label_cls(
+        )
+        title_label.pack(side="left")
+        value_label = self.label_cls(
             row,
             text=value,
             bg=self.colors["card"],
@@ -178,16 +197,23 @@ class DiagnosticsPage:
             font=self.fonts["body"],
             wraplength=520,
             justify="left",
-        ).pack(side="right", anchor="e")
+        )
+        value_label.pack(side="right", anchor="e")
+        return row, title_label, value_label
 
-    def _empty(self, parent: Any, text: str) -> None:
-        self.label_cls(
+    def _empty(self, parent: Any, text: str) -> Any:
+        label = self.label_cls(
             parent,
             text=text,
             bg=self.colors["card"],
             fg=self.colors["muted_text"],
             font=self.fonts["body"],
-        ).pack(anchor="w")
+        )
+        label.pack(anchor="w")
+        return label
 
     def _copy(self) -> None:
         self.callbacks.on_copy(serialize_diagnostics(self._snapshot))
+
+    def focus_back(self) -> None:
+        self.back_button.focus_set()

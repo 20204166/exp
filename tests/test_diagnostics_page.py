@@ -52,6 +52,14 @@ class DiagnosticsPageTests(unittest.TestCase):
         copy_callback.assert_called_once()
         self.assertIn("components", copy_callback.call_args.args[0])
 
+    def test_refresh_reuses_existing_row_widgets(self) -> None:
+        page, _callbacks, _copy_callback, recorder = self.make_page()
+        frame_count = len(recorder.widgets("frame"))
+
+        page.render(empty_snapshot())
+
+        self.assertEqual(len(recorder.widgets("frame")), frame_count)
+
 
 if __name__ == "__main__":
     unittest.main()
