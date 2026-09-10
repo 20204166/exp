@@ -19,6 +19,7 @@ from maintenance.cluster import (
     resource_summary_to_dict,
     trusted_node_record,
 )
+from maintenance.components.temperature import temperature_sample_to_dict
 from maintenance.models import (
     CapabilityState,
     DashboardSnapshot,
@@ -61,6 +62,7 @@ from maintenance.remote import (
     sign_response,
     verify_request,
 )
+from tests.support.models import make_summary
 from tests.support.temperature import make_temperature_sample
 
 SECRET = "a" * 64
@@ -326,6 +328,89 @@ class SigningAndVerificationTests(unittest.TestCase):
 
 
 class RemoteServiceRoundTripTests(unittest.TestCase):
+    def test_signed_dashboard_drops_invalid_samples_and_preserves_resources(self) -> None:
+        class ThermalProvider(FakeProvider):
+            def dashboard_snapshot(self, cancel_event=None, progress_callback=None):
+                dashboard = super().dashboard_snapshot(cancel_event, progress_callback)
+                return DashboardSnapshot(
+                    system_label=dashboard.system_label,
+                    scanned_at=dashboard.scanned_at,
+                    resources=(
+                        dashboard.get("cpu"),
+                        make_summary(
+                            "storage",
+                            "Storage",
+                            value="38°C",
+                            subtitle="healthy",
+                            capability=CapabilityState.SUPPORTED,
+                            temperatures=(make_temperature_sample("storage", 38.0),),
+                        ),
+                    ),
+                )
+
+        service = _service(provider=ThermalProvider())
+        memory_transport = MemoryRemoteTransport(service)
+
+        class InvalidSampleTransport:
+            def __init__(self) -> None:
+                self._dashboard_requests = 0
+
+            def request(self, envelope_text: str, cancel_event=None) -> str:
+                response = json.loads(memory_transport.request(envelope_text, cancel_event))
+                request = json.loads(envelope_text)
+                if request["op"] != "dashboard_snapshot" or self._dashboard_requests:
+                    return json.dumps(response)
+                self._dashboard_requests += 1
+                snapshot = response["payload"]["snapshot"]
+                resources = snapshot["dashboard"]["resources"]
+                cpu = next(resource for resource in resources if resource["key"] == "cpu")
+                valid = temperature_sample_to_dict(make_temperature_sample("cpu", 45.0))
+                samples = [
+                    valid,
+                    {**valid, "value_celsius": 0.1},
+                    {**valid, "value_celsius": 249.9},
+                    {**valid, "value_celsius": 0},
+                    {**valid, "value_celsius": 250},
+                    {**valid, "value_celsius": float("nan")},
+                    {**valid, "value_celsius": float("inf")},
+                    {**valid, "value_celsius": float("-inf")},
+                    {**valid, "value_celsius": 10**1000},
+                    {**valid, "value_celsius": -1000},
+                    {**valid, "value_celsius": "45"},
+                    {key: value for key, value in valid.items() if key != "sensor_id"},
+                    {key: value for key, value in valid.items() if key != "sensor_name"},
+                ]
+                cpu["temperatures"] = samples
+                response = sign_response(
+                    node_id=response["node_id"],
+                    request_id=response["request_id"],
+                    status=response["status"],
+                    payload=response["payload"],
+                    timestamp=response["ts"],
+                    secret=SECRET,
+                    error=response["error"],
+                )
+                return json.dumps(response)
+
+        client = AuthenticatedNodeProvider(
+            node_id=NodeId("peer"),
+            secret=SECRET,
+            transport=InvalidSampleTransport(),
+        )
+
+        first = client.dashboard_snapshot()
+        cpu = first.get("cpu")
+        storage = first.get("storage")
+        self.assertEqual(
+            tuple(sample.value_celsius for sample in cpu.temperatures),
+            (45.0, 0.1, 249.9),
+        )
+        self.assertEqual(storage.title, "Storage")
+        self.assertEqual(storage.temperatures[0].value_celsius, 38.0)
+
+        second = client.dashboard_snapshot()
+        self.assertEqual(second.get("cpu").temperatures[0].value_celsius, 45.0)
+
     def test_remote_cleanup_rejects_arbitrary_path(self) -> None:
         request = sign_request(
             node_id="peer",

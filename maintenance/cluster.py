@@ -139,6 +139,12 @@ def resource_summary_from_dict(data: Any) -> ResourceSummary:
     for field in ("actionable", "failed"):
         if not isinstance(data.get(field), bool):
             raise ClusterDataError(f"resource summary {field} must be a boolean")
+    decoded_temperatures = []
+    for item in temperatures:
+        try:
+            decoded_temperatures.append(temperature_sample_from_dict(item))
+        except (TypeError, ValueError, OverflowError):
+            continue
     return ResourceSummary(
         key=key,
         title=data["title"],
@@ -149,7 +155,7 @@ def resource_summary_from_dict(data: Any) -> ResourceSummary:
         actionable=bool(data["actionable"]),
         failed=bool(data["failed"]),
         capability=state,
-        temperatures=tuple(temperature_sample_from_dict(item) for item in temperatures),
+        temperatures=tuple(decoded_temperatures),
     )
 
 

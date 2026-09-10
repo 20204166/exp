@@ -28,6 +28,10 @@ from maintenance.cluster import (
     resource_summary_to_dict,
     trusted_node_record,
 )
+from maintenance.components.temperature import (
+    temperature_sample_from_dict,
+    temperature_sample_to_dict,
+)
 from maintenance.models import (
     CapabilityState,
     DashboardSnapshot,
@@ -85,6 +89,71 @@ def _snapshot() -> NodeSnapshot:
 
 
 class ResourceSummaryCodecTests(unittest.TestCase):
+    def test_temperature_sample_decoder_accepts_valid_boundaries(self) -> None:
+        payload = temperature_sample_to_dict(make_temperature_sample("cpu", 45.0))
+
+        for value in (45.0, 0.1, 249.9):
+            with self.subTest(value=value):
+                decoded = temperature_sample_from_dict(
+                    {**payload, "value_celsius": value}
+                )
+                self.assertEqual(decoded.value_celsius, value)
+
+    def test_temperature_sample_decoder_rejects_invalid_values(self) -> None:
+        payload = temperature_sample_to_dict(make_temperature_sample("cpu", 45.0))
+        values = (
+            0,
+            250,
+            -1,
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+            True,
+            10**1000,
+            "45",
+        )
+
+        for value in values:
+            with self.subTest(value=value), self.assertRaises((TypeError, ValueError)):
+                temperature_sample_from_dict({**payload, "value_celsius": value})
+
+    def test_temperature_sample_decoder_rejects_bad_metadata_and_time(self) -> None:
+        payload = temperature_sample_to_dict(make_temperature_sample("cpu", 45.0))
+
+        for field in ("sensor_id", "sensor_name"):
+            with self.subTest(field=field):
+                invalid = dict(payload)
+                invalid.pop(field)
+                with self.assertRaises(TypeError):
+                    temperature_sample_from_dict(invalid)
+
+        for field, value in (
+            ("component", ""),
+            ("sensor_id", ""),
+            ("sensor_name", ""),
+            ("sampled_at", "not a timestamp"),
+            ("sampled_monotonic", float("nan")),
+            ("sampled_monotonic", float("inf")),
+            ("sampled_monotonic", float("-inf")),
+        ):
+            with self.subTest(field=field, value=value), self.assertRaises(
+                (TypeError, ValueError)
+            ):
+                temperature_sample_from_dict({**payload, field: value})
+
+    def test_resource_summary_drops_only_invalid_temperature_samples(self) -> None:
+        valid = temperature_sample_to_dict(make_temperature_sample("cpu", 45.0))
+        invalid = {**valid, "value_celsius": float("nan")}
+        payload = resource_summary_to_dict(_summary("cpu"))
+        payload["temperatures"] = [invalid, valid]
+
+        decoded = resource_summary_from_dict(payload)
+
+        self.assertEqual(decoded.key, "cpu")
+        self.assertEqual(decoded.title, "CPU")
+        self.assertEqual(decoded.value, "10%")
+        self.assertEqual(decoded.temperatures, (make_temperature_sample("cpu", 45.0),))
+
     def test_round_trip_preserves_summary(self) -> None:
         original = _summary("cpu")
         decoded = resource_summary_from_dict(resource_summary_to_dict(original))

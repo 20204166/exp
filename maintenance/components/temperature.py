@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import statistics
 import time
@@ -9,11 +10,23 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeGuard
 
 from maintenance.models import CapabilityState, ResourceSummary
 
 _DETAIL_TEMPERATURE_PATTERN = re.compile(r"(\d+(?:\.\d+)?)°C")
+
+
+def is_valid_temperature_value(value: object) -> TypeGuard[int | float]:
+    """Return whether a value is a finite, plausible Celsius reading."""
+
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        numeric_value = float(value)
+    except OverflowError:
+        return False
+    return math.isfinite(numeric_value) and 0 < numeric_value < 250
 
 
 def parse_temperature_value(text: str) -> float | None:
@@ -488,17 +501,41 @@ def temperature_sample_from_dict(data: Any) -> TemperatureSample:
         raise TypeError("temperature sample sensor_id must be a string")
     if not isinstance(sensor_name, str):
         raise TypeError("temperature sample sensor_name must be a string")
-    if not isinstance(value_celsius, (int, float)):
+    if not component:
+        raise ValueError("temperature sample component must not be empty")
+    if not sensor_id:
+        raise ValueError("temperature sample sensor_id must not be empty")
+    if not sensor_name:
+        raise ValueError("temperature sample sensor_name must not be empty")
+    if (
+        not isinstance(value_celsius, (int, float))
+        or isinstance(value_celsius, bool)
+    ):
         raise TypeError("temperature sample value must be a number")
+    if not is_valid_temperature_value(value_celsius):
+        raise ValueError("temperature sample value is outside the valid range")
     if not isinstance(sampled_at, str):
         raise TypeError("temperature sample timestamp must be a string")
-    if not isinstance(sampled_monotonic, (int, float)):
+    try:
+        parsed_at = datetime.fromisoformat(sampled_at)
+    except ValueError as error:
+        raise ValueError("temperature sample timestamp is invalid") from error
+    if (
+        not isinstance(sampled_monotonic, (int, float))
+        or isinstance(sampled_monotonic, bool)
+    ):
         raise TypeError("temperature sample monotonic time must be a number")
+    try:
+        monotonic = float(sampled_monotonic)
+    except OverflowError as error:
+        raise ValueError("temperature sample monotonic time is invalid") from error
+    if not math.isfinite(monotonic):
+        raise ValueError("temperature sample monotonic time must be finite")
     return TemperatureSample(
         component=component,
         sensor_id=sensor_id,
         sensor_name=sensor_name,
         value_celsius=float(value_celsius),
-        sampled_at=datetime.fromisoformat(sampled_at),
-        sampled_monotonic=float(sampled_monotonic),
+        sampled_at=parsed_at,
+        sampled_monotonic=monotonic,
     )

@@ -19,7 +19,11 @@ from typing import Any, TypeGuard, TypeVar, cast
 
 from maintenance.components import GPU_INFORMATION_UNAVAILABLE, ScanCancelled
 from maintenance.components.scan_support import detail_line_suffix
-from maintenance.components.temperature import TemperatureSample, TemperatureScan
+from maintenance.components.temperature import (
+    TemperatureSample,
+    TemperatureScan,
+    is_valid_temperature_value,
+)
 from maintenance.models import CapabilityState, ResourceSummary, unavailable_summary
 
 from ._compat import scanner_module
@@ -1137,4 +1141,4 @@ class DashboardMixin:
 
     @staticmethod
     def _sensible_temperature(value: Any) -> TypeGuard[int | float]:
-        return isinstance(value, (int, float)) and 0 < value < 250
+        return is_valid_temperature_value(value)
