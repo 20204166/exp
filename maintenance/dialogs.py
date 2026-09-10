@@ -1334,6 +1334,9 @@ class StorageDialog(tk.Toplevel):
         self.coordinator = coordinator or _standalone_coordinator(self)
         self.node_id = node_id
         self._operation_key = operation_key(node_id, "storage")
+        self._trash_operation_key = operation_key(node_id, "storage_trash")
+        self._closed = False
+        self._trash_active = False
         self._read_only = read_only
         self._on_close = on_close or self._default_close
         self.candidates: dict[str, FileCandidate] = {}
@@ -1573,6 +1576,8 @@ class StorageDialog(tk.Toplevel):
         )
 
     def _close(self) -> None:
+        self._closed = True
+        self.coordinator.cancel(self._trash_operation_key)
         self._on_close()
 
     def _show_scan_progress(self, message: str) -> None:
@@ -1656,14 +1661,27 @@ class StorageDialog(tk.Toplevel):
         self.trash_button.config(state=tk.DISABLED)
         self.status_label.config(text="Moving selected files to Trash...")
         paths: list[Path] = [candidate.path for candidate in selected]
-        run_in_thread(
-            self,
-            lambda: self.manager.move_to_trash(paths),
-            self._after_trash,
-            self._show_error,
+        if self._trash_active or self._closed:
+            return
+
+        def trash_task(
+            _cancel_event: threading.Event,
+            _progress: Callable[[str], None],
+        ) -> FileActionResult:
+            return self.manager.move_to_trash(paths)
+
+        self._trash_active = True
+        self.coordinator.run(
+            self._trash_operation_key,
+            trash_task,
+            on_result=lambda _key, result: self._after_trash(result),
+            on_error=lambda _key, message: self._after_trash_error(message),
         )
 
     def _after_trash(self, result: FileActionResult) -> None:
+        self._trash_active = False
+        if self._closed:
+            return
         show_action_result(
             self,
             "Storage Cleanup",
@@ -1672,6 +1690,11 @@ class StorageDialog(tk.Toplevel):
         )
         self.on_changed()
         self.scan()
+
+    def _after_trash_error(self, message: str) -> None:
+        self._trash_active = False
+        if not self._closed:
+            self._show_error(message)
 
     def _show_error(self, message: str) -> None:
         self.scan_button.config(state=tk.NORMAL)

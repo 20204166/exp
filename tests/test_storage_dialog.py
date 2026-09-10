@@ -1,7 +1,6 @@
 import threading
 import tkinter as tk
 import unittest
-from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,7 +15,7 @@ from maintenance.dialogs import (
     run_in_thread,
     show_action_result,
 )
-from maintenance.models import FileCandidate
+from maintenance.models import FileActionResult, FileCandidate
 from tests.support.scheduling import DeferredRunner
 
 
@@ -101,8 +100,9 @@ class FakeManager:
     def __init__(self) -> None:
         self.paths: list[Path] = []
 
-    def move_to_trash(self, paths: list[Path]) -> None:
+    def move_to_trash(self, paths: list[Path]) -> FileActionResult:
         self.paths = paths
+        return FileActionResult(len(paths), (), ())
 
 
 class StorageDialogTests(unittest.TestCase):
@@ -192,24 +192,36 @@ class StorageDialogTests(unittest.TestCase):
         dialog.tree = FakeTree(("0", "1"))
         dialog.candidates = candidates
         dialog.manager = manager
+        runner = DeferredRunner()
+        dialog.coordinator = AppCoordinator(
+            runner=runner,
+            deliver=lambda callback: callback(),
+        )
+        dialog._operation_key = "storage"
+        dialog._trash_operation_key = "storage_trash"
+        dialog._closed = False
+        dialog._trash_active = False
+        dialog._on_close = Mock()
+        dialog._read_only = False
+        dialog.on_changed = Mock()
+        dialog.scan = Mock()
         dialog.scan_button = FakeControl()
         dialog.trash_button = FakeControl()
         dialog.status_label = FakeControl()
 
-        def run_task(
-            _widget: object,
-            task: Callable[[], object],
-            *_callbacks: object,
-        ) -> None:
-            task()
-
         with (
             patch("maintenance.dialogs.messagebox.askyesno", return_value=True),
-            patch("maintenance.dialogs.run_in_thread", side_effect=run_task),
+            patch("maintenance.dialogs.messagebox.showinfo"),
         ):
             dialog.move_selected()
-
+            self.assertTrue(dialog._trash_active)
+            self.assertTrue(dialog.coordinator.in_flight("storage_trash"))
+            self.assertEqual(manager.paths, [])
+            dialog.move_selected()
+            self.assertEqual(len(runner.workers), 1)
+            runner.run_next()
         self.assertEqual(manager.paths, [first, second])
+        self.assertFalse(dialog.coordinator.in_flight("storage_trash"))
 
     def test_show_candidates_empty_state_is_intentional(self) -> None:
         dialog: Any = object.__new__(StorageDialog)
@@ -256,6 +268,9 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         dialog.analyzer = Mock()
         dialog._waiting_for_shared = False
         dialog._scan_active = False
+        dialog._trash_operation_key = "storage_trash"
+        dialog._closed = False
+        dialog._trash_active = False
         dialog._on_close = dialog._default_close
         dialog.status_label = FakeControl()
         dialog.scan_button = FakeControl()
@@ -420,6 +435,75 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         self.assertFalse(dialog._scan_active)
         self.assertFalse(dialog.coordinator.in_flight("storage"))
         dialog._show_error.assert_called_once_with("boom")
+
+    def test_trash_exception_returns_to_dialog_error(self) -> None:
+        runner = DeferredRunner()
+        dialog = self._dialog()
+        dialog.coordinator = AppCoordinator(runner=runner, deliver=lambda cb: cb())
+        dialog._trash_operation_key = "storage_trash"
+        dialog._trash_active = False
+        dialog._closed = False
+        dialog._show_error = Mock()
+        dialog.manager = Mock(move_to_trash=Mock(side_effect=RuntimeError("denied")))
+        dialog.tree = FakeTree(("0",))
+        dialog.candidates = {
+            "0": FileCandidate(
+                Path("x"),
+                1,
+                datetime.now(timezone.utc),
+                "large",
+            )
+        }
+        dialog._read_only = False
+
+        with patch("maintenance.dialogs.messagebox.askyesno", return_value=True):
+            dialog.move_selected()
+        runner.run_next()
+
+        dialog._show_error.assert_called_once_with("denied")
+        self.assertFalse(dialog._trash_active)
+
+    def test_close_cancels_trash_and_late_result_is_ignored(self) -> None:
+        runner = DeferredRunner()
+        dialog = self._dialog()
+        dialog.coordinator = AppCoordinator(runner=runner, deliver=lambda cb: cb())
+        dialog._trash_operation_key = "storage_trash"
+        dialog._closed = False
+        dialog._trash_active = False
+        dialog._show_error = Mock()
+        dialog.on_changed = Mock()
+        dialog.destroy = Mock()
+        dialog.tree = FakeTree(("0",))
+        dialog.candidates = {
+            "0": FileCandidate(
+                Path("x"),
+                1,
+                datetime.now(timezone.utc),
+                "large",
+            )
+        }
+        dialog.manager = Mock(move_to_trash=lambda _paths: FileActionResult(1, (), ()))
+        dialog.scan = Mock()
+        dialog._read_only = False
+
+        with (
+            patch("maintenance.dialogs.messagebox.askyesno", return_value=True),
+            patch("maintenance.dialogs.show_action_result") as show_result,
+        ):
+            dialog.move_selected()
+            self.assertEqual(runner.pending, 1)
+            cancel_event = dialog.coordinator.state("storage_trash").cancel_event
+            self.assertIsNotNone(cancel_event)
+            dialog._on_close = dialog._default_close
+            dialog._close()
+            self.assertTrue(dialog._closed)
+            assert cancel_event is not None
+            self.assertTrue(cancel_event.is_set())
+            runner.run_next()
+
+        dialog.on_changed.assert_not_called()
+        dialog.scan.assert_not_called()
+        show_result.assert_not_called()
 
 
 class CoordinatedDialogScanLifecycleTests(unittest.TestCase):
