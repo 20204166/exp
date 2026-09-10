@@ -155,6 +155,7 @@ class ComponentFacadeReexportTests(unittest.TestCase):
             "PlacementPolicy",
             "PlacementRequest",
             "PlacementView",
+            "placement_view_for_context",
             "DashboardScanLifecycle",
             "windows_windll",
         }

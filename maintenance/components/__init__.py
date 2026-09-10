@@ -39,6 +39,7 @@ from .placement import (
     PlacementPolicy,
     PlacementRequest,
     PlacementView,
+    placement_view_for_context,
 )
 from .process_safety import (
     PROTECTED_PROCESS_NAMES,
@@ -99,6 +100,7 @@ __all__ = [
     "PlacementPolicy",
     "PlacementRequest",
     "PlacementView",
+    "placement_view_for_context",
     "ProcessSafetyPolicy",
     "ProgressCallback",
     "ProgressTask",

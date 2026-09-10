@@ -1,11 +1,21 @@
 """Pure, deterministic selection of an execution node for one typed job."""
 
 import math
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 
-from maintenance.nodes import NodeCapability, NodeId, NodePermission
+from maintenance.nodes import (
+    NodeCapability,
+    NodeConnectionStatus,
+    NodeContext,
+    NodeIdentityStatus,
+    NodeId,
+    NodePermission,
+    NodeStatus,
+    NodeTrustState,
+)
 
 METRICS_MAX_AGE_SECONDS = 30.0
 
@@ -25,7 +35,7 @@ class PlacementRequest:
     required_permission: NodePermission | None = None
     input_size_bytes: int = 0
     output_size_bytes: int = 0
-    transfer_cost_threshold_ms: float = 100.0
+    remote_transfer_threshold_bytes: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.operation, str) or not self.operation:
@@ -45,12 +55,13 @@ class PlacementRequest:
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
         if (
-            isinstance(self.transfer_cost_threshold_ms, bool)
-            or not isinstance(self.transfer_cost_threshold_ms, (int, float))
-            or not math.isfinite(float(self.transfer_cost_threshold_ms))
-            or self.transfer_cost_threshold_ms < 0
+            isinstance(self.remote_transfer_threshold_bytes, bool)
+            or not isinstance(self.remote_transfer_threshold_bytes, int)
+            or self.remote_transfer_threshold_bytes < 0
         ):
-            raise ValueError("transfer cost threshold must be finite and non-negative")
+            raise ValueError(
+                "remote transfer threshold must be a non-negative integer"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +92,7 @@ class PlacementDecision:
 class PlacementPolicy:
     """Choose a node without probing, mutating, authorizing, or executing."""
 
-    def __init__(self, *, clock: Callable[[], float]) -> None:
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
 
     def choose(
@@ -156,7 +167,10 @@ class PlacementPolicy:
             return eligible[0]
         local = next((view for view in eligible if view.is_local), None)
         transfer_size = request.input_size_bytes + request.output_size_bytes
-        if local is not None and transfer_size <= request.transfer_cost_threshold_ms:
+        if (
+            local is not None
+            and transfer_size <= request.remote_transfer_threshold_bytes
+        ):
             return local
         fresh_remote = [
             view for view in eligible if not view.is_local and self._is_fresh(view)
@@ -202,9 +216,54 @@ class PlacementPolicy:
             return f"selected target node {selected.node_id.value}"
         if selected.is_local and (
             request.input_size_bytes + request.output_size_bytes
-            <= request.transfer_cost_threshold_ms
+            <= request.remote_transfer_threshold_bytes
         ):
             return (
                 f"selected local node {selected.node_id.value} below transfer threshold"
             )
         return f"selected {selected.node_id.value} by active jobs, latency, locality, and stable id"
+
+
+def placement_view_for_context(
+    context: NodeContext,
+    *,
+    protocol_compatible: bool | None = None,
+    shutting_down: bool = False,
+    active_jobs: int = 0,
+    recent_latency_ms: float | None = None,
+    metrics_observed_at: float | None = None,
+) -> PlacementView:
+    """Project node state into a fail-closed, read-only placement view."""
+
+    descriptor = context.descriptor
+    is_local = descriptor.is_local
+    connection_status = context.connection.status
+    trusted = is_local or descriptor.trust in (
+        NodeTrustState.TRUSTED,
+        NodeTrustState.AUTHORISED,
+    )
+    authenticated = is_local or connection_status is NodeConnectionStatus.ONLINE
+    online = descriptor.status is NodeStatus.ONLINE and (
+        is_local or connection_status is NodeConnectionStatus.ONLINE
+    )
+    identity_valid = (
+        descriptor.identity_status is not NodeIdentityStatus.MISMATCH
+        and connection_status is not NodeConnectionStatus.IDENTITY_CHANGED
+    )
+    return PlacementView(
+        node_id=descriptor.id,
+        is_local=is_local,
+        trusted=trusted,
+        authenticated=authenticated,
+        online=online,
+        protocol_compatible=(
+            is_local if protocol_compatible is None else protocol_compatible
+        ),
+        identity_valid=identity_valid,
+        shutting_down=shutting_down,
+        capabilities=descriptor.capabilities,
+        permissions=descriptor.permissions,
+        active_jobs=active_jobs,
+        recent_latency_ms=recent_latency_ms,
+        metrics_observed_at=metrics_observed_at,
+    )
