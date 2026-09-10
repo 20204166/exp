@@ -312,7 +312,9 @@ def build_card(root, info_summary):
         "title": card.title_label.cget("text"),
         "value": card.value_label.cget("text"),
         "action": card.details_label.cget("text"),
-        "progress_style": card.progress.cget("style"),
+        "progress_style": (
+            card.progress.cget("style") if card.progress is not None else None
+        ),
     }
 
 

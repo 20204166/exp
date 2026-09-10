@@ -66,6 +66,7 @@ def summary(
     *,
     failed: bool = False,
     actionable: bool = False,
+    percent: float | None = 5.0,
     details: tuple[str, ...] = ("Detail: value",),
 ) -> ResourceSummary:
     return make_summary(
@@ -73,7 +74,7 @@ def summary(
         title,
         value=value,
         subtitle="subtitle",
-        percent=5.0,
+        percent=percent,
         details=details,
         actionable=actionable,
         failed=failed,
@@ -85,6 +86,25 @@ def snapshot(*resources: ResourceSummary) -> DashboardSnapshot:
 
 
 class ResourceCardContractTests(unittest.TestCase):
+    def test_usage_bar_rules_match_resource_semantics(self) -> None:
+        self.assertTrue(ResourceCard.should_show_usage_bar(summary("cpu", "CPU")))
+        self.assertTrue(ResourceCard.should_show_usage_bar(summary("memory", "Memory")))
+        self.assertTrue(
+            ResourceCard.should_show_usage_bar(summary("storage", "Storage"))
+        )
+        self.assertTrue(
+            ResourceCard.should_show_usage_bar(summary("battery", "Battery"))
+        )
+        self.assertFalse(
+            ResourceCard.should_show_usage_bar(
+                summary("battery", "Battery", percent=None, details=(), failed=True)
+            )
+        )
+        self.assertFalse(ResourceCard.should_show_usage_bar(summary("gpu", "GPU")))
+        self.assertFalse(
+            ResourceCard.should_show_usage_bar(summary("network", "Network"))
+        )
+
     def test_action_label_text_matches_actionable_flag(self) -> None:
         self.assertEqual(action_label_text(True), "Review and clean  →")
         self.assertEqual(action_label_text(False), "View details  →")

@@ -12,26 +12,46 @@ from typing import Any
 
 Font = tuple[Any, ...]
 
-COLORS: dict[str, str] = {
-    "background": "#F4F7FB",
-    "card": "#FFFFFF",
-    "text": "#172033",
-    "secondary": "#667085",
+# The first block is the semantic contract. The legacy names below remain in
+# the public map because dialogs and external test seams still consume them.
+COLOR_ROLES: dict[str, str] = {
+    "base": "#F4F7FB",
+    "surface": "#FFFFFF",
+    "line": "#E4E7EC",
+    "ink": "#172033",
+    "ink_2": "#667085",
+    "ink_3": "#98A2B3",
     "accent": "#4F46E5",
-    "accent_active": "#4338CA",
-    "border": "#E4E7EC",
+    "accent_ink": "#FFFFFF",
     "success": "#16803C",
     "warning": "#B45309",
     "danger": "#B42318",
-    "danger_active": "#912018",
     "disabled": "#D0D5DD",
+    "focus": "#4F46E5",
+    "selection": "#E0E7FF",
+}
+
+COLORS: dict[str, str] = {
+    **COLOR_ROLES,
+    "background": COLOR_ROLES["base"],
+    "card": COLOR_ROLES["surface"],
+    "text": COLOR_ROLES["ink"],
+    "secondary": COLOR_ROLES["ink_2"],
+    "accent": COLOR_ROLES["accent"],
+    "accent_active": "#4338CA",
+    "border": COLOR_ROLES["line"],
+    "success": COLOR_ROLES["success"],
+    "warning": COLOR_ROLES["warning"],
+    "danger": COLOR_ROLES["danger"],
+    "danger_active": "#912018",
+    "disabled": COLOR_ROLES["disabled"],
     "primary_disabled": "#A5B4FC",
     "primary_disabled_text": "#EEF2FF",
     "bar_trough": "#E8ECF5",
     "card_bar_trough": "#EEF2F6",
     "button_bg": "#E3E4E8",
     "button_bg_active": "#D4D8E0",
-    "muted_text": "#98A2B3",
+    "muted_text": COLOR_ROLES["ink_3"],
     "graph_grid": "#D9E0EC",
     "graph_empty_border": "#CBD5E1",
 }
@@ -42,6 +62,30 @@ SPACING: dict[str, int] = {
     "section_gap": 14,
     "row_gap": 10,
     "control_gap": 12,
+    "card_pad_x": 18,
+    "card_pad_y": 16,
+    "section_pad_x": 18,
+    "section_pad_y": 14,
+    "dialog_pad_x": 24,
+    "dialog_pad_y": 22,
+    "button_gap": 8,
+    "footer_gap": 16,
+}
+
+CONTROL: dict[str, int] = {
+    "button_pad_x": 12,
+    "button_pad_y": 7,
+    "primary_button_pad_x": 16,
+    "primary_button_pad_y": 9,
+    "spinbox_pad": 4,
+    "card_border_width": 1,
+}
+
+LAYOUT: dict[str, int] = {
+    "dashboard_description_wrap": 520,
+    "dashboard_status_wrap": 280,
+    "card_grid_gap": 7,
+    "card_row_gap": 14,
 }
 
 GRAPH: dict[str, int] = {
@@ -72,6 +116,17 @@ FONTS: dict[str, Font] = {
     "detail_row": ("Helvetica", 10),
     "empty_detail": ("Helvetica", 11),
     "status_text": ("Helvetica", 10),
+}
+
+TYPOGRAPHY: dict[str, Font] = {
+    "page_title": FONTS["title"],
+    "section_title": FONTS["section"],
+    "card_overline": FONTS["card_overline"],
+    "primary_metric": FONTS["card_headline"],
+    "body": FONTS["body"],
+    "caption": FONTS["card_subtitle"],
+    "action": FONTS["button"],
+    "dialog_title": FONTS["dialog_heading"],
 }
 
 STYLE_APP_FRAME = "App.TFrame"
@@ -153,6 +208,8 @@ def accent_theme_colors(
     tokens = ACCENT_THEMES.get(theme, ACCENT_THEMES[DEFAULT_APPEARANCE])
     colors = dict(COLORS if base is None else base)
     colors.update(tokens)
+    colors["focus"] = colors["accent"]
+    colors.setdefault("accent_ink", COLOR_ROLES["accent_ink"])
     return colors
 
 
@@ -215,9 +272,12 @@ def configure_app_styles(
     style.configure(
         STYLE_PRIMARY_BUTTON,
         background=c["accent"],
-        foreground="#FFFFFF",
+        foreground=c["accent_ink"],
         font=f["button"],
-        padding=(16, 9),
+        padding=(
+            CONTROL["primary_button_pad_x"],
+            CONTROL["primary_button_pad_y"],
+        ),
         borderwidth=0,
         focusthickness=2,
         focuscolor=c["accent"],
@@ -233,9 +293,9 @@ def configure_app_styles(
     style.configure(
         STYLE_DANGER_BUTTON,
         background=c["danger"],
-        foreground="#FFFFFF",
+        foreground=c["accent_ink"],
         font=f["danger_button"],
-        padding=(12, 7),
+        padding=(CONTROL["button_pad_x"], CONTROL["button_pad_y"]),
         borderwidth=0,
         focusthickness=2,
         focuscolor=c["danger"],
@@ -249,7 +309,7 @@ def configure_app_styles(
         background=c["button_bg"],
         foreground=c["text"],
         font=f["danger_button"],
-        padding=(12, 7),
+        padding=(CONTROL["button_pad_x"], CONTROL["button_pad_y"]),
         borderwidth=0,
         focusthickness=2,
         focuscolor=c["accent"],
@@ -289,7 +349,7 @@ def configure_app_styles(
         lightcolor=c["border"],
         darkcolor=c["border"],
         arrowcolor=c["secondary"],
-        padding=4,
+        padding=CONTROL["spinbox_pad"],
         font=f["body"],
     )
     style.map(

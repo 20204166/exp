@@ -203,7 +203,7 @@ class TelemetryMiniGraph(tk.Frame):
                 layout.left,
                 layout.right,
                 layout.warning_y,
-                self.colors.get("warning", "#B45309"),
+                self.colors.get("warning", ui_styles.COLORS["warning"]),
             )
         if layout.critical_y is not None:
             self._draw_threshold_line(

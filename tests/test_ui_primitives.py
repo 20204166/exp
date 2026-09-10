@@ -22,6 +22,23 @@ class FakeControl:
 
 
 class DesignTokenParityTests(unittest.TestCase):
+    def test_semantic_roles_back_legacy_widget_tokens(self) -> None:
+        self.assertEqual(ui_styles.COLORS["background"], ui_styles.COLORS["base"])
+        self.assertEqual(ui_styles.COLORS["card"], ui_styles.COLORS["surface"])
+        self.assertEqual(ui_styles.COLORS["border"], ui_styles.COLORS["line"])
+        self.assertEqual(ui_styles.COLORS["text"], ui_styles.COLORS["ink"])
+        self.assertEqual(ui_styles.COLORS["secondary"], ui_styles.COLORS["ink_2"])
+        self.assertEqual(ui_styles.COLORS["muted_text"], ui_styles.COLORS["ink_3"])
+
+    def test_accent_changes_do_not_change_semantic_status_colors(self) -> None:
+        emerald = ui_styles.accent_theme_colors("emerald")
+
+        self.assertEqual(emerald["accent"], "#047857")
+        self.assertEqual(emerald["focus"], emerald["accent"])
+        self.assertEqual(emerald["success"], ui_styles.COLORS["success"])
+        self.assertEqual(emerald["warning"], ui_styles.COLORS["warning"])
+        self.assertEqual(emerald["danger"], ui_styles.COLORS["danger"])
+
     def test_window_colour_tokens_come_from_shared_styles(self) -> None:
         expected = {
             "BACKGROUND": "background",

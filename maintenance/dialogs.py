@@ -373,6 +373,13 @@ class ResourceCard(tk.Frame):
 
     WRAP_HYSTERESIS = 12
     METRIC_LABEL_SPACE = 130
+    USAGE_BAR_KEYS = frozenset({"cpu", "memory", "storage", "battery"})
+
+    @classmethod
+    def should_show_usage_bar(cls, summary: ResourceSummary) -> bool:
+        """Return whether a summary has a meaningful dashboard usage bar."""
+
+        return summary.key in cls.USAGE_BAR_KEYS and summary.percent is not None
 
     def __init__(
         self,
@@ -390,8 +397,8 @@ class ResourceCard(tk.Frame):
             highlightbackground=colors["border"],
             highlightthickness=1,
             cursor="hand2",
-            padx=18,
-            pady=16,
+            padx=ui_styles.SPACING["card_pad_x"],
+            pady=ui_styles.SPACING["card_pad_y"],
         )
         self.key = key
         self.on_open = on_open
@@ -404,7 +411,7 @@ class ResourceCard(tk.Frame):
             text=title.upper(),
             bg=colors["card"],
             fg=colors["secondary"],
-            font=("Helvetica", 10, "bold"),
+            font=ui_styles.TYPOGRAPHY["card_overline"],
             cursor="hand2",
         )
         self.title_label.pack(anchor=tk.W)
@@ -414,7 +421,7 @@ class ResourceCard(tk.Frame):
             text="—",
             bg=colors["card"],
             fg=colors["text"],
-            font=("Helvetica", 22, "bold"),
+            font=ui_styles.TYPOGRAPHY["primary_metric"],
             cursor="hand2",
             anchor=tk.W,
             justify=tk.LEFT,
@@ -427,7 +434,7 @@ class ResourceCard(tk.Frame):
             text="Run a scan to load details",
             bg=colors["card"],
             fg=colors["secondary"],
-            font=("Helvetica", 10),
+            font=ui_styles.TYPOGRAPHY["caption"],
             anchor=tk.W,
             justify=tk.LEFT,
             wraplength=300,
@@ -439,20 +446,14 @@ class ResourceCard(tk.Frame):
         self.metrics_frame.pack(fill=tk.X, pady=(8, 0))
         self.metric_rows: list[tuple[tk.Frame, tk.Label, tk.Label]] = []
 
-        self.progress = ttk.Progressbar(
-            self,
-            maximum=100,
-            value=0,
-            style="Card.Horizontal.TProgressbar",
-        )
-        self.progress.pack(fill=tk.X, pady=(14, 12))
+        self.progress: ttk.Progressbar | None = None
 
         self.details_label = tk.Label(
             self,
             text="View details  →",
             bg=colors["card"],
             fg=colors["accent"],
-            font=("Helvetica", 10, "bold"),
+            font=ui_styles.TYPOGRAPHY["action"],
             cursor="hand2",
         )
         self.details_label.pack(anchor=tk.W)
@@ -526,9 +527,33 @@ class ResourceCard(tk.Frame):
     def update_summary(self, summary: ResourceSummary) -> None:
         self.value_label.config(text=summary.value)
         self.subtitle_label.config(text=summary.subtitle)
-        self.progress.config(value=summary.percent or 0)
+        self._sync_progress(summary)
         self.details_label.config(text=action_label_text(summary.actionable))
         self._render_metrics(summary)
+
+    def _sync_progress(self, summary: ResourceSummary) -> None:
+        """Show a bar only when the resource exposes a real bounded metric."""
+
+        should_show = self.should_show_usage_bar(summary)
+        if should_show:
+            assert summary.percent is not None
+            if self.progress is None:
+                self.progress = ttk.Progressbar(
+                    self,
+                    maximum=100,
+                    value=0,
+                    style="Card.Horizontal.TProgressbar",
+                )
+                self.progress.pack(
+                    fill=tk.X,
+                    pady=(14, 12),
+                    before=self.details_label,
+                )
+            self.progress.config(value=summary.percent)
+            return
+        if self.progress is not None:
+            self.progress.destroy()
+            self.progress = None
 
     def apply_colors(self, colors: dict[str, str]) -> None:
         """Re-colour an already-built card after an appearance change."""
@@ -554,7 +579,13 @@ class ResourceCard(tk.Frame):
             coordinator.set_enabled(action_id, False)
         self.value_label.config(text="—")
         self.subtitle_label.config(text="Run a scan to load details")
-        self.progress.config(value=0)
+        if self.progress is not None:
+            if isinstance(self.progress, ttk.Progressbar):
+                self.progress.destroy()
+                self.progress = None
+            else:
+                # Keep the lightweight fake-widget seam used by headless tests.
+                self.progress.config(value=0)
         self.details_label.config(text="View details  →")
         for row, _name_label, _value_label in self.metric_rows:
             row.destroy()
@@ -637,8 +668,8 @@ class InfoDialog(tk.Toplevel):
             geometry=self.GEOMETRY,
             minsize=self.MIN_SIZE,
             colors=colors,
-            padx=28,
-            pady=24,
+            padx=ui_styles.SPACING["dialog_pad_x"],
+            pady=ui_styles.SPACING["dialog_pad_y"],
             frame_cls=tk.Frame,
             on_close=self._close,
         )
@@ -798,8 +829,8 @@ class ProcessDialog(tk.Toplevel):
             geometry="900x560",
             minsize=(760, 480),
             colors=colors,
-            padx=24,
-            pady=22,
+            padx=ui_styles.SPACING["dialog_pad_x"],
+            pady=ui_styles.SPACING["dialog_pad_y"],
             frame_cls=tk.Frame,
             on_close=self._close,
         )
@@ -839,7 +870,7 @@ class ProcessDialog(tk.Toplevel):
             relief=tk.FLAT,
             highlightbackground=colors["border"],
             highlightthickness=1,
-            font=("Helvetica", 10),
+            font=ui_styles.TYPOGRAPHY["body"],
         )
         self.search_entry.pack(fill=tk.X, expand=True)
 
@@ -889,8 +920,14 @@ class ProcessDialog(tk.Toplevel):
             fill=tk.Y,
             padx=(ui_layout.SCROLLBAR_GUTTER, 0),
         )
-        self.tree.tag_configure("protected", foreground="#98A2B3")
-        self.tree.tag_configure("low", foreground="#B45309")
+        self.tree.tag_configure(
+            "protected",
+            foreground=colors.get("muted_text", ui_styles.COLORS["muted_text"]),
+        )
+        self.tree.tag_configure(
+            "low",
+            foreground=colors.get("warning", ui_styles.COLORS["warning"]),
+        )
 
         footer, self.status_label = ui_layout.dialog_footer(
             container,
@@ -1314,8 +1351,8 @@ class StorageDialog(tk.Toplevel):
             geometry="980x580",
             minsize=(820, 500),
             colors=colors,
-            padx=24,
-            pady=22,
+            padx=ui_styles.SPACING["dialog_pad_x"],
+            pady=ui_styles.SPACING["dialog_pad_y"],
             frame_cls=tk.Frame,
             on_close=self._close,
         )

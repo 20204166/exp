@@ -20,7 +20,7 @@ from maintenance.ui.thermal_graph import (  # noqa: F401
 )
 
 SCROLLBAR_GUTTER = 6
-FOOTER_GUTTER = 16
+FOOTER_GUTTER = ui_styles.SPACING["footer_gap"]
 
 
 def clear_children(container: Any) -> None:
@@ -307,7 +307,7 @@ def dialog_heading(
     label_cls: Callable[..., Any],
     colors: dict[str, str],
     heading_font: Font,
-    description_font: Font = ("Helvetica", 10),
+    description_font: Font = ui_styles.TYPOGRAPHY["body"],
     wrap: int,
     description_pady: tuple[int, int] = (4, 14),
 ) -> Any:
@@ -361,7 +361,7 @@ def dialog_footer(
         text=status_text,
         bg=colors["background"],
         fg=colors["secondary"],
-        font=("Helvetica", 10),
+        font=ui_styles.TYPOGRAPHY["body"],
     )
     status.pack(side="left", padx=(0, FOOTER_GUTTER))
     return footer, status
@@ -504,11 +504,11 @@ def section_card(
     card = frame_cls(
         parent,
         bg=colors["card"],
-        highlightthickness=1,
+        highlightthickness=ui_styles.CONTROL["card_border_width"],
         highlightbackground=colors["border"],
         highlightcolor=colors["border"],
-        padx=18,
-        pady=14,
+        padx=ui_styles.SPACING["section_pad_x"],
+        pady=ui_styles.SPACING["section_pad_y"],
     )
     card.pack(fill="x", pady=(0, 14))
     label_cls(
@@ -554,11 +554,11 @@ def navigation_card(
     card = frame_cls(
         parent,
         bg=colors["card"],
-        highlightthickness=1,
+        highlightthickness=ui_styles.CONTROL["card_border_width"],
         highlightbackground=colors["border"],
         highlightcolor=colors["border"],
-        padx=18,
-        pady=14,
+        padx=ui_styles.SPACING["section_pad_x"],
+        pady=ui_styles.SPACING["section_pad_y"],
     )
     card.pack(fill="x", pady=(0, 14))
     text_column = frame_cls(card, bg=colors["card"])

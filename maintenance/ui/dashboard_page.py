@@ -33,7 +33,7 @@ def build(controller: Any, parent: Any) -> Any:
         ),
         frame_cls=controller.ttk.Frame,
         label_cls=controller.ttk.Label,
-        wrap=680,
+        wrap=ui_styles.LAYOUT["dashboard_description_wrap"],
         node_title=node_title,
     )
     controller.node_title_label = getattr(
@@ -48,7 +48,7 @@ def build(controller: Any, parent: Any) -> Any:
             and (rendered := render_target_state(context.descriptor, context.snapshot))
             else ""
         ),
-        wraplength=680,
+        wraplength=ui_styles.LAYOUT["dashboard_status_wrap"],
         style="Description.TLabel",
     )
     controller.target_status_label.pack(anchor="e", pady=(2, 0))
@@ -60,25 +60,52 @@ def build(controller: Any, parent: Any) -> Any:
         controller._node_registry.discovered_candidates(),
     )
 
-    navigation_buttons = controller.ttk.Frame(
+    navigation_frame = controller.ttk.Frame(
         controller.header_actions,
         style="App.TFrame",
     )
-    navigation_buttons.pack(anchor="e")
+    navigation_frame.pack(anchor="e")
 
-    for attribute, text, callback in (
+    navigation_specs = (
+        ("settings_button", "Settings", controller._show_settings_page),
         ("cluster_button", "All Systems", controller._show_cluster_page),
         ("thermals_button", "Thermals", controller._show_thermals_page),
-        ("settings_button", "Settings", controller._show_settings_page),
-    ):
+    )
+    navigation_buttons: list[Any] = []
+    for attribute, text, callback in navigation_specs:
         button = controller.ttk.Button(
-            navigation_buttons,
+            navigation_frame,
             text=text,
             command=callback,
             style="Neutral.TButton",
             cursor="hand2",
         )
         setattr(controller, attribute, button)
+        navigation_buttons.append(button)
+
+    def layout_navigation(_event: Any = None) -> None:
+        columns = 3 if controller.main_frame.winfo_width() >= 980 else 2
+        for button in navigation_buttons:
+            button.grid_forget()
+        for index, button in enumerate(navigation_buttons):
+            button.grid(
+                row=index // columns,
+                column=index % columns,
+                padx=(
+                    0 if index % columns == 0 else ui_styles.LAYOUT["card_grid_gap"],
+                    0,
+                ),
+                pady=(0, 4),
+                sticky="e",
+            )
+        for column in range(3):
+            navigation_frame.grid_columnconfigure(
+                column,
+                weight=1 if column < columns else 0,
+            )
+
+    ui_layout.resize_aware(controller.main_frame, layout_navigation)
+    layout_navigation()
 
     for action_id, button, callback in (
         (
@@ -96,9 +123,6 @@ def build(controller: Any, parent: Any) -> Any:
         controller._button_coordinator.register(action_id, callback, replace=True)
         controller._button_coordinator.bind(button, action_id)
     controller._build_node_selector(controller.header_actions)
-    controller.settings_button.pack(side="left")
-    controller.cluster_button.pack(side="left", padx=(8, 0))
-    controller.thermals_button.pack(side="left", padx=(8, 0))
 
     controller.status_label = controller.ttk.Label(
         controller.header_actions,
@@ -135,6 +159,7 @@ def build(controller: Any, parent: Any) -> Any:
         canvas_cls=controller.tk.Canvas,
         scrollbar_cls=controller.ttk.Scrollbar,
         frame_kwargs={"style": "App.TFrame"},
+        auto_hide=True,
     )
     for column in range(3):
         controller.cards_frame.grid_columnconfigure(column, weight=1, uniform="cards")
