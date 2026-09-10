@@ -46,7 +46,7 @@ applications remain deployment validation items.
 - `ruff format --check .`: **PASS**.
 - `pyright`: **PASS**.
 - `mypy --ignore-missing-imports maintenance window.py main.py algo.py tests`: **PASS**.
-- `mypy --ignore-missing-imports .`: **BASELINE FAILURE**, duplicate `agent1_counter_test` module names under historical `docs/bug_hunts/poc/BUG-20260909-001` and `BUG-20260910-001`.
+- `mypy --ignore-missing-imports .`: **PASS**, after excluding historical `docs/bug_hunts` evidence from the production Mypy file set.
 - `git diff --check`: **PASS**.
 
 ## Final Decision

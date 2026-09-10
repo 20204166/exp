@@ -57,4 +57,4 @@ maintenance = ["py.typed"]
 # beside the sources; keep the documented `mypy --ignore-missing-imports .`
 # gate clean by never type-checking those copies.
 files = ["maintenance", "window.py", "main.py", "algo.py", "tests"]
-exclude = "(^|/)(build|dist)/|(^|/).*\\.egg-info/"
+exclude = "(^|/)(build|dist|docs/bug_hunts)/|(^|/).*\\.egg-info/"
