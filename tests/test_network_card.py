@@ -409,7 +409,7 @@ class NetworkCardTests(unittest.TestCase):
             CapabilityState.SUPPORTED,
         )
 
-    def test_network_capability_unknown_when_counters_fail(self) -> None:
+    def test_network_capability_temporarily_unavailable_when_counters_fail(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
 
         def broken() -> Any:
@@ -426,7 +426,7 @@ class NetworkCardTests(unittest.TestCase):
 
         self.assertEqual(
             snapshot.get("network").capability,
-            CapabilityState.UNKNOWN,
+            CapabilityState.TEMPORARILY_UNAVAILABLE,
         )
 
     def test_network_capability_unsupported_when_loopback_only(self) -> None:

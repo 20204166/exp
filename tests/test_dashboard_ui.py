@@ -13,7 +13,12 @@ from maintenance.components.coordinator import (
     ComponentRefreshScheduler,
 )
 from maintenance.dialogs import ResourceCard, action_label_text, metric_label_pairs
-from maintenance.models import DashboardSnapshot, ResourceSummary, unavailable_summary
+from maintenance.models import (
+    CapabilityState,
+    DashboardSnapshot,
+    ResourceSummary,
+    unavailable_summary,
+)
 from maintenance.ui.action_coordinator import ButtonCoordinator
 from tests.support.models import make_snapshot, make_summary
 from tests.support.scheduling import TimerMaster
@@ -68,6 +73,7 @@ def summary(
     actionable: bool = False,
     percent: float | None = 5.0,
     details: tuple[str, ...] = ("Detail: value",),
+    capability: CapabilityState = CapabilityState.UNKNOWN,
 ) -> ResourceSummary:
     return make_summary(
         key,
@@ -78,6 +84,7 @@ def summary(
         details=details,
         actionable=actionable,
         failed=failed,
+        capability=capability,
     )
 
 
@@ -146,6 +153,31 @@ class ResourceCardContractTests(unittest.TestCase):
         self.assertEqual(card.progress.options["value"], 5.0)
         label_factory.assert_called()
 
+    def test_update_summary_exposes_capability_status_in_secondary_text(self) -> None:
+        for state, expected in (
+            (CapabilityState.UNSUPPORTED, "Unsupported"),
+            (
+                CapabilityState.TEMPORARILY_UNAVAILABLE,
+                "Temporarily unavailable",
+            ),
+            (CapabilityState.PERMISSION_LIMITED, "Permission required"),
+        ):
+            card: Any = object.__new__(ResourceCard)
+            card.value_label = FakeControl()
+            card.subtitle_label = FakeControl()
+            card.progress = None
+            card.details_label = FakeControl()
+            card.metric_rows = []
+            card.metrics_frame = Mock()
+            card.colors = {"card": "#fff", "secondary": "#666", "text": "#000"}
+            with patch("maintenance.dialogs.tk.Frame"), patch(
+                "maintenance.dialogs.tk.Label"
+            ):
+                card.update_summary(
+                    summary("gpu", "GPU", percent=None, capability=state)
+                )
+            self.assertIn(expected, card.subtitle_label.options["text"])
+
     def test_update_summary_shrinks_metric_rows(self) -> None:
         card: Any = object.__new__(ResourceCard)
         card.value_label = FakeControl()
@@ -177,7 +209,7 @@ class ResourceCardContractTests(unittest.TestCase):
 
         self.assertEqual(card.value_label.options["text"], "—")
         self.assertEqual(
-            card.subtitle_label.options["text"], "Run a scan to load details"
+            card.subtitle_label.options["text"], "No data yet"
         )
         self.assertEqual(card.progress.options["value"], 0)
         self.assertEqual(card.details_label.options["text"], "View details  →")

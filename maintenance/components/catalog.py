@@ -3,6 +3,24 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from maintenance.models import CapabilityState
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityDeclaration:
+    """Provider-level capability evidence, independent of widgets."""
+
+    component: str
+    metric: str
+    platform_states: tuple[tuple[str, CapabilityState], ...]
+
+    def state_for(self, platform_name: str) -> CapabilityState:
+        normalized = platform_name.casefold()
+        for platform, state in self.platform_states:
+            if platform.casefold() == normalized:
+                return state
+        return CapabilityState.NOT_VERIFIED_ON_NATIVE_PLATFORM
+
 
 @dataclass(frozen=True, slots=True)
 class ResourceFeature:
@@ -58,6 +76,117 @@ class ResourceFeatureCatalog:
         ResourceFeature("battery", "Battery", 5, "informational"),
     )
 
+    CAPABILITY_DECLARATIONS: tuple[CapabilityDeclaration, ...] = (
+        CapabilityDeclaration(
+            "cpu",
+            "usage",
+            (
+                ("Linux", CapabilityState.SUPPORTED),
+                ("Darwin", CapabilityState.SUPPORTED),
+                ("Windows", CapabilityState.SUPPORTED),
+            ),
+        ),
+        CapabilityDeclaration(
+            "memory",
+            "usage",
+            (
+                ("Linux", CapabilityState.SUPPORTED),
+                ("Darwin", CapabilityState.SUPPORTED),
+                ("Windows", CapabilityState.SUPPORTED),
+            ),
+        ),
+        CapabilityDeclaration(
+            "storage",
+            "capacity",
+            (
+                ("Linux", CapabilityState.SUPPORTED),
+                ("Darwin", CapabilityState.SUPPORTED),
+                ("Windows", CapabilityState.SUPPORTED),
+            ),
+        ),
+        CapabilityDeclaration(
+            "gpu",
+            "model",
+            (
+                ("Linux", CapabilityState.SUPPORTED),
+                ("Darwin", CapabilityState.SUPPORTED),
+                ("Windows", CapabilityState.SUPPORTED),
+            ),
+        ),
+        CapabilityDeclaration(
+            "gpu",
+            "utilization",
+            (
+                ("Linux", CapabilityState.TEMPORARILY_UNAVAILABLE),
+                ("Darwin", CapabilityState.UNSUPPORTED),
+                ("Windows", CapabilityState.TEMPORARILY_UNAVAILABLE),
+            ),
+        ),
+        CapabilityDeclaration(
+            "network",
+            "traffic",
+            (
+                ("Linux", CapabilityState.SUPPORTED),
+                ("Darwin", CapabilityState.SUPPORTED),
+                ("Windows", CapabilityState.SUPPORTED),
+            ),
+        ),
+        CapabilityDeclaration(
+            "battery",
+            "charge",
+            (
+                ("Linux", CapabilityState.SUPPORTED),
+                ("Darwin", CapabilityState.SUPPORTED),
+                ("Windows", CapabilityState.SUPPORTED),
+            ),
+        ),
+        CapabilityDeclaration(
+            "battery",
+            "temperature",
+            (
+                ("Linux", CapabilityState.UNSUPPORTED),
+                ("Darwin", CapabilityState.UNSUPPORTED),
+                ("Windows", CapabilityState.UNSUPPORTED),
+            ),
+        ),
+        CapabilityDeclaration(
+            "thermals",
+            "sensors",
+            (
+                ("Linux", CapabilityState.NO_DATA),
+                ("Darwin", CapabilityState.NOT_VERIFIED_ON_NATIVE_PLATFORM),
+                ("Windows", CapabilityState.NOT_VERIFIED_ON_NATIVE_PLATFORM),
+            ),
+        ),
+        CapabilityDeclaration(
+            "storage",
+            "smart",
+            (
+                ("Linux", CapabilityState.UNSUPPORTED),
+                ("Darwin", CapabilityState.UNSUPPORTED),
+                ("Windows", CapabilityState.UNSUPPORTED),
+            ),
+        ),
+        CapabilityDeclaration(
+            "cleanup",
+            "downloads-trash",
+            (
+                ("Linux", CapabilityState.SUPPORTED),
+                ("Darwin", CapabilityState.SUPPORTED),
+                ("Windows", CapabilityState.SUPPORTED),
+            ),
+        ),
+        CapabilityDeclaration(
+            "processes",
+            "inventory-and-review",
+            (
+                ("Linux", CapabilityState.SUPPORTED),
+                ("Darwin", CapabilityState.SUPPORTED),
+                ("Windows", CapabilityState.SUPPORTED),
+            ),
+        ),
+    )
+
     def __init__(
         self,
         features: Iterable[ResourceFeature] | None = None,
@@ -108,4 +237,14 @@ class ResourceFeatureCatalog:
 
         return tuple(
             feature for feature in self.all() if feature.is_available_on(platform_name)
+        )
+
+    def declarations_for(self, platform_name: str) -> tuple[CapabilityDeclaration, ...]:
+        """Return provider declarations without inferring runtime availability."""
+
+        return tuple(
+            declaration
+            for declaration in self.CAPABILITY_DECLARATIONS
+            if declaration.state_for(platform_name)
+            is not CapabilityState.NOT_VERIFIED_ON_NATIVE_PLATFORM
         )

@@ -15,13 +15,19 @@ class CapabilityState(str, Enum):
 
     ``SUPPORTED`` means the component genuinely exists and was read.
     ``UNSUPPORTED`` means an authoritative probe proved the capability is
-    absent (e.g. no battery). ``UNKNOWN`` means the read failed or the probe
-    could not distinguish absence from a transient failure, so the capability
-    must never be auto-hidden on that basis.
+    absent (e.g. no battery). ``TEMPORARILY_UNAVAILABLE`` means a supported
+    provider could not be read this time. ``NO_DATA`` means no sample exists
+    yet. ``PERMISSION_LIMITED`` means the provider was denied access.
+    ``NOT_VERIFIED_ON_NATIVE_PLATFORM`` is reserved for declarations whose
+    native evidence is absent. ``UNKNOWN`` is retained for old snapshots.
     """
 
     SUPPORTED = "supported"
     UNSUPPORTED = "unsupported"
+    TEMPORARILY_UNAVAILABLE = "temporarily_unavailable"
+    NO_DATA = "no_data"
+    PERMISSION_LIMITED = "permission_limited"
+    NOT_VERIFIED_ON_NATIVE_PLATFORM = "not_verified_on_native_platform"
     UNKNOWN = "unknown"
 
 
@@ -47,7 +53,12 @@ class ResourceSummary:
     temperatures: tuple[TemperatureSample, ...] = ()
 
 
-def unavailable_summary(key: str, title: str) -> ResourceSummary:
+def unavailable_summary(
+    key: str,
+    title: str,
+    *,
+    capability: CapabilityState = CapabilityState.UNKNOWN,
+) -> ResourceSummary:
     """Return the standard "Unavailable" summary for a failed component.
 
     Shared by the scanner (one card builder raised) and the window (a
@@ -64,7 +75,32 @@ def unavailable_summary(key: str, title: str) -> ResourceSummary:
         details=(f"{title} information is unavailable.",),
         actionable=key in ("cpu", "memory", "storage"),
         failed=True,
+        capability=capability,
     )
+
+
+def capability_label(state: CapabilityState) -> str:
+    """Return concise user-facing wording for a capability state."""
+
+    return {
+        CapabilityState.SUPPORTED: "Supported",
+        CapabilityState.UNSUPPORTED: "Unsupported",
+        CapabilityState.TEMPORARILY_UNAVAILABLE: "Temporarily unavailable",
+        CapabilityState.NO_DATA: "No data yet",
+        CapabilityState.PERMISSION_LIMITED: "Permission required",
+        CapabilityState.NOT_VERIFIED_ON_NATIVE_PLATFORM: "Not verified on this platform",
+        CapabilityState.UNKNOWN: "Temporarily unavailable",
+    }[state]
+
+
+def resource_status(summary: ResourceSummary) -> str | None:
+    """Return a secondary status only when it adds transparency."""
+
+    if summary.failed and summary.capability is CapabilityState.UNKNOWN:
+        return "Failed"
+    if summary.capability is CapabilityState.SUPPORTED:
+        return None
+    return capability_label(summary.capability)
 
 
 @dataclass(frozen=True, slots=True)

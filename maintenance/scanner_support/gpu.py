@@ -75,7 +75,7 @@ class GpuMixin:
                 else:
                     probe = GpuProbe(
                         (self.GPU_QUERY_TIMEOUT_MESSAGE,),
-                        CapabilityState.UNKNOWN,
+                        CapabilityState.TEMPORARILY_UNAVAILABLE,
                     )
                     self._remember_gpu_capability(probe.capability)
                     return probe
@@ -90,7 +90,7 @@ class GpuMixin:
                     results.append(
                         GpuProbe(
                             (gpu_unavailable_message(error),),
-                            CapabilityState.UNKNOWN,
+                            CapabilityState.TEMPORARILY_UNAVAILABLE,
                         )
                     )
                 finally:
@@ -107,7 +107,7 @@ class GpuMixin:
                 self._gpu_query_in_flight = False
                 probe = GpuProbe(
                     (gpu_unavailable_message(error),),
-                    CapabilityState.UNKNOWN,
+                    CapabilityState.TEMPORARILY_UNAVAILABLE,
                 )
                 self._remember_gpu_capability(probe.capability)
                 return probe
@@ -118,7 +118,7 @@ class GpuMixin:
                 self._gpu_query_timed_out_at = scanner_module.time.monotonic()
             probe = GpuProbe(
                 (self.GPU_QUERY_TIMEOUT_MESSAGE,),
-                CapabilityState.UNKNOWN,
+                CapabilityState.TEMPORARILY_UNAVAILABLE,
             )
         else:
             probe = (
@@ -126,7 +126,7 @@ class GpuMixin:
                 if results
                 else GpuProbe(
                     (self.GPU_QUERY_TIMEOUT_MESSAGE,),
-                    CapabilityState.UNKNOWN,
+                    CapabilityState.TEMPORARILY_UNAVAILABLE,
                 )
             )
         self._remember_gpu_capability(probe.capability)
@@ -244,7 +244,9 @@ class GpuMixin:
         displays = payload.get("SPDisplaysDataType", [])
         lines: list[str] = []
         for display in displays:
-            name = display.get("sppci_model") or display.get("_name") or "Apple GPU"
+            name = display.get("sppci_model") or display.get("_name")
+            if not name:
+                continue
             lines.append(str(name))
             if memory := display.get("spdisplays_vram"):
                 lines.append(f"Memory: {memory}")
@@ -280,7 +282,9 @@ class GpuMixin:
 
         lines: list[str] = []
         for controller in controllers:
-            name = controller.get("Name") or "Windows GPU"
+            name = controller.get("Name")
+            if not name:
+                continue
             lines.append(str(name))
             adapter_ram = controller.get("AdapterRAM")
             if isinstance(adapter_ram, int) and adapter_ram > 0:

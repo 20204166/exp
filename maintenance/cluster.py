@@ -95,7 +95,7 @@ def _parse_datetime(value: Any, field: str) -> datetime:
 
 
 def resource_summary_to_dict(summary: ResourceSummary) -> dict[str, Any]:
-    return {
+    data = {
         "key": summary.key,
         "title": summary.title,
         "value": summary.value,
@@ -104,11 +104,29 @@ def resource_summary_to_dict(summary: ResourceSummary) -> dict[str, Any]:
         "details": list(summary.details),
         "actionable": summary.actionable,
         "failed": summary.failed,
-        "capability": summary.capability.value,
+        # Keep the v1 field readable by older peers. New peers recover the
+        # precise state from the additive field below.
+        "capability": (
+            summary.capability.value
+            if summary.capability
+            in (
+                CapabilityState.SUPPORTED,
+                CapabilityState.UNSUPPORTED,
+                CapabilityState.UNKNOWN,
+            )
+            else CapabilityState.UNKNOWN.value
+        ),
         "temperatures": [
             temperature_sample_to_dict(sample) for sample in summary.temperatures
         ],
     }
+    if summary.capability not in (
+        CapabilityState.SUPPORTED,
+        CapabilityState.UNSUPPORTED,
+        CapabilityState.UNKNOWN,
+    ):
+        data["capability_state"] = summary.capability.value
+    return data
 
 
 def resource_summary_from_dict(data: Any) -> ResourceSummary:
@@ -117,7 +135,9 @@ def resource_summary_from_dict(data: Any) -> ResourceSummary:
     key = data.get("key")
     if not isinstance(key, str):
         raise ClusterDataError("resource summary key must be a string")
-    capability = data.get("capability", CapabilityState.UNKNOWN.value)
+    capability = data.get(
+        "capability_state", data.get("capability", CapabilityState.UNKNOWN.value)
+    )
     try:
         state = CapabilityState(capability)
     except ValueError as error:

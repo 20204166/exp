@@ -41,17 +41,20 @@ def gpu_probe_from_read(
     """Classify one platform GPU read into a typed probe.
 
     Shared by the macOS, Windows, and Linux readers: a command error becomes
-    an unavailable message with ``UNKNOWN`` capability, an authoritative
-    empty result becomes ``UNSUPPORTED`` (proven absence), and detail lines
+    an unavailable message with ``TEMPORARILY_UNAVAILABLE`` capability, an
+    empty result becomes ``UNSUPPORTED`` (not exposed by that provider), and detail lines
     become ``SUPPORTED``. Callers keep their own ``_*_gpu_read`` parsing;
     this owns only the uniform classification. ``GpuDetector._normalize``
     is intentionally different: it classifies injected loader values, where
-    an empty result stays ``UNKNOWN`` rather than proving absence.
+    an empty result stays temporarily unavailable rather than proving absence.
     """
 
     lines, error = read()
     if error is not None:
-        return GpuProbe((gpu_unavailable_message(error),), CapabilityState.UNKNOWN)
+        return GpuProbe(
+            (gpu_unavailable_message(error),),
+            CapabilityState.TEMPORARILY_UNAVAILABLE,
+        )
     if not lines:
         return GpuProbe((GPU_INFORMATION_UNAVAILABLE,), CapabilityState.UNSUPPORTED)
     return GpuProbe(lines, CapabilityState.SUPPORTED)
@@ -147,7 +150,10 @@ class GpuDetector:
             return self._normalize(self._windows_loader())
         if system == "Linux":
             return self._normalize(self._linux_loader())
-        return GpuProbe((GPU_INFORMATION_UNAVAILABLE,), CapabilityState.UNKNOWN)
+        return GpuProbe(
+            (GPU_INFORMATION_UNAVAILABLE,),
+            CapabilityState.NOT_VERIFIED_ON_NATIVE_PLATFORM,
+        )
 
     @staticmethod
     def _normalize(value: Any) -> GpuProbe:
@@ -156,5 +162,8 @@ class GpuDetector:
         if isinstance(value, GpuProbe):
             return value
         if not value:
-            return GpuProbe((GPU_INFORMATION_UNAVAILABLE,), CapabilityState.UNKNOWN)
+            return GpuProbe(
+                (GPU_INFORMATION_UNAVAILABLE,),
+                CapabilityState.TEMPORARILY_UNAVAILABLE,
+            )
         return GpuProbe(tuple(value), CapabilityState.SUPPORTED)

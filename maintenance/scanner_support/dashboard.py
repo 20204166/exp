@@ -387,7 +387,15 @@ class DashboardMixin:
             raise
         except Exception as error:  # noqa: BLE001 - one failed card must not fail the scan.
             scanner_module.LOGGER.warning("Resource %r failed: %s", key, error)
-            return unavailable_summary(key, title)
+            return unavailable_summary(
+                key,
+                title,
+                capability=(
+                    CapabilityState.PERMISSION_LIMITED
+                    if isinstance(error, PermissionError)
+                    else CapabilityState.TEMPORARILY_UNAVAILABLE
+                ),
+            )
 
     def _cpu_resource(
         self,
@@ -986,7 +994,11 @@ class DashboardMixin:
                 percent=None,
                 details=("Battery information is unavailable.",),
                 failed=True,
-                capability=CapabilityState.UNKNOWN,
+                capability=(
+                    CapabilityState.PERMISSION_LIMITED
+                    if isinstance(battery_error, PermissionError)
+                    else CapabilityState.TEMPORARILY_UNAVAILABLE
+                ),
                 temperatures=temperature_samples,
             )
 

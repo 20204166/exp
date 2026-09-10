@@ -209,14 +209,14 @@ class BatteryCardTests(unittest.TestCase):
         summary = scanner._battery_resource(None, None, ["CPU: 45°C"])
         self.assertEqual(summary.capability, CapabilityState.UNSUPPORTED)
 
-    def test_battery_capability_is_unknown_when_unreadable(self) -> None:
+    def test_battery_capability_requires_permission_when_denied(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
         summary = scanner._battery_resource(
             None,
             PermissionError("denied"),
             ["CPU: 45°C"],
         )
-        self.assertEqual(summary.capability, CapabilityState.UNKNOWN)
+        self.assertEqual(summary.capability, CapabilityState.PERMISSION_LIMITED)
 
     def test_battery_card_end_to_end_desktop(self) -> None:
         scanner = SystemScanner(Path("Downloads"))

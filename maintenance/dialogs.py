@@ -24,6 +24,7 @@ from maintenance.models import (
     ProcessActionResult,
     ProcessCandidate,
     ResourceSummary,
+    resource_status,
 )
 from maintenance.nodes import NodeId, operation_key
 from maintenance.scanner import ProgressCallback, SystemScanner
@@ -526,7 +527,11 @@ class ResourceCard(tk.Frame):
 
     def update_summary(self, summary: ResourceSummary) -> None:
         self.value_label.config(text=summary.value)
-        self.subtitle_label.config(text=summary.subtitle)
+        status = resource_status(summary)
+        subtitle = summary.subtitle
+        if status is not None:
+            subtitle = f"{subtitle} · {status}"
+        self.subtitle_label.config(text=subtitle)
         self._sync_progress(summary)
         self.details_label.config(text=action_label_text(summary.actionable))
         self._render_metrics(summary)
@@ -578,7 +583,7 @@ class ResourceCard(tk.Frame):
         if coordinator is not None and action_id is not None:
             coordinator.set_enabled(action_id, False)
         self.value_label.config(text="—")
-        self.subtitle_label.config(text="Run a scan to load details")
+        self.subtitle_label.config(text="No data yet")
         if self.progress is not None:
             if isinstance(self.progress, ttk.Progressbar):
                 self.progress.destroy()

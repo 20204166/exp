@@ -176,7 +176,7 @@ class GpuDisplayNameTests(unittest.TestCase):
         self.assertEqual(probe.details, ("GPU information unavailable",))
         self.assertEqual(probe.capability, CapabilityState.UNSUPPORTED)
 
-    def test_linux_probe_classifies_error_as_unknown(self) -> None:
+    def test_linux_probe_classifies_error_as_temporarily_unavailable(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
 
         with mock.patch.object(
@@ -186,7 +186,7 @@ class GpuDisplayNameTests(unittest.TestCase):
         ):
             probe = scanner._linux_gpu_probe()
 
-        self.assertEqual(probe.capability, CapabilityState.UNKNOWN)
+        self.assertEqual(probe.capability, CapabilityState.TEMPORARILY_UNAVAILABLE)
 
     def test_linux_probe_classifies_found_gpu_as_supported(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
@@ -224,11 +224,11 @@ class GpuDisplayNameTests(unittest.TestCase):
 
 
 class GpuProbeFromReadTests(unittest.TestCase):
-    def test_error_classifies_as_unknown_with_message(self) -> None:
+    def test_error_classifies_as_temporarily_unavailable_with_message(self) -> None:
         probe = gpu_probe_from_read(lambda: ((), "lspci: command not found"))
 
         self.assertEqual(probe.details, (GPU_INFORMATION_UNAVAILABLE,))
-        self.assertEqual(probe.capability, CapabilityState.UNKNOWN)
+        self.assertEqual(probe.capability, CapabilityState.TEMPORARILY_UNAVAILABLE)
 
     def test_authoritative_empty_classifies_as_unsupported(self) -> None:
         probe = gpu_probe_from_read(lambda: ((), None))
@@ -269,7 +269,7 @@ class GpuProbeFromReadTests(unittest.TestCase):
             windows = scanner._windows_gpu_probe()
             linux = scanner._linux_gpu_probe()
 
-        self.assertEqual(mac.capability, CapabilityState.UNKNOWN)
+        self.assertEqual(mac.capability, CapabilityState.TEMPORARILY_UNAVAILABLE)
         self.assertEqual(windows.capability, CapabilityState.UNSUPPORTED)
         self.assertEqual(linux.capability, CapabilityState.SUPPORTED)
 
