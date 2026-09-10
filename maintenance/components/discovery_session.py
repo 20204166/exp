@@ -53,10 +53,9 @@ class DiscoverySession:
         discovery_factory: Callable[..., Any] = NetworkDiscovery,
         app_version: str = "",
         is_closing: Callable[[], bool] = lambda: False,
-        get_listener_endpoint: Callable[[], tuple[bool, int | None]] = lambda: (
-            False,
-            None,
-        ),
+        get_listener_endpoint: Callable[
+            [], tuple[bool, int | None, str | None]
+        ] = lambda: (False, None, None),
         on_stabilized: Callable[[], None] | None = None,
         stabilization_milliseconds: int = 100,
         on_presence_changed: Callable[[], None] | None = None,
@@ -110,7 +109,9 @@ class DiscoverySession:
             return DiscoveryStartResult(started=False, reason="local node unavailable")
 
         descriptor = local_context.descriptor
-        connectable, listener_port = self._get_listener_endpoint()
+        endpoint = self._get_listener_endpoint()
+        connectable, listener_port = endpoint[:2]
+        transport_fingerprint = endpoint[2] if len(endpoint) > 2 else None
         advertisement = DiscoveryAdvertisement(
             stable_id=descriptor.id.value,
             display_name=descriptor.display_name,
@@ -124,6 +125,7 @@ class DiscoverySession:
                 local_context.descriptor.identity_fingerprint
                 or node_identity_fingerprint(descriptor.id)
             ),
+            transport_fingerprint=(transport_fingerprint if connectable else None),
         )
         discovery = self._discovery_factory(
             descriptor.id,

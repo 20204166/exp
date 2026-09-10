@@ -37,6 +37,8 @@ class PeerConnectionManager:
         jitter: Callable[[int], float] = lambda _attempt: 0.0,
         is_closing: Callable[[], bool] = lambda: False,
         can_connect: Callable[[NodeContext], bool] = lambda _context: True,
+        on_connected: Callable[[NodeContext, Any], None] | None = None,
+        on_failed: Callable[[NodeContext, PeerFailure], None] | None = None,
     ) -> None:
         self._registry = registry
         self._coordinator = coordinator
@@ -45,6 +47,8 @@ class PeerConnectionManager:
         self._jitter = jitter
         self._is_closing = is_closing
         self._can_connect = can_connect
+        self._on_connected = on_connected
+        self._on_failed = on_failed
         self._stopped = False
 
     def reconcile(self, now: float | None = None) -> float | None:
@@ -111,6 +115,8 @@ class PeerConnectionManager:
             return False
         context.connection = ConnectionState.online(now=self._clock())
         context.retry.reset()
+        if self._on_connected is not None:
+            self._on_connected(context, result)
         return True
 
     def failed(
@@ -141,6 +147,8 @@ class PeerConnectionManager:
             status, reason=reason, changed_at=self._clock()
         )
         context.retry.record_failure(failure, now=self._clock(), jitter=self._jitter)
+        if self._on_failed is not None:
+            self._on_failed(context, failure)
         return True
 
     def cancel(self, node_id: NodeId) -> None:
@@ -154,6 +162,27 @@ class PeerConnectionManager:
             context.connection_generation = 0
         context.connection_generation += 1
         self._coordinator.cancel(node_operation_key(node_id, "connect"))
+
+    def mark_disconnected(
+        self, node_id: NodeId, reason: str = "peer disappeared"
+    ) -> bool:
+        """Turn a connected peer offline when discovery loses its presence."""
+
+        try:
+            context = self._registry.context(node_id)
+        except KeyError:
+            return False
+        if context.descriptor.is_local:
+            return False
+        context.connection_generation += 1
+        self._coordinator.cancel(node_operation_key(node_id, "connect"))
+        context.connection = ConnectionState.offline(reason, now=self._clock())
+        context.retry.record_failure(
+            PeerFailure.DISAPPEARED, now=self._clock(), jitter=self._jitter
+        )
+        if self._on_failed is not None:
+            self._on_failed(context, PeerFailure.DISAPPEARED)
+        return True
 
     def cancel_all(self) -> None:
         for context in self._registry.contexts():

@@ -85,6 +85,7 @@ from maintenance.remote import (
     RemoteService,  # noqa: F401 - retained listener patch seam
     RemoteSocketServer,
     SocketRemoteTransport,
+    TLSRemoteTransport,  # noqa: F401 - retained transport patch seam
 )
 from maintenance.ui import cluster_page as ui_cluster
 from maintenance.ui import dashboard_page as ui_dashboard
@@ -501,7 +502,7 @@ class AppWindow:
     def _get_discovery_session(self) -> DiscoverySession:
         return ui_window_discovery.get_discovery_session(self)
 
-    def _listener_endpoint(self) -> tuple[bool, int | None]:
+    def _listener_endpoint(self) -> tuple[bool, int | None, str | None]:
         return ui_window_discovery.listener_endpoint(self)
 
     def _start_peer_listener(self) -> None:

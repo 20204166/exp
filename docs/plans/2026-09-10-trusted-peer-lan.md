@@ -63,8 +63,11 @@ class TLSMaterial:
     private_key: Path
     fingerprint: str
 
+
 class TLSRemoteTransport(SocketRemoteTransport):
-    def __init__(self, host: str, port: int, *, expected_fingerprint: str, timeout: float = 10.0): ...
+    def __init__(
+        self, host: str, port: int, *, expected_fingerprint: str, timeout: float = 10.0
+    ): ...
 ```
 
 - [ ] Keep `SocketRemoteTransport` as the non-TLS test/legacy seam; the application composition must instantiate `TLSRemoteTransport` for any non-loopback listener.

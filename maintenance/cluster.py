@@ -442,6 +442,7 @@ class TrustedNodeRecord:
     secret: str
     trusted_at: float
     identity_fingerprint: str | None = None
+    transport_fingerprint: str | None = None
     permissions: frozenset[NodePermission] = frozenset()
 
 
@@ -490,6 +491,7 @@ def trusted_node_record(
     secret: str | None = None,
     trusted_at: float | None = None,
     identity_fingerprint: str | None = None,
+    transport_fingerprint: str | None = None,
     permissions: Iterable[NodePermission] = (),
 ) -> TrustedNodeRecord:
     """Build one trusted-node record, generating a fresh secret when absent."""
@@ -506,6 +508,7 @@ def trusted_node_record(
         secret=secret or generate_node_secret(),
         trusted_at=trusted_at if trusted_at is not None else time.time(),
         identity_fingerprint=identity_fingerprint,
+        transport_fingerprint=transport_fingerprint,
         permissions=frozenset(permissions),
     )
 
@@ -691,6 +694,11 @@ class ClusterStore:
                 if isinstance(item.get("identity_fingerprint"), str)
                 else None
             ),
+            transport_fingerprint=(
+                item.get("transport_fingerprint")
+                if isinstance(item.get("transport_fingerprint"), str)
+                else None
+            ),
             permissions=ClusterStore._parse_permissions(item.get("permissions")),
         )
 
@@ -763,6 +771,7 @@ class ClusterStore:
                     "secret": record.secret,
                     "trusted_at": record.trusted_at,
                     "identity_fingerprint": record.identity_fingerprint,
+                    "transport_fingerprint": record.transport_fingerprint,
                     "permissions": sorted(
                         permission.value for permission in record.permissions
                     ),

@@ -31,6 +31,7 @@ from maintenance.remote import (
     AuthenticatedNodeProvider,
     RemoteProcessActionBackend,
     SocketRemoteTransport,
+    TLSRemoteTransport,
 )
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui.node_presentation import fingerprint_lines
@@ -113,6 +114,15 @@ def pair_discovered_node(
         "_provision_target_grant"
     )
     if not callable(provisioner):
+        if candidate.port is None or not candidate.transport_fingerprint:
+            registry.fail_pairing(node)
+            controller._refresh_nodes_page()
+            controller._nodes_error(
+                "Pairing requires explicit target-side grant provisioning"
+            )
+            return
+        provisioner = lambda grant: request_target_grant(controller, candidate, grant)
+    if not callable(provisioner):
         registry.fail_pairing(node)
         controller._refresh_nodes_page()
         controller._nodes_error(
@@ -146,6 +156,7 @@ def pair_discovered_node(
         capabilities=READ_CAPABILITIES,
         permissions=READ_PERMISSIONS,
         identity_fingerprint=candidate.identity_fingerprint,
+        transport_fingerprint=candidate.transport_fingerprint,
     )
     grant = PeerGrantRecord(
         caller_node_id=controller._cluster_state.local_node_id,
@@ -198,6 +209,32 @@ def pair_discovered_node(
     controller._refresh_cluster_page()
     controller._rebuild_node_selector()
     controller._nodes_status(f"Paired {descriptor.display_name} (read-only)")
+    controller._reconcile_peer_connections()
+
+
+def request_target_grant(
+    controller: Any, candidate: Any, grant: PeerGrantRecord
+) -> bool:
+    """Request target approval before the initiator persists trust."""
+
+    if candidate.port is None or not candidate.transport_fingerprint:
+        return False
+    local = controller._node_registry.context(
+        controller._node_registry.local_id() or NodeId("local")
+    ).descriptor
+    transport = TLSRemoteTransport(
+        candidate.addresses[0] if candidate.addresses else candidate.hostname,
+        candidate.port,
+        expected_fingerprint=candidate.transport_fingerprint,
+    )
+    return AuthenticatedNodeProvider.request_pairing(
+        transport=transport,
+        caller_node_id=NodeId(controller._cluster_state.local_node_id),
+        identity_fingerprint=local.identity_fingerprint or "",
+        transport_fingerprint=controller.__dict__.get("_tls_fingerprint", ""),
+        proposed_secret=grant.secret,
+        permissions=grant.permissions,
+    )
 
 
 def reject_discovered_node(controller: Any, node_id: str) -> None:

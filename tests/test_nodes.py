@@ -244,7 +244,7 @@ class DiscoveredBoundaryTests(unittest.TestCase):
 
         self.assertEqual(registry.discovered_candidates(), ())
         descriptor = registry.context(NodeId("peer-a")).descriptor
-        self.assertEqual(descriptor.status, NodeStatus.ONLINE)
+        self.assertEqual(descriptor.status, NodeStatus.UNKNOWN)
         self.assertEqual(descriptor.hostname, "new-host")
         self.assertEqual(descriptor.display_name, "new-host")
 

@@ -3,19 +3,31 @@
 from __future__ import annotations
 
 import logging
+import subprocess
+import threading
 import time
 from dataclasses import replace
 from typing import Any, cast
 
-from maintenance.cluster import ClusterState
+from maintenance.cluster import ClusterState, PeerGrantRecord
 from maintenance.components import PeerConnectionManager
+from maintenance.components.coordinator import ComponentRefreshScheduler
 from maintenance.components.discovery_session import DiscoverySession
 from maintenance.nodes import (
+    NodeCapability,
     NodeContext,
     NodeId,
     NodeIdentityStatus,
+    NodeStatus,
 )
-from maintenance.remote import PeerGrant
+from maintenance.remote import (
+    AuthenticatedNodeProvider,
+    PairingRequest,
+    PeerGrant,
+    RemoteAuthError,
+    TLSRemoteTransport,
+)
+from maintenance.remote_security import ensure_tls_material, server_context
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui.window_supports.timer_delivery import deadline_delay_ms
@@ -59,14 +71,15 @@ def get_discovery_session(controller: Any) -> DiscoverySession:
     return session
 
 
-def listener_endpoint(_controller: Any) -> tuple[bool, int | None]:
-    # The current listener is deliberately loopback-only. Do not advertise
-    # a port that another machine cannot reach.
-    return False, None
+def listener_endpoint(controller: Any) -> tuple[bool, int | None, str | None]:
+    server = controller.__dict__.get("_peer_server")
+    if server is None or server.bound_port is None:
+        return False, None, None
+    return True, server.bound_port, controller.__dict__.get("_tls_fingerprint")
 
 
 def start_peer_listener(controller: Any) -> None:
-    """Start the target listener only when target-owned grants exist."""
+    """Start the TLS target listener, including before the first grant exists."""
     if controller.__dict__.get("_peer_server") is not None:
         return
     grants = {
@@ -77,9 +90,9 @@ def start_peer_listener(controller: Any) -> None:
         )
         for grant in controller._cluster_state.peer_grants
     }
-    if not grants:
-        return
-    local_context = controller._node_registry.context(NodeId("local"))
+    local_context = controller._node_registry.context(
+        controller._node_registry.local_id() or NodeId("local")
+    )
     descriptor = local_context.descriptor
     window = _window_symbols()
     service = window.RemoteService(
@@ -96,13 +109,73 @@ def start_peer_listener(controller: Any) -> None:
         grants=grants,
         identity_fingerprint=descriptor.identity_fingerprint,
     )
-    server = window.RemoteSocketServer(service, host="127.0.0.1")
+    try:
+        material = ensure_tls_material(
+            controller._cluster_store.path.parent, descriptor.id.value
+        )
+        tls_context = server_context(material)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        LOGGER.warning("Remote peer listener unavailable: %s", error)
+        return
+    server = window.RemoteSocketServer(
+        service,
+        host="0.0.0.0",
+        ssl_context=tls_context,
+        pairing_handler=lambda request: handle_pairing_request(controller, request),
+    )
     try:
         server.start()
     except OSError as error:
         LOGGER.warning("Remote peer listener unavailable: %s", error)
         return
     controller._peer_server = server
+    controller._tls_fingerprint = material.fingerprint
+
+
+def handle_pairing_request(controller: Any, request: PairingRequest) -> bool:
+    """Ask the target's local user before installing a caller grant."""
+
+    result = {"approved": False}
+    completed = threading.Event()
+
+    def ask_on_ui() -> None:
+        window = _window_symbols()
+        approved = window.messagebox.askyesno(
+            "Approve peer pairing",
+            (
+                f"Allow {request.caller_node_id.value} to read this system?\n\n"
+                f"Identity fingerprint: {request.identity_fingerprint}\n"
+                f"TLS fingerprint: {request.transport_fingerprint}"
+            ),
+            parent=controller.master,
+        )
+        if approved:
+            current = controller._cluster_state
+            grants = tuple(
+                item
+                for item in current.peer_grants
+                if item.caller_node_id != request.caller_node_id.value
+            ) + (
+                PeerGrantRecord(
+                    caller_node_id=request.caller_node_id.value,
+                    secret=request.proposed_secret,
+                    permissions=request.permissions,
+                ),
+            )
+            result["approved"] = controller._save_cluster_state(
+                ClusterState(
+                    discovery_enabled=current.discovery_enabled,
+                    trusted_nodes=current.trusted_nodes,
+                    local_node_id=current.local_node_id,
+                    local_identity_persisted=current.local_identity_persisted,
+                    peer_grants=grants,
+                )
+            )
+        completed.set()
+
+    controller._submit_ui(ask_on_ui)
+    completed.wait(60.0)
+    return bool(result["approved"])
 
 
 def start_discovery(controller: Any) -> None:
@@ -145,12 +218,88 @@ def peer_connections(controller: Any) -> PeerConnectionManager | None:
     manager = PeerConnectionManager(
         registry=registry,
         coordinator=coordinator,
-        connect=lambda _context, _cancel_event, _progress: None,
+        connect=lambda context, cancel_event, _progress: connect_peer(
+            controller, context, cancel_event
+        ),
         is_closing=lambda: controller._is_closing,
-        can_connect=lambda _context: False,
+        can_connect=lambda context: can_connect_peer(controller, context),
+        on_connected=lambda context, result: attach_peer(controller, context, result),
+        on_failed=lambda context, _failure: detach_peer(controller, context),
     )
     controller.__dict__["_peer_connection_manager"] = manager
     return manager
+
+
+def can_connect_peer(controller: Any, context: NodeContext) -> bool:
+    record = controller._cluster_state.record(context.node_id.value)
+    return bool(
+        record is not None
+        and record.port is not None
+        and record.transport_fingerprint
+        and context.descriptor.identity_status is not NodeIdentityStatus.MISMATCH
+    )
+
+
+def connect_peer(
+    controller: Any, context: NodeContext, cancel_event: threading.Event
+) -> tuple[AuthenticatedNodeProvider, frozenset[NodeCapability], str]:
+    record = controller._cluster_state.record(context.node_id.value)
+    if record is None or record.port is None or not record.transport_fingerprint:
+        raise RuntimeError("trusted peer has no connectable TLS endpoint")
+    provider = AuthenticatedNodeProvider(
+        node_id=context.node_id,
+        secret=record.secret,
+        caller_node_id=NodeId(controller._cluster_state.local_node_id),
+        transport=TLSRemoteTransport(
+            record.host, record.port, expected_fingerprint=record.transport_fingerprint
+        ),
+    )
+    hello = provider.hello(cancel_event=cancel_event)
+    if hello.get("node_id") != context.node_id.value:
+        raise RemoteAuthError("authenticated peer returned the wrong node ID")
+    fingerprint = hello.get("identity_fingerprint")
+    if not isinstance(fingerprint, str) or fingerprint != record.identity_fingerprint:
+        raise RemoteAuthError("authenticated peer identity fingerprint changed")
+    capabilities = frozenset(
+        NodeCapability(raw)
+        for raw in hello.get("capabilities", [])
+        if isinstance(raw, str) and raw in {item.value for item in NodeCapability}
+    )
+    return provider, capabilities, fingerprint
+
+
+def attach_peer(
+    controller: Any,
+    context: NodeContext,
+    result: tuple[AuthenticatedNodeProvider, frozenset[NodeCapability], str],
+) -> None:
+    provider, capabilities, fingerprint = result
+    if context.descriptor.identity_fingerprint not in (None, fingerprint):
+        return
+    context.provider = provider
+    context.process_manager = _window_symbols().RemoteProcessActionBackend(provider)
+    context.scheduler = ComponentRefreshScheduler()
+    context.coordinator = controller._coordinator
+    context.descriptor = replace(
+        context.descriptor,
+        capabilities=capabilities,
+        status=NodeStatus.ONLINE,
+        identity_status=NodeIdentityStatus.VERIFIED,
+    )
+    controller._refresh_nodes_page()
+    controller._refresh_cluster_page()
+    controller._rebuild_node_selector()
+
+
+def detach_peer(controller: Any, context: NodeContext) -> None:
+    if context.descriptor.is_local:
+        return
+    context.provider = None
+    context.process_manager = None
+    context.scheduler = None
+    context.coordinator = None
+    context.descriptor = replace(context.descriptor, status=NodeStatus.OFFLINE)
+    controller._refresh_nodes_page()
 
 
 def cancel_peer_connection(controller: Any, context: NodeContext) -> None:
@@ -225,6 +374,9 @@ def on_discovered_lost(controller: Any, stable_id: str) -> None:
     registry = controller.__dict__.get("_node_registry")
     trusted_descriptor = None
     if registry is not None:
+        manager = controller._peer_connections()
+        if manager is not None:
+            manager.mark_disconnected(NodeId(stable_id))
         registry.remove_discovered(NodeId(stable_id))
         try:
             context = registry.context(NodeId(stable_id))
@@ -310,7 +462,10 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
     )
     address = candidate.addresses[0] if candidate.addresses else record.host
     port = candidate.port if candidate.port is not None else record.port
-    endpoint_changed = address != record.host or port != record.port
+    transport_changed = candidate.transport_fingerprint != record.transport_fingerprint
+    endpoint_changed = (
+        address != record.host or port != record.port or transport_changed
+    )
     if not endpoint_changed and not (
         needs_identity_hydration or needs_identity_recovery
     ):
@@ -323,7 +478,15 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
             node_id=descriptor.id,
             secret=record.secret,
             caller_node_id=NodeId(controller._cluster_state.local_node_id),
-            transport=window.SocketRemoteTransport(address, port),
+            transport=(
+                window.TLSRemoteTransport(
+                    address,
+                    port,
+                    expected_fingerprint=candidate.transport_fingerprint,
+                )
+                if candidate.transport_fingerprint
+                else window.SocketRemoteTransport(address, port)
+            ),
         )
         hello = provider.hello()
         if not isinstance(hello, dict):
@@ -360,6 +523,9 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
             candidate.identity_fingerprint
             if needs_identity_hydration
             else record.identity_fingerprint
+        ),
+        transport_fingerprint=(
+            candidate.transport_fingerprint or record.transport_fingerprint
         ),
     )
     if updated_record == record:

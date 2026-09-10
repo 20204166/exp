@@ -78,6 +78,7 @@ class DiscoveryAdvertisement:
     connectable: bool = False
     port: int | None = None
     identity_fingerprint: str | None = None
+    transport_fingerprint: str | None = None
 
 
 class DiscoveryBackend(Protocol):
@@ -154,6 +155,8 @@ class ZeroconfDiscoveryBackend:
             properties["platform"] = advertisement.platform
         if advertisement.identity_fingerprint:
             properties["fingerprint"] = advertisement.identity_fingerprint
+        if advertisement.transport_fingerprint:
+            properties["tls_fingerprint"] = advertisement.transport_fingerprint
         properties["connectable"] = "true" if advertisement.connectable else "false"
         port = advertisement.port or 0
         service_kwargs: dict[str, Any] = {
@@ -375,6 +378,7 @@ class NetworkDiscovery:
                 compatible=candidate.compatible,
                 last_seen=candidate.last_seen,
                 identity_fingerprint=candidate.identity_fingerprint,
+                transport_fingerprint=candidate.transport_fingerprint,
             )
             changed = (
                 existing.addresses != updated.addresses
@@ -450,6 +454,7 @@ class NetworkDiscovery:
         protocol_version = properties.get("protocol_version", "")
         platform = properties.get("platform") or None
         identity_fingerprint = properties.get("fingerprint") or None
+        transport_fingerprint = properties.get("tls_fingerprint") or None
         connectable = properties.get("connectable", "false").casefold() == "true"
 
         port: int | None = None
@@ -477,6 +482,7 @@ class NetworkDiscovery:
             compatible=protocol_version in SUPPORTED_PROTOCOL_VERSIONS,
             last_seen=self._clock(),
             identity_fingerprint=identity_fingerprint,
+            transport_fingerprint=transport_fingerprint,
         )
 
 

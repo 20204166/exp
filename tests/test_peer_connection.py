@@ -120,6 +120,13 @@ class PeerConnectionTests(unittest.TestCase):
         self.assertIsNone(self.manager.reconcile(2.25))
         self.assertEqual(self.connect.call_count, 2)
 
+    def test_discovery_loss_marks_online_peer_offline_and_retries(self) -> None:
+        self.manager.reconcile(0.0)
+
+        self.assertTrue(self.manager.mark_disconnected(self.peer.node_id))
+        self.assertEqual(self.peer.connection.status, NodeConnectionStatus.OFFLINE)
+        self.assertIsNotNone(self.peer.retry.next_attempt_at)
+
     def test_on_error_callback_classifies_authentication_failure_without_retry(
         self,
     ) -> None:

@@ -514,6 +514,7 @@ class DiscoveredNodeCandidate:
     compatible: bool
     last_seen: float
     identity_fingerprint: str | None = None
+    transport_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -823,11 +824,24 @@ class NodeRegistry:
             display_name = descriptor.display_name
             if display_name == descriptor.hostname:
                 display_name = candidate.hostname
+            connection_status = known_context.connection.status
+            runtime_status = (
+                NodeStatus.ONLINE
+                if connection_status is NodeConnectionStatus.ONLINE
+                else NodeStatus.OFFLINE
+                if connection_status
+                in {
+                    NodeConnectionStatus.OFFLINE,
+                    NodeConnectionStatus.AUTHENTICATION_FAILED,
+                    NodeConnectionStatus.IDENTITY_CHANGED,
+                }
+                else NodeStatus.UNKNOWN
+            )
             known_context.descriptor = replace(
                 descriptor,
                 display_name=display_name,
                 hostname=candidate.hostname,
-                status=NodeStatus.ONLINE,
+                status=runtime_status,
                 platform=candidate.platform,
                 identity_fingerprint=descriptor.identity_fingerprint,
                 identity_status=identity_status,

@@ -23,6 +23,7 @@ import math
 import secrets
 import socket as socket_module
 import socketserver
+import ssl
 import struct
 import threading
 import time
@@ -170,6 +171,28 @@ class PeerGrant:
     caller_node_id: NodeId
     secret: str
     permissions: frozenset[NodePermission]
+
+
+@dataclass(frozen=True, slots=True)
+class PairingRequest:
+    """Unauthenticated, TLS-protected request awaiting target approval."""
+
+    caller_node_id: NodeId
+    identity_fingerprint: str
+    transport_fingerprint: str
+    proposed_secret: str
+    permissions: frozenset[NodePermission]
+
+    def __post_init__(self) -> None:
+        if not self.caller_node_id.value or not self.identity_fingerprint:
+            raise RemoteAuthError("pairing identity is missing")
+        if not self.transport_fingerprint:
+            raise RemoteAuthError("pairing transport fingerprint is missing")
+        _validate_secret(self.proposed_secret)
+        if not self.permissions <= frozenset(
+            {NodePermission(permission.value) for permission in NodePermission}
+        ):
+            raise RemoteAuthorizationError("pairing permissions are invalid")
 
 
 def _validate_secret(secret: str) -> None:
@@ -847,15 +870,26 @@ def _send_frame(sock: Any, payload: bytes, *, max_bytes: int) -> None:
 class SocketRemoteTransport:
     """Length-prefixed JSON client for one TCP request/response exchange."""
 
-    def __init__(self, host: str, port: int, *, timeout: float = 10.0) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        timeout: float = 10.0,
+        ssl_context: ssl.SSLContext | None = None,
+        expected_fingerprint: str | None = None,
+    ) -> None:
         self._host = host
         self._port = port
         self._timeout = timeout
+        self._ssl_context = ssl_context
+        self._expected_fingerprint = expected_fingerprint
 
     def request(self, envelope_text: str, cancel_event: Any | None = None) -> str:
         data = envelope_text.encode("utf-8")
         if len(data) > MAX_ENVELOPE_BYTES:
             raise RemoteTransportError("request envelope is too large")
+        wrapped_socket: Any | None = None
         try:
             if cancel_event is not None and cancel_event.is_set():
                 raise RemoteExecutionError("cancelled")
@@ -865,6 +899,22 @@ class SocketRemoteTransport:
             with socket_module.create_connection(
                 (self._host, self._port), timeout=connect_timeout
             ) as sock:
+                if self._ssl_context is not None:
+                    sock = self._ssl_context.wrap_socket(
+                        sock, server_hostname=self._host
+                    )
+                    wrapped_socket = sock
+                    certificate = sock.getpeercert(binary_form=True)
+                    if certificate is None:
+                        raise RemoteAuthError("peer certificate is missing")
+                    fingerprint = _certificate_fingerprint(certificate)
+                    if (
+                        self._expected_fingerprint is not None
+                        and not hmac.compare_digest(
+                            fingerprint, self._expected_fingerprint
+                        )
+                    ):
+                        raise RemoteAuthError("peer certificate fingerprint changed")
                 sock.settimeout(
                     min(self._timeout, 0.25) if cancel_event else self._timeout
                 )
@@ -883,14 +933,46 @@ class SocketRemoteTransport:
                     body = _recv_exact_with_cancel(sock, length, cancel_event)
         except RemoteTransportError:
             raise
+        except RemoteAuthError:
+            raise
         except OSError as error:
             if cancel_event is not None and cancel_event.is_set():
                 raise RemoteExecutionError("cancelled") from error
             raise RemoteTransportError(f"remote transport failed: {error}") from error
+        finally:
+            if wrapped_socket is not None:
+                wrapped_socket.close()
         try:
             return body.decode("utf-8")
         except UnicodeDecodeError as error:
             raise RemoteProtocolError("response is not valid UTF-8") from error
+
+
+def _certificate_fingerprint(certificate: bytes) -> str:
+    digest = hashlib.sha256(certificate).hexdigest()
+    return ":".join(digest[index : index + 4] for index in range(0, 64, 4))
+
+
+class TLSRemoteTransport(SocketRemoteTransport):
+    """Socket transport with TLS encryption and optional certificate pinning."""
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        expected_fingerprint: str,
+        timeout: float = 10.0,
+    ) -> None:
+        from maintenance.remote_security import client_context
+
+        super().__init__(
+            host,
+            port,
+            timeout=timeout,
+            ssl_context=client_context(),
+            expected_fingerprint=expected_fingerprint,
+        )
 
 
 def _recv_exact_with_cancel(sock: Any, length: int, cancel_event: Any) -> bytes:
@@ -926,6 +1008,8 @@ class RemoteSocketServer:
         port: int = 0,
         timeout: float = 10.0,
         max_active_handlers: int = DEFAULT_MAX_ACTIVE_HANDLERS,
+        ssl_context: ssl.SSLContext | None = None,
+        pairing_handler: Callable[[PairingRequest], bool] | None = None,
     ) -> None:
         if max_active_handlers < 1:
             raise ValueError("max_active_handlers must be positive")
@@ -934,6 +1018,8 @@ class RemoteSocketServer:
         self._port = port
         self._timeout = timeout
         self._max_active_handlers = max_active_handlers
+        self._ssl_context = ssl_context
+        self._pairing_handler = pairing_handler
         self._server: Any = None
         self._thread: Any = None
         self._admission: threading.BoundedSemaphore | None = None
@@ -954,29 +1040,46 @@ class RemoteSocketServer:
         ) -> type[socketserver.BaseRequestHandler]:
             class _Handler(socketserver.BaseRequestHandler):
                 def handle(self) -> None:
+                    request_socket = self.request
                     try:
                         try:
-                            self.request.settimeout(service_timeout)
+                            request_socket.settimeout(service_timeout)
+                            if ssl_context is not None:
+                                request_socket = ssl_context.wrap_socket(
+                                    self.request, server_side=True
+                                )
                             body = _recv_frame(
-                                self.request,
+                                request_socket,
                                 max_bytes=MAX_ENVELOPE_BYTES,
                                 closed_message="connection closed before request",
                             )
-                            response = service.handle(body.decode("utf-8"))
+                            text = body.decode("utf-8")
+                            raw = json.loads(text)
+                            if (
+                                isinstance(raw, dict)
+                                and raw.get("op") == "pair_request"
+                            ):
+                                response = _handle_pairing_request(raw, pairing_handler)
+                            else:
+                                response = service.handle(text)
                         except Exception:  # noqa: BLE001 - auth failures close silently.
                             return
                         payload = response.encode("utf-8")
                         _send_frame(
-                            self.request,
+                            request_socket,
                             payload,
                             max_bytes=MAX_ENVELOPE_BYTES,
                         )
                     finally:
+                        if request_socket is not self.request:
+                            request_socket.close()
                         admission.release()
 
             return _Handler
 
         service_timeout = self._timeout
+        ssl_context = self._ssl_context
+        pairing_handler = self._pairing_handler
 
         class _Server(socketserver.ThreadingTCPServer):
             allow_reuse_address = True
@@ -1025,6 +1128,39 @@ class RemoteSocketServer:
         self._service.update_grants(grants)
 
 
+def _handle_pairing_request(
+    raw: dict[str, Any], handler: Callable[[PairingRequest], bool] | None
+) -> str:
+    if handler is None or set(raw) != {
+        "op",
+        "caller_node_id",
+        "identity_fingerprint",
+        "transport_fingerprint",
+        "secret",
+        "permissions",
+    }:
+        return json.dumps({"approved": False, "error": "pairing_unavailable"})
+    permissions = raw["permissions"]
+    if not isinstance(permissions, list) or any(
+        not isinstance(item, str) for item in permissions
+    ):
+        return json.dumps({"approved": False, "error": "invalid_pairing"})
+    try:
+        request = PairingRequest(
+            caller_node_id=NodeId(raw["caller_node_id"]),
+            identity_fingerprint=raw["identity_fingerprint"],
+            transport_fingerprint=raw["transport_fingerprint"],
+            proposed_secret=raw["secret"],
+            permissions=frozenset(NodePermission(item) for item in permissions),
+        )
+        approved = handler(request)
+    except (KeyError, TypeError, ValueError, RemoteProtocolError):
+        approved = False
+    return json.dumps(
+        {"approved": bool(approved), "error": None if approved else "denied"}
+    )
+
+
 class AuthenticatedNodeProvider:
     """Client-side ``NodeProvider`` over one authenticated remote node.
 
@@ -1055,6 +1191,31 @@ class AuthenticatedNodeProvider:
         payload = self._request("hello", {}, cancel_event)
         validate_hello_payload(payload, expected_node_id=self._node_id)
         return payload
+
+    @staticmethod
+    def request_pairing(
+        *,
+        transport: Any,
+        caller_node_id: NodeId,
+        identity_fingerprint: str,
+        transport_fingerprint: str,
+        proposed_secret: str,
+        permissions: frozenset[NodePermission],
+    ) -> bool:
+        """Ask the target to approve and persist a target-owned grant."""
+
+        envelope = json.dumps(
+            {
+                "op": "pair_request",
+                "caller_node_id": caller_node_id.value,
+                "identity_fingerprint": identity_fingerprint,
+                "transport_fingerprint": transport_fingerprint,
+                "secret": proposed_secret,
+                "permissions": sorted(permission.value for permission in permissions),
+            }
+        )
+        response = json.loads(transport.request(envelope))
+        return isinstance(response, dict) and response.get("approved") is True
 
     def dashboard_snapshot(
         self,
