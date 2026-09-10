@@ -11,6 +11,7 @@ from maintenance.components import (
     PlacementView,
     placement_view_for_context,
 )
+from maintenance.components.coordinator import AppCoordinator
 from maintenance.nodes import (
     ConnectionState,
     NodeCapability,
@@ -22,7 +23,9 @@ from maintenance.nodes import (
     NodePermission,
     NodeStatus,
     NodeTrustState,
+    node_operation_key,
 )
+from maintenance.ui.render_coordinator import RenderIntent, UICoordinator
 
 
 def _view(name: str = "local", *, local: bool = True, **changes: Any) -> PlacementView:
@@ -272,6 +275,178 @@ class PlacementPolicyTests(unittest.TestCase):
         )
         decision = self.policy.choose(_request(), (view,))
         self.assertEqual(decision.rejected[0][1], "invalid identity")
+
+    def test_target_bound_operations_select_only_their_explicit_target(self) -> None:
+        local = _view(
+            "local",
+            **{
+                "capabilities": frozenset(
+                    {
+                        NodeCapability.COMPONENT_READ,
+                        NodeCapability.PROCESS_REVIEW,
+                        NodeCapability.STORAGE_REVIEW,
+                        NodeCapability.PROCESS_TERMINATION,
+                    }
+                ),
+                "permissions": frozenset(
+                    {
+                        NodePermission.COMPONENT_READ,
+                        NodePermission.PROCESS_REVIEW,
+                        NodePermission.STORAGE_REVIEW,
+                        NodePermission.PROCESS_TERMINATION,
+                    }
+                ),
+            },
+        )
+        node_b = replace(local, node_id=NodeId("node-b"), is_local=False)
+        node_c = replace(local, node_id=NodeId("node-c"), is_local=False)
+        cases = (
+            ("component:cpu", NodeCapability.COMPONENT_READ, None),
+            (
+                "process_review",
+                NodeCapability.PROCESS_REVIEW,
+                NodePermission.PROCESS_REVIEW,
+            ),
+            (
+                "storage_review",
+                NodeCapability.STORAGE_REVIEW,
+                NodePermission.STORAGE_REVIEW,
+            ),
+            (
+                "process_request_quit",
+                NodeCapability.PROCESS_TERMINATION,
+                NodePermission.PROCESS_TERMINATION,
+            ),
+        )
+
+        for operation, capability, permission in cases:
+            with self.subTest(operation=operation):
+                decision = self.policy.choose(
+                    PlacementRequest(
+                        operation,
+                        JobClass.TARGET_BOUND,
+                        NodeId("node-b"),
+                        capability,
+                        permission,
+                    ),
+                    (local, node_b, node_c),
+                )
+                self.assertEqual(decision.selected_node_id, NodeId("node-b"))
+                self.assertEqual(decision.eligible_node_ids, (NodeId("node-b"),))
+
+    def test_target_bound_requests_fail_closed_for_missing_or_mismatched_targets(
+        self,
+    ) -> None:
+        with self.assertRaises(ValueError):
+            PlacementRequest(
+                "component:cpu",
+                JobClass.TARGET_BOUND,
+                None,
+                NodeCapability.COMPONENT_READ,
+            )
+
+        decision = self.policy.choose(
+            PlacementRequest(
+                "component:cpu",
+                JobClass.TARGET_BOUND,
+                NodeId("node-b"),
+                NodeCapability.COMPONENT_READ,
+            ),
+            (_view(), _view("node-c", local=False)),
+        )
+        self.assertIsNone(decision.selected_node_id)
+        self.assertEqual(
+            decision.rejected,
+            (
+                (NodeId("local"), "target mismatch"),
+                (NodeId("node-c"), "target mismatch"),
+            ),
+        )
+
+    def test_unauthorized_and_invalid_views_are_never_selected(self) -> None:
+        request = _request(required_permission=NodePermission.COMPONENT_READ)
+        discovered = placement_view_for_context(
+            _context("discovered", local=False), protocol_compatible=True
+        )
+        auth_failed = placement_view_for_context(
+            _context(
+                "auth-failed",
+                local=False,
+                trust=NodeTrustState.TRUSTED,
+                connection=ConnectionState(
+                    NodeConnectionStatus.AUTHENTICATION_FAILED
+                ),
+            ),
+            protocol_compatible=True,
+        )
+        identity_changed = _view(
+            "identity-changed", local=False, identity_valid=False
+        )
+        cases = (
+            ("discovered", discovered, "not trusted"),
+            (
+                "trusted-but-unauthorized",
+                _view("trusted", capabilities=frozenset(), permissions=frozenset()),
+                "missing capability",
+            ),
+            (
+                "capability-only",
+                _view("capability-only", permissions=frozenset()),
+                "missing permission",
+            ),
+            (
+                "unauthenticated",
+                _view("unauthenticated", authenticated=False),
+                "not authenticated",
+            ),
+            ("auth-failed", auth_failed, "not authenticated"),
+            ("identity-changed", identity_changed, "invalid identity"),
+            ("revoked", _view("revoked", trusted=False), "not trusted"),
+            (
+                "incompatible-protocol",
+                _view("old-protocol", protocol_compatible=False),
+                "incompatible protocol",
+            ),
+        )
+        for name, view, reason in cases:
+            with self.subTest(name=name):
+                decision = self.policy.choose(request, (view,))
+                self.assertIsNone(decision.selected_node_id)
+                self.assertEqual(decision.rejected, ((view.node_id, reason),))
+
+    def test_node_keys_and_late_results_remain_target_isolated(self) -> None:
+        node_a_key = node_operation_key(NodeId("node-a"), "analysis")
+        node_b_key = node_operation_key(NodeId("node-b"), "analysis")
+        self.assertNotEqual(node_a_key, node_b_key)
+
+        workers: list[Any] = []
+        deliveries: list[Any] = []
+        app = AppCoordinator(runner=workers.append, deliver=deliveries.append)
+        renders = UICoordinator()
+        renders.invalidate("component:cpu", node_id=NodeId("node-b"))
+        committed: list[RenderIntent] = []
+
+        app.run(
+            node_a_key,
+            lambda _cancel, _progress: "node-a-result",
+            on_result=lambda key, value: renders.request(
+                RenderIntent(
+                    "component:cpu",
+                    generation=1,
+                    node_id=NodeId(key.split(":")[1]),
+                    payload=value,
+                    payload_set=True,
+                ),
+                committed.append,
+            ),
+        )
+        app.run(node_b_key, lambda _cancel, _progress: "node-b-result")
+        workers[0]()
+        deliveries.pop(0)()
+
+        self.assertEqual(committed, [])
+        self.assertEqual(renders.stale_rejections, 1)
+        self.assertTrue(app.in_flight(node_b_key))
 
 
 if __name__ == "__main__":
