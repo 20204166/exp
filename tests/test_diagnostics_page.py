@@ -3,7 +3,11 @@
 import unittest
 from unittest.mock import Mock
 
-from maintenance.diagnostics import DiagnosticsSnapshot, RenderDiagnostic
+from maintenance.diagnostics import (
+    DiagnosticsSnapshot,
+    PlacementDiagnostic,
+    RenderDiagnostic,
+)
 from maintenance.ui.diagnostics_page import DiagnosticsPage, DiagnosticsPageCallbacks
 from tests.support.widget_recording import WidgetRecorder
 
@@ -45,6 +49,22 @@ class DiagnosticsPageTests(unittest.TestCase):
         self.assertIn("No recent failures", texts)
         self.assertIn("Nothing currently running", texts)
         self.assertIn("No remote nodes configured", texts)
+        self.assertIn("No placement decision yet", texts)
+
+    def test_placement_row_is_visible(self) -> None:
+        page, _callbacks, _copy_callback, recorder = self.make_page()
+        page.render(
+            DiagnosticsSnapshot(
+                components=(),
+                operations=(),
+                nodes=(),
+                render=RenderDiagnostic(0, 0, 0, 0, 0),
+                placement=PlacementDiagnostic("placement", "worker-a", 2, "selected"),
+            )
+        )
+        texts = recorder.label_texts()
+        self.assertIn("placement", texts)
+        self.assertIn("worker-a · 2 eligible · selected", texts)
 
     def test_copy_callback_receives_serialized_snapshot(self) -> None:
         page, _callbacks, copy_callback, _recorder = self.make_page()

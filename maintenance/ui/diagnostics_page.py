@@ -87,6 +87,7 @@ class DiagnosticsPage:
         self._summary_body = self._section(self.content, "Summary")
         self._components_body = self._section(self.content, "Components")
         self._operations_body = self._section(self.content, "Running work")
+        self._placement_body = self._section(self.content, "Placement")
         self._nodes_body = self._section(self.content, "Nodes and connections")
         self._render_body = self._section(self.content, "Rendering")
 
@@ -135,6 +136,19 @@ class DiagnosticsPage:
             self._operations_body,
             [(item.key, f"generation {item.generation}") for item in active],
             empty_text="Nothing currently running",
+        )
+        placement = snapshot.placement
+        self._render_rows(
+            self._placement_body,
+            [
+                (
+                    placement.job_type,
+                    f"{placement.selected_worker} · {placement.eligible_count} eligible · {placement.reason}",
+                )
+            ]
+            if placement is not None
+            else [],
+            empty_text="No placement decision yet",
         )
         self._render_rows(
             self._nodes_body,

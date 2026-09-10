@@ -4,6 +4,7 @@ import json
 import unittest
 from types import SimpleNamespace
 
+from maintenance.components.placement import PlacementDecision
 from maintenance.diagnostics import (
     MAX_DETAIL_LENGTH,
     build_diagnostics_snapshot,
@@ -11,6 +12,7 @@ from maintenance.diagnostics import (
     serialize_diagnostics,
     truncate_detail,
 )
+from maintenance.nodes import NodeId
 
 
 class DiagnosticsSnapshotTests(unittest.TestCase):
@@ -88,6 +90,52 @@ class DiagnosticsSnapshotTests(unittest.TestCase):
             )
         )
         self.assertIsInstance(json.loads(payload), dict)
+
+    def test_placement_diagnostic_is_bounded_and_projects_no_internals(self) -> None:
+        decision = PlacementDecision(
+            NodeId("worker"),
+            (NodeId("worker"),),
+            ((NodeId("rejected"), "credential=secret"),),
+            "reason " + "x" * (MAX_DETAIL_LENGTH + 20),
+        )
+        snapshot = build_diagnostics_snapshot(
+            scheduler=SimpleNamespace(intervals={}, diagnostic_state=lambda _key: ()),
+            coordinator=SimpleNamespace(diagnostic_states=lambda: ()),
+            registry=SimpleNamespace(contexts=lambda: ()),
+            ui_coordinator=SimpleNamespace(
+                pending_count=0,
+                render_requests=0,
+                render_commits=0,
+                coalesced_requests=0,
+                stale_rejections=0,
+            ),
+            placement=decision,
+        )
+
+        self.assertIsNotNone(snapshot.placement)
+        assert snapshot.placement is not None
+        self.assertEqual(snapshot.placement.job_type, "placement")
+        self.assertEqual(snapshot.placement.selected_worker, "worker")
+        self.assertEqual(snapshot.placement.eligible_count, 1)
+        self.assertLessEqual(len(snapshot.placement.reason), MAX_DETAIL_LENGTH)
+        payload = serialize_diagnostics(snapshot)
+        self.assertNotIn("credential", payload)
+        self.assertNotIn("rejected", payload)
+
+    def test_placement_is_optional(self) -> None:
+        snapshot = build_diagnostics_snapshot(
+            scheduler=SimpleNamespace(intervals={}, diagnostic_state=lambda _key: ()),
+            coordinator=SimpleNamespace(diagnostic_states=lambda: ()),
+            registry=SimpleNamespace(contexts=lambda: ()),
+            ui_coordinator=SimpleNamespace(
+                pending_count=0,
+                render_requests=0,
+                render_commits=0,
+                coalesced_requests=0,
+                stale_rejections=0,
+            ),
+        )
+        self.assertIsNone(snapshot.placement)
 
 
 if __name__ == "__main__":

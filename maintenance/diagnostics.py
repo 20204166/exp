@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from maintenance.components.placement import PlacementDecision
+
 MAX_DETAIL_LENGTH = 160
 
 
@@ -73,12 +75,34 @@ class RenderDiagnostic:
 
 
 @dataclass(frozen=True, slots=True)
+class PlacementDiagnostic:
+    job_type: str
+    selected_worker: str
+    eligible_count: int
+    reason: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "job_type", truncate_detail(self.job_type) or "unknown"
+        )
+        object.__setattr__(
+            self,
+            "selected_worker",
+            truncate_detail(self.selected_worker) or "No worker selected",
+        )
+        object.__setattr__(
+            self, "reason", truncate_detail(self.reason) or "No reason provided"
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class DiagnosticsSnapshot:
     components: tuple[ComponentDiagnostic, ...]
     operations: tuple[OperationDiagnostic, ...]
     nodes: tuple[NodeDiagnostic, ...]
     render: RenderDiagnostic
     most_recent_failure: str | None = None
+    placement: PlacementDiagnostic | None = None
 
 
 def _component_state(in_flight: bool, paused: bool, error: Any) -> str:
@@ -97,6 +121,7 @@ def build_diagnostics_snapshot(
     ui_coordinator: Any,
     capabilities: dict[str, Any] | None = None,
     discovery_reason: str | None = None,
+    placement: PlacementDecision | None = None,
 ) -> DiagnosticsSnapshot:
     component_rows: list[ComponentDiagnostic] = []
     for key in scheduler.intervals:
@@ -157,12 +182,28 @@ def build_diagnostics_snapshot(
         for row in component_rows
         if row.last_error is not None
     ] + [row.last_error for row in operation_rows if row.last_error is not None]
+    placement_diagnostic = (
+        PlacementDiagnostic(
+            job_type=truncate_detail("placement") or "placement",
+            selected_worker=truncate_detail(
+                placement.selected_node_id.value
+                if placement is not None and placement.selected_node_id is not None
+                else "No worker selected"
+            )
+            or "No worker selected",
+            eligible_count=len(placement.eligible_node_ids),
+            reason=truncate_detail(placement.reason) or "No reason provided",
+        )
+        if placement is not None
+        else None
+    )
     return DiagnosticsSnapshot(
         components=tuple(component_rows),
         operations=tuple(operation_rows),
         nodes=tuple(node_rows),
         render=render,
         most_recent_failure=truncate_detail(failures[-1] if failures else None),
+        placement=placement_diagnostic,
     )
 
 
