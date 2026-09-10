@@ -203,6 +203,10 @@ def scrollable_area(
         fill="y",
         padx=(SCROLLBAR_GUTTER, 0),
     )
+    try:
+        canvas.after_idle(resize_inner_width)
+    except (AttributeError, tk.TclError):
+        pass
     return canvas, inner, refresh_scrollbar
 
 
@@ -519,15 +523,17 @@ def section_card(
         font=fonts["section"],
     ).pack(anchor="w")
     if description is not None:
-        label_cls(
+        description_label = label_cls(
             card,
             text=description,
             bg=colors["card"],
             fg=colors["secondary"],
             font=fonts["body"],
-            wraplength=560,
+            wraplength=360,
             justify="left",
-        ).pack(anchor="w", pady=(4, 0))
+        )
+        description_label.pack(anchor="w", pady=(4, 0))
+        resize_aware(card, fit_wrap_to_width(description_label, 560, margin=36))
     body = frame_cls(card, bg=colors["card"])
     body.pack(fill="x", pady=(10, 0))
     return card, body

@@ -34,6 +34,20 @@ from maintenance.remote import (
     SocketRemoteTransport,
 )
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
+from maintenance.ui.node_presentation import fingerprint_lines
+
+
+def _pairing_confirmation(candidate: Any) -> str:
+    """Keep the full identity values readable without changing their value."""
+
+    fingerprint = candidate.identity_fingerprint or "Unavailable"
+    fingerprint_text = "\n".join(fingerprint_lines(fingerprint))
+    return (
+        f"Pair {candidate.hostname}?\n\n"
+        f"Stable node ID: {candidate.stable_id}\n\n"
+        f"Identity fingerprint:\n{fingerprint_text}\n\n"
+        "Confirm this fingerprint through a trusted channel before pairing."
+    )
 
 
 def apply_discovery_enabled(controller: Any, enabled: bool) -> None:
@@ -86,12 +100,7 @@ def pair_discovered_node(
         return
     if not messagebox_module.askyesno(
         "Confirm peer fingerprint",
-        (
-            f"Pair {candidate.hostname}?\n\n"
-            f"Stable node ID: {candidate.stable_id}\n"
-            f"Identity fingerprint:\n{candidate.identity_fingerprint}\n\n"
-            "Confirm this fingerprint through a trusted channel before pairing."
-        ),
+        _pairing_confirmation(candidate),
         parent=controller.master,
     ):
         registry.fail_pairing(NodeId(node_id))

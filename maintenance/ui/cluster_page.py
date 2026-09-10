@@ -14,18 +14,11 @@ from tkinter import ttk
 from typing import Any
 
 from maintenance.ui import layout as ui_layout
+from maintenance.ui import node_presentation
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
 
 _DEFAULT_COLOR = "indigo"
-
-_TRUST_TEXT: dict[str, str] = {
-    "local": "Local",
-    "trusted": "Trusted",
-    "authorised": "Authorised",
-    "untrusted": "Untrusted",
-    "discovered": "Discovered",
-}
 
 _PAIRING_TEXT = {
     "discovered": "Discovered",
@@ -190,10 +183,6 @@ class ClusterPage:
         text_column.pack(side="left", fill="x", expand=True)
 
         name_line = spec.display_name
-        if spec.hostname and spec.hostname != spec.display_name:
-            name_line += f"  ·  {spec.hostname}"
-        if spec.is_local:
-            name_line += "  ·  this machine"
         self.label_cls(
             text_column,
             text=name_line,
@@ -203,20 +192,26 @@ class ClusterPage:
             anchor="w",
         ).pack(anchor="w")
 
-        trust_text = _TRUST_TEXT.get(spec.trust, spec.trust)
+        trust_text = node_presentation.trust_label(spec.trust, is_local=spec.is_local)
         pairing_text = _PAIRING_TEXT.get(spec.pairing_state, spec.pairing_state)
-        meta = (
-            f"{spec.target_state}  ·  {pairing_text}  ·  {trust_text}  ·  {spec.status}"
-        )
+        meta = f"{trust_text} · {node_presentation.status_label(spec.status)}"
+        if spec.hostname and spec.hostname != spec.display_name:
+            meta += f" · {spec.hostname}"
+        if spec.target_state != "Unknown":
+            meta += f" · {spec.target_state}"
+        meta += f" · {pairing_text}"
         if spec.capabilities:
-            meta += f"  ·  {', '.join(spec.capabilities)}"
+            meta += f" · {', '.join(node_presentation.capability_labels(spec.capabilities))}"
         if spec.last_refresh:
             meta += f"  ·  last refreshed {spec.last_refresh}"
+        status_role = node_presentation.status_color_role(spec.status)
+        if spec.target_state == "Permission denied":
+            status_role = "danger"
         self.label_cls(
             text_column,
             text=meta,
             bg=self.colors["card"],
-            fg=self.colors["secondary"],
+            fg=self.colors[status_role],
             font=self.fonts["body"],
             anchor="w",
         ).pack(anchor="w", pady=(2, 0))

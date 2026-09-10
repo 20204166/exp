@@ -1,6 +1,8 @@
 """Headless tests for the reusable Nodes & Connections settings page."""
 
+import tkinter as tk
 import unittest
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 
@@ -11,6 +13,8 @@ from maintenance.ui.nodes_connections import (
     NodesConnectionsPage,
     TrustedNodeSpec,
 )
+from maintenance.ui.window_node_actions import _pairing_confirmation
+from tests.support.live_tk import DISPLAY_AVAILABLE
 from tests.support.widget_recording import FakeVar, RecordingWidget, WidgetRecorder
 
 
@@ -28,6 +32,7 @@ def make_callbacks() -> Any:
         on_add_manual_host=Mock(),
         on_remove_manual=Mock(),
         on_start_discovery=Mock(),
+        on_permissions=Mock(),
     )
 
 
@@ -101,6 +106,37 @@ def button_with_text(recorder: WidgetRecorder, text: str) -> RecordingWidget:
 
 
 class NodesConnectionsPageTests(unittest.TestCase):
+    @unittest.skipUnless(DISPLAY_AVAILABLE, "Tk display unavailable")
+    def test_narrow_page_keeps_content_inside_scroll_view(self) -> None:
+        root = tk.Tk()
+        root.geometry("420x700")
+        callbacks = make_callbacks()
+        page = NodesConnectionsPage(
+            root,
+            callbacks=callbacks,
+            discovery_enabled=True,
+            discovered=[
+                DiscoveredPeerSpec(
+                    "peer-a",
+                    "m75-node1",
+                    "1.4.5.0",
+                    True,
+                    True,
+                    5000,
+                    "aaaa:bbbb:cccc:dddd:eeee:ffff",
+                )
+            ],
+            trusted=[],
+            manual=[],
+        )
+        try:
+            root.update()
+            root.update_idletasks()
+            root.update()
+            self.assertLessEqual(page.content.winfo_width(), page.canvas.winfo_width())
+        finally:
+            root.destroy()
+
     def test_page_root_is_not_packed(self) -> None:
         _page, parent, _recorder = make_page()
         self.assertEqual(parent.pack_calls, [])
@@ -157,7 +193,7 @@ class NodesConnectionsPageTests(unittest.TestCase):
         row_texts = [
             widget.kwargs.get("text", "") for widget in recorder.widgets("label")
         ]
-        self.assertTrue(any("ID peer-a" in text for text in row_texts))
+        self.assertTrue(any("Node ID: peer-a" in text for text in row_texts))
 
     def test_discovered_rows_show_identity_fingerprint(self) -> None:
         _page, _parent, recorder = make_page(
@@ -176,7 +212,20 @@ class NodesConnectionsPageTests(unittest.TestCase):
         row_texts = [
             widget.kwargs.get("text", "") for widget in recorder.widgets("label")
         ]
-        self.assertTrue(any("fingerprint aaaa:bbbb" in text for text in row_texts))
+        self.assertTrue(any("fingerprint available" in text for text in row_texts))
+
+    def test_pairing_confirmation_keeps_full_fingerprint_grouped(self) -> None:
+        candidate = SimpleNamespace(
+            hostname="peer-a",
+            stable_id="peer-a",
+            identity_fingerprint=":".join(f"{index:04x}" for index in range(17)),
+        )
+
+        message = _pairing_confirmation(candidate)
+
+        self.assertIn(candidate.identity_fingerprint, message.replace("\n", ":"))
+        self.assertIn("Stable node ID: peer-a", message)
+        self.assertIn("trusted channel", message)
 
     def test_incompatible_peer_pair_button_is_disabled(self) -> None:
         _page, _parent, recorder = make_page(
@@ -196,6 +245,35 @@ class NodesConnectionsPageTests(unittest.TestCase):
         callbacks.on_test_connection.assert_called_once_with("peer-a")
         button_with_text(recorder, "Open").kwargs["command"]()
         callbacks.on_open_node.assert_called_once_with("peer-a")
+
+    def test_trusted_actions_use_primary_and_danger_styles(self) -> None:
+        _page, _parent, recorder = make_page()
+
+        self.assertEqual(
+            button_with_text(recorder, "Open").kwargs["style"],
+            "Primary.TButton",
+        )
+        self.assertEqual(
+            button_with_text(recorder, "Revoke").kwargs["style"],
+            "Danger.TButton",
+        )
+
+    def test_trusted_permissions_are_grouped_and_destructive(self) -> None:
+        _page, _parent, recorder = make_page()
+
+        self.assertIn("Permissions", recorder.label_texts())
+        controls = [
+            control
+            for control in recorder.widgets("checkbutton")
+            if control.kwargs.get("text") != "Enabled"
+        ]
+        self.assertEqual(
+            [control.kwargs["text"] for control in controls],
+            ["Review processes", "Terminate processes", "Force terminate"],
+        )
+        self.assertEqual(controls[0].kwargs["style"], "App.TCheckbutton")
+        self.assertEqual(controls[1].kwargs["style"], "Danger.TCheckbutton")
+        self.assertEqual(controls[2].kwargs["style"], "Danger.TCheckbutton")
 
     def test_open_button_disabled_for_non_selectable(self) -> None:
         _page, _parent, recorder = make_page(
@@ -244,10 +322,13 @@ class NodesConnectionsPageTests(unittest.TestCase):
         callbacks.on_remove_manual.assert_called_once_with("manual-x:9")
 
     def test_refresh_updates_lists(self) -> None:
-        _page, _parent, _recorder = make_page()
-        _page.refresh_discovered([])
-        _page.refresh_trusted([])
-        _page.refresh_manual([])
+        page, _parent, recorder = make_page()
+        page.refresh_discovered([])
+        page.refresh_trusted([])
+        page.refresh_manual([])
+        self.assertIn("No peers discovered yet.", recorder.label_texts())
+        self.assertIn("No trusted nodes yet.", recorder.label_texts())
+        self.assertIn("No manual hosts configured.", recorder.label_texts())
 
 
 if __name__ == "__main__":

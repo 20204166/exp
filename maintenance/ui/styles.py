@@ -139,6 +139,7 @@ STYLE_HEALTH_WARNING = "HealthWarning.TLabel"
 STYLE_PRIMARY_BUTTON = "Primary.TButton"
 STYLE_NEUTRAL_BUTTON = "Neutral.TButton"
 STYLE_DANGER_BUTTON = "Danger.TButton"
+STYLE_DANGER_CHECKBUTTON = "Danger.TCheckbutton"
 STYLE_STATUS_READY = "Ready.Status.TLabel"
 STYLE_STATUS_BUSY = "Busy.Status.TLabel"
 STYLE_SPINBOX = "App.TSpinbox"
@@ -365,6 +366,17 @@ def configure_app_styles(
     )
     style.map(
         STYLE_CHECKBUTTON,
+        background=[("active", c["card"])],
+        foreground=[("disabled", c["disabled"])],
+    )
+    style.configure(
+        STYLE_DANGER_CHECKBUTTON,
+        background=c["card"],
+        foreground=c["danger"],
+        font=f["body"],
+    )
+    style.map(
+        STYLE_DANGER_CHECKBUTTON,
         background=[("active", c["card"])],
         foreground=[("disabled", c["disabled"])],
     )

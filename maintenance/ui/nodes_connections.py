@@ -18,6 +18,7 @@ from tkinter import ttk
 from typing import Any
 
 from maintenance.ui import layout as ui_layout
+from maintenance.ui import node_presentation
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
 
@@ -179,13 +180,17 @@ class NodesConnectionsPage:
             label_cls=self.label_cls,
             colors=self.colors,
             fonts=self.fonts,
-            description=(
-                "Advertise this machine and find other System Analyzer "
-                "instances on the local network. Discovery is presence only: "
-                "a discovered peer is never trusted or selectable until you "
-                "pair it explicitly."
-            ),
+            description="Find System Analyzer peers on the local network; pairing is always explicit.",
         )
+        self.discovery_state_label = self.label_cls(
+            body,
+            text="",
+            bg=self.colors["card"],
+            fg=self.colors["secondary"],
+            font=self.fonts["status"],
+            anchor="w",
+        )
+        self.discovery_state_label.pack(anchor="w", pady=(0, 8))
         var = self._boolean_var_factory()
         var.set(discovery_enabled)
         self._discovery_var = var
@@ -197,6 +202,7 @@ class NodesConnectionsPage:
             on_change=lambda: self.callbacks.on_discovery_toggle(var.get()),
             action_id="nodes:discovery:toggle",
         )
+        self._set_discovery_state(discovery_enabled, has_peers=False)
         self.start_discovery_button = self.button_cls(
             body,
             text="Start Discovery",
@@ -221,10 +227,8 @@ class NodesConnectionsPage:
             colors=self.colors,
             fonts=self.fonts,
             description=(
-                "Machines seen on the local network. Pair a peer to record it "
-                "as trusted. Review the stable node ID before pairing or "
-                "rejecting it; pairing only grants read access and never "
-                "happens automatically."
+                "Peers seen on the local network. Pair only after checking the "
+                "identity in the confirmation step."
             ),
         )
         self._discovered_body = body
@@ -236,48 +240,69 @@ class NodesConnectionsPage:
         ui_layout.clear_children(self._discovered_body)
         if not specs:
             self._empty_hint(self._discovered_body, "No peers discovered yet.")
+            self._set_discovery_state(self._discovery_var.get(), has_peers=False)
             return
         for spec in specs:
             self._peer_row(self._discovered_body, spec)
+        self._set_discovery_state(self._discovery_var.get(), has_peers=True)
 
     def _peer_row(self, body: Any, spec: DiscoveredPeerSpec) -> Any:
         row = self.frame_cls(body, bg=self.colors["card"])
         row.pack(fill="x", pady=(0, 8))
-        text = spec.hostname
-        if spec.port is not None:
-            text += f"  ·  port {spec.port}"
-        if not spec.compatible:
-            text += "  ·  incompatible"
-        text += f"  ·  ID {spec.node_id}"
-        if spec.identity_fingerprint:
-            text += f"  ·  fingerprint {spec.identity_fingerprint}"
-        text += f"  ·  {spec.pairing_state.replace('_', ' ').title()}"
+        identity = self.frame_cls(row, bg=self.colors["card"])
+        identity.pack(fill="x")
         self.label_cls(
-            row,
-            text=text,
+            identity,
+            text=spec.hostname,
             bg=self.colors["card"],
             fg=self.colors["text"],
+            font=self.fonts["section"],
+            anchor="w",
+        ).pack(anchor="w")
+        address = f"Discovered · {spec.hostname}"
+        if spec.port is not None:
+            address += f" · port {spec.port}"
+        if not spec.compatible:
+            address += " · Incompatible version"
+        self.label_cls(
+            identity,
+            text=address,
+            bg=self.colors["card"],
+            fg=self.colors["secondary"],
             font=self.fonts["body"],
             anchor="w",
-        ).pack(side="left", fill="x", expand=True)
+        ).pack(anchor="w", pady=(2, 0))
+        details = f"Node ID: {node_presentation.technical_id(spec.node_id)}"
+        if spec.identity_fingerprint:
+            details += " · fingerprint available for pairing"
+        self.label_cls(
+            row,
+            text=details,
+            bg=self.colors["card"],
+            fg=self.colors["muted_text"],
+            font=self.fonts["node"],
+            anchor="w",
+        ).pack(fill="x", pady=(4, 0))
+        actions = self.frame_cls(row, bg=self.colors["card"])
+        actions.pack(fill="x", pady=(6, 0))
         pair_id = f"nodes:peer:{spec.node_id}:pair"
         reject_id = f"nodes:peer:{spec.node_id}:reject"
         pair_command = lambda: self.callbacks.on_pair(spec.node_id)
         reject_command = lambda: self.callbacks.on_reject(spec.node_id)
         pair_button = self.button_cls(
-            row,
+            actions,
             text="Pair",
             command=pair_command,
-            style="Neutral.TButton",
+            style=ui_styles.STYLE_PRIMARY_BUTTON,
             state=tk.NORMAL if spec.compatible else tk.DISABLED,
         )
         pair_button.pack(side="right")
         self._register_button(pair_id, pair_command, pair_button, spec.compatible)
         reject_button = self.button_cls(
-            row,
+            actions,
             text="Reject",
             command=reject_command,
-            style="Neutral.TButton",
+            style=ui_styles.STYLE_NEUTRAL_BUTTON,
         )
         reject_button.pack(side="right", padx=(0, 8))
         self._register_button(reject_id, reject_command, reject_button, True)
@@ -292,9 +317,8 @@ class NodesConnectionsPage:
             colors=self.colors,
             fonts=self.fonts,
             description=(
-                "Machines you have explicitly paired or configured manually. "
-                "The stable node ID is the trust identity. Trusted nodes stay "
-                "read-only; destructive capabilities are never granted here."
+                "Paired or manually configured machines. Trust and permissions "
+                "are separate controls."
             ),
         )
         self._trusted_body = body
@@ -328,83 +352,108 @@ class NodesConnectionsPage:
         )
         chip.pack(side="left", padx=(0, 8), pady=(2, 0))
 
-        text = spec.display_name
-        if spec.hostname and spec.hostname != spec.display_name:
-            text += f"  ·  {spec.hostname}"
-        text += f"  ·  ID {spec.node_id}"
-        text += f"  ·  {spec.target_state}  ·  {spec.status}"
-        if spec.identity_status == "mismatch":
-            text += "  ·  IDENTITY MISMATCH"
-        text += f"  ·  {spec.pairing_state.replace('_', ' ').title()}"
+        identity = self.frame_cls(row, bg=self.colors["card"])
+        identity.pack(fill="x")
         self.label_cls(
-            row,
-            text=text,
+            identity,
+            text=spec.display_name,
             bg=self.colors["card"],
             fg=self.colors["text"],
-            font=self.fonts["body"],
+            font=self.fonts["section"],
             anchor="w",
-        ).pack(side="left", fill="x", expand=True)
-
-        actions = self.frame_cls(row, bg=self.colors["card"])
-        actions.pack(side="right")
+        ).pack(anchor="w")
+        role_status = (
+            f"{node_presentation.trust_label('trusted')} · "
+            f"{node_presentation.status_label(spec.status)}"
+        )
+        if spec.target_state != "Unknown":
+            role_status += f" · {spec.target_state}"
+        if spec.identity_status == "mismatch":
+            role_status += " · Identity mismatch"
+        status_role = node_presentation.status_color_role(spec.status)
+        if (
+            spec.identity_status == "mismatch"
+            or spec.target_state == "Permission denied"
+        ):
+            status_role = "danger"
+        self.label_cls(
+            identity,
+            text=role_status,
+            bg=self.colors["card"],
+            fg=self.colors[status_role],
+            font=self.fonts["status"],
+            anchor="w",
+        ).pack(anchor="w", pady=(2, 0))
+        endpoint = f"Host: {spec.host or spec.hostname}"
+        if spec.port is not None:
+            endpoint += f" · port {spec.port}"
+        technical = (
+            f"{endpoint} · Node ID: {node_presentation.technical_id(spec.node_id)}"
+        )
+        self.label_cls(
+            row,
+            text=technical,
+            bg=self.colors["card"],
+            fg=self.colors["muted_text"],
+            font=self.fonts["node"],
+            anchor="w",
+        ).pack(fill="x", pady=(4, 0))
+        if spec.identity_fingerprint:
+            self.label_cls(
+                row,
+                text="Identity fingerprint (verified):",
+                bg=self.colors["card"],
+                fg=self.colors["secondary"],
+                font=self.fonts["node"],
+                anchor="w",
+            ).pack(fill="x", pady=(4, 0))
+            for line in node_presentation.fingerprint_lines(spec.identity_fingerprint):
+                self.label_cls(
+                    row,
+                    text=line,
+                    bg=self.colors["card"],
+                    fg=self.colors["muted_text"],
+                    font=self.fonts["node"],
+                    anchor="w",
+                ).pack(fill="x")
 
         colour_var = self._var_factory()
         colour_var.set(colour)
+        appearance = self.frame_cls(row, bg=self.colors["card"])
+        appearance.pack(fill="x", pady=(8, 0))
+        self.label_cls(
+            appearance,
+            text="Appearance",
+            bg=self.colors["card"],
+            fg=self.colors["secondary"],
+            font=self.fonts["body"],
+        ).pack(side="left")
         combo = self.combobox_cls(
-            actions,
+            appearance,
             textvariable=colour_var,
             state="readonly",
             values=list(ui_styles.NODE_COLORS),
             width=7,
         )
-        combo.pack(side="left", padx=(6, 0))
+        combo.pack(side="left", padx=(8, 0))
         combo.bind(
             "<<ComboboxSelected>>",
             lambda _event: self.callbacks.on_color(spec.node_id, colour_var.get()),
         )
 
-        for text_, command, style in (
-            (
-                "Test",
-                lambda: self.callbacks.on_test_connection(spec.node_id),
-                "Neutral.TButton",
-            ),
-            (
-                "Rename",
-                lambda: self.callbacks.on_rename(spec.node_id),
-                "Neutral.TButton",
-            ),
-            (
-                "Open",
-                lambda: self.callbacks.on_open_node(spec.node_id),
-                "Neutral.TButton",
-            ),
-            (
-                "Revoke",
-                lambda: self.callbacks.on_revoke(spec.node_id),
-                "Danger.TButton",
-            ),
-        ):
-            enabled = text_ != "Open" or (spec.selectable and spec.status != "offline")
-            action_id = f"nodes:trusted:{spec.node_id}:{text_.lower()}"
-            button = self.button_cls(
-                actions,
-                text=text_,
-                command=command,
-                style=style,
-                state=(tk.NORMAL if enabled else tk.DISABLED),
-            )
-            button.pack(side="left", padx=(6, 0))
-            self._register_button(
-                action_id,
-                command,
-                button,
-                enabled,
-            )
+        permission_frame = self.frame_cls(row, bg=self.colors["card"])
+        permission_frame.pack(fill="x", pady=(8, 0))
+        self.label_cls(
+            permission_frame,
+            text="Permissions",
+            bg=self.colors["card"],
+            fg=self.colors["secondary"],
+            font=self.fonts["body"],
+        ).pack(anchor="w")
+        permission_controls = self.frame_cls(permission_frame, bg=self.colors["card"])
+        permission_controls.pack(fill="x", pady=(3, 0))
         if self.callbacks.on_permissions is not None:
             on_permissions = self.callbacks.on_permissions
-            permission_frame = self.frame_cls(row, bg=self.colors["card"])
-            permission_frame.pack(side="bottom", anchor="w", fill="x", pady=(6, 0))
             permission_values: dict[str, Any] = {}
             for permission, label in (
                 ("process_review", "Review processes"),
@@ -415,9 +464,14 @@ class NodesConnectionsPage:
                 variable.set(permission in spec.permissions)
                 permission_values[permission] = variable
                 control = self.checkbutton_cls(
-                    permission_frame,
+                    permission_controls,
                     text=label,
                     variable=variable,
+                    style=(
+                        ui_styles.STYLE_DANGER_CHECKBUTTON
+                        if permission != "process_review"
+                        else ui_styles.STYLE_CHECKBUTTON
+                    ),
                     command=lambda: on_permissions(
                         spec.node_id,
                         frozenset(
@@ -427,7 +481,56 @@ class NodesConnectionsPage:
                         ),
                     ),
                 )
-                control.pack(side="left", padx=(0, 8))
+                control.pack(anchor="w", pady=(0, 2))
+
+        actions = self.frame_cls(row, bg=self.colors["card"])
+        actions.pack(fill="x", pady=(8, 0))
+        primary_actions = self.frame_cls(actions, bg=self.colors["card"])
+        primary_actions.pack(fill="x")
+        secondary_actions = self.frame_cls(actions, bg=self.colors["card"])
+        secondary_actions.pack(fill="x", pady=(4, 0))
+        for text_, command, style, parent in (
+            (
+                "Open",
+                lambda: self.callbacks.on_open_node(spec.node_id),
+                ui_styles.STYLE_PRIMARY_BUTTON,
+                primary_actions,
+            ),
+            (
+                "Test",
+                lambda: self.callbacks.on_test_connection(spec.node_id),
+                ui_styles.STYLE_NEUTRAL_BUTTON,
+                secondary_actions,
+            ),
+            (
+                "Rename",
+                lambda: self.callbacks.on_rename(spec.node_id),
+                ui_styles.STYLE_NEUTRAL_BUTTON,
+                secondary_actions,
+            ),
+            (
+                "Revoke",
+                lambda: self.callbacks.on_revoke(spec.node_id),
+                ui_styles.STYLE_DANGER_BUTTON,
+                secondary_actions,
+            ),
+        ):
+            enabled = text_ != "Open" or (spec.selectable and spec.status != "offline")
+            action_id = f"nodes:trusted:{spec.node_id}:{text_.lower()}"
+            button = self.button_cls(
+                parent,
+                text=text_,
+                command=command,
+                style=style,
+                state=(tk.NORMAL if enabled else tk.DISABLED),
+            )
+            button.pack(side="left", padx=(0, 8))
+            self._register_button(
+                action_id,
+                command,
+                button,
+                enabled,
+            )
         return row
 
     def _build_manual_hosts_section(self) -> None:
@@ -439,8 +542,7 @@ class NodesConnectionsPage:
             colors=self.colors,
             fonts=self.fonts,
             description=(
-                "Register a machine that does not advertise itself, so you "
-                "can pair it by host and authenticated remote port."
+                "Add a node by hostname or IP when local discovery is unavailable."
             ),
         )
         self._manual_body = body
@@ -452,11 +554,13 @@ class NodesConnectionsPage:
         self._build_entry(form, "Name", self._manual_name_var)
         self._build_entry(form, "Host", self._manual_host_var)
         self._build_entry(form, "Port", self._manual_port_var)
+        form_actions = self.frame_cls(form, bg=self.colors["card"])
+        form_actions.pack(fill="x", pady=(0, 2))
         self.add_host_button = self.button_cls(
-            form,
+            form_actions,
             text="Add host",
             command=self._add_manual_host,
-            style="Neutral.TButton",
+            style=ui_styles.STYLE_NEUTRAL_BUTTON,
         )
         self.add_host_button.pack(side="right", padx=(8, 0), pady=(4, 0))
         self._register_button(
@@ -470,7 +574,7 @@ class NodesConnectionsPage:
 
     def _build_entry(self, form: Any, label_text: str, var: Any) -> None:
         holder = self.frame_cls(form, bg=self.colors["card"])
-        holder.pack(side="left", padx=(0, 8))
+        holder.pack(fill="x", pady=(0, 6))
         self.label_cls(
             holder,
             text=label_text,
@@ -502,29 +606,47 @@ class NodesConnectionsPage:
         for spec in specs:
             row = self.frame_cls(self._manual_hosts_body, bg=self.colors["card"])
             row.pack(fill="x", pady=(0, 8))
-            text = spec.display_name
-            if spec.host:
-                text += f"  ·  {spec.host}"
-            if spec.port is not None:
-                text += f"  ·  port {spec.port}"
-            text += f"  ·  ID {spec.node_id}"
+            identity = self.frame_cls(row, bg=self.colors["card"])
+            identity.pack(fill="x")
             self.label_cls(
-                row,
-                text=text,
+                identity,
+                text=spec.display_name,
                 bg=self.colors["card"],
                 fg=self.colors["text"],
+                font=self.fonts["section"],
+                anchor="w",
+            ).pack(anchor="w")
+            text = f"Manual host · {spec.host or spec.hostname}"
+            if spec.port is not None:
+                text += f" · port {spec.port}"
+            self.label_cls(
+                identity,
+                text=text,
+                bg=self.colors["card"],
+                fg=self.colors["secondary"],
                 font=self.fonts["body"],
                 anchor="w",
-            ).pack(side="left", fill="x", expand=True)
+            ).pack(anchor="w", pady=(2, 0))
+            self.label_cls(
+                row,
+                text=f"Node ID: {node_presentation.technical_id(spec.node_id)}",
+                bg=self.colors["card"],
+                fg=self.colors["muted_text"],
+                font=self.fonts["node"],
+                anchor="w",
+            ).pack(fill="x", pady=(4, 0))
+
+            actions = self.frame_cls(row, bg=self.colors["card"])
+            actions.pack(fill="x", pady=(6, 0))
 
             def remove_manual(node_id: str = spec.node_id) -> None:
                 self.callbacks.on_remove_manual(node_id)
 
             remove_button = self.button_cls(
-                row,
+                actions,
                 text="Remove",
                 command=remove_manual,
-                style="Danger.TButton",
+                style=ui_styles.STYLE_DANGER_BUTTON,
             )
             remove_button.pack(side="right")
 
@@ -614,14 +736,45 @@ class NodesConnectionsPage:
         self._updating = True
         try:
             self._discovery_var.set(enabled)
+            self._set_discovery_state(enabled, has_peers=bool(self._discovered))
         finally:
             self._updating = False
 
     def show_status(self, message: str) -> None:
         self.status_label.config(text=message, fg=self.colors["secondary"])
+        if message.lower().startswith("discovery"):
+            self._set_discovery_state_from_message(message, error=False)
 
     def show_error(self, message: str) -> None:
         self.status_label.config(text=message, fg=self.colors["danger"])
+        if message.lower().startswith("discovery"):
+            self._set_discovery_state_from_message(message, error=True)
+
+    def _set_discovery_state(self, enabled: bool, *, has_peers: bool) -> None:
+        if not enabled:
+            value = "Disabled"
+            role = "secondary"
+        elif has_peers:
+            value = "Running"
+            role = "success"
+        else:
+            value = "Running - no peers found"
+            role = "success"
+        self.discovery_state_label.config(text=f"Status: {value}", fg=self.colors[role])
+
+    def _set_discovery_state_from_message(self, message: str, *, error: bool) -> None:
+        lowered = message.lower()
+        if "disabled" in lowered:
+            state, role = "Disabled", "secondary"
+        elif error and "unavailable" in lowered:
+            state, role = "Unavailable", "warning"
+        elif error:
+            state, role = "Error", "danger"
+        elif "no peers" in lowered:
+            state, role = "Running - no peers found", "success"
+        else:
+            state, role = "Running", "success"
+        self.discovery_state_label.config(text=f"Status: {state}", fg=self.colors[role])
 
     def focus_back(self) -> None:
         self.back_button.focus_set()
