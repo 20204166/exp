@@ -9,10 +9,17 @@ and the Tkinter UI thread.
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
+
+from .placement import (
+    PlacementDecision,
+    PlacementPolicy,
+    PlacementRequest,
+    PlacementView,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -335,6 +342,7 @@ class AppCoordinator:
         runner: Callable[[Callable[[], None]], None] | None = None,
         deliver: Callable[[Callable[[], None]], None] | None = None,
         on_activity: Callable[[], None] | None = None,
+        placement_policy: PlacementPolicy | None = None,
     ) -> None:
         self._executor = (
             None if runner is not None else ThreadPoolExecutor(max_workers=4)
@@ -342,6 +350,9 @@ class AppCoordinator:
         self._runner = runner or self._submit_default
         self._deliver = deliver or (lambda callback: callback())
         self._on_activity = on_activity
+        self._placement_policy = (
+            PlacementPolicy() if placement_policy is None else placement_policy
+        )
         self._states: dict[str, AppRunState] = {}
         self._coalesced_generations: dict[str, int] = {}
         self._coalesced_callbacks: dict[str, Callable[[], None]] = {}
@@ -350,6 +361,15 @@ class AppCoordinator:
         self._discovery: Any = None
         self._discovery_generation: object | None = None
         self._discovery_handlers: dict[str, Any] = {}
+
+    def choose_placement(
+        self,
+        request: PlacementRequest,
+        views: Iterable[PlacementView],
+    ) -> PlacementDecision:
+        """Delegate one synchronous placement decision without starting work."""
+
+        return self._placement_policy.choose(request, views)
 
     def _submit_default(self, worker: Callable[[], None]) -> None:
         if self._executor is None:

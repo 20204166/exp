@@ -16,6 +16,10 @@ from maintenance.components import (
     DownloadScanner,
     DownloadsPathResolver,
     GpuDetector,
+    JobClass,
+    PlacementDecision,
+    PlacementRequest,
+    PlacementView,
     ProcessSafetyPolicy,
     ResourceFeature,
     ResourceFeatureCatalog,
@@ -42,6 +46,7 @@ from maintenance.components.scan_support import (
     file_sha256,
     stat_fingerprint,
 )
+from maintenance.nodes import NodeCapability, NodeId
 from tests.support.scheduling import DeferredRunner
 
 
@@ -1163,6 +1168,104 @@ class SharedScanHelperTests(unittest.TestCase):
 
 
 class AppCoordinatorTests(unittest.TestCase):
+    def test_choose_placement_delegates_without_starting_or_mutating_a_run(self) -> None:
+        expected = PlacementDecision(None, (), (), "no eligible nodes")
+
+        class FakePlacementPolicy:
+            def __init__(self) -> None:
+                self.calls: list[tuple[object, object]] = []
+
+            def choose(self, request: object, views: object) -> PlacementDecision:
+                self.calls.append((request, views))
+                return expected
+
+        policy: Any = FakePlacementPolicy()
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(
+            placement_policy=policy,
+            runner=runner,
+            deliver=lambda callback: callback(),
+        )
+        request = PlacementRequest(
+            "hash", JobClass.MOVABLE, None, NodeCapability.COMPONENT_READ
+        )
+        views: tuple[PlacementView, ...] = ()
+
+        self.assertIs(coordinator.choose_placement(request, views), expected)
+        self.assertEqual(policy.calls, [(request, views)])
+        self.assertEqual(coordinator.diagnostic_states(), ())
+        self.assertEqual(runner.workers, [])
+        self.assertFalse(coordinator.in_flight("hash"))
+
+    def test_choose_placement_does_not_create_a_second_scheduler_or_lifecycle(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner)
+        request = PlacementRequest(
+            "hash", JobClass.MOVABLE, None, NodeCapability.COMPONENT_READ
+        )
+        generation = coordinator.run("hash", lambda _event, _progress: "result")
+
+        coordinator.choose_placement(request, ())
+
+        self.assertEqual(generation, 1)
+        self.assertEqual(len(runner.workers), 1)
+        self.assertEqual(coordinator.generation("hash"), 1)
+        self.assertTrue(coordinator.in_flight("hash"))
+
+    def test_existing_keyed_runs_still_coalesce_after_placement_choice(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner)
+        request = PlacementRequest(
+            "hash", JobClass.MOVABLE, None, NodeCapability.COMPONENT_READ
+        )
+
+        coordinator.choose_placement(request, ())
+        first = coordinator.run("hash", lambda _event, _progress: "result")
+        second = coordinator.run("hash", lambda _event, _progress: "rerun")
+
+        self.assertEqual(first, 1)
+        self.assertIsNone(second)
+        self.assertEqual(len(runner.workers), 1)
+
+    def test_cancellation_still_drops_late_result_after_placement_choice(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner)
+        request = PlacementRequest(
+            "hash", JobClass.MOVABLE, None, NodeCapability.COMPONENT_READ
+        )
+        results: list[object] = []
+
+        coordinator.choose_placement(request, ())
+        coordinator.run(
+            "hash",
+            lambda _event, _progress: "late",
+            on_result=lambda _key, result: results.append(result),
+        )
+        coordinator.cancel("hash")
+        runner.run_next()
+
+        self.assertEqual(results, [])
+        self.assertIsNone(coordinator.last_result("hash"))
+
+    def test_node_qualified_keys_remain_independent_after_placement_choice(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner)
+        request = PlacementRequest(
+            "analysis", JobClass.MOVABLE, None, NodeCapability.COMPONENT_READ
+        )
+        key_a = f"{NodeId('node-a').value}:analysis"
+        key_b = f"{NodeId('node-b').value}:analysis"
+
+        coordinator.choose_placement(request, ())
+        coordinator.run(key_a, lambda _event, _progress: "a")
+        coordinator.run(key_b, lambda _event, _progress: "b")
+
+        self.assertEqual(len(runner.workers), 2)
+        runner.run_next()
+        runner.run_next()
+        self.assertEqual(coordinator.last_result(key_a), "a")
+        self.assertEqual(coordinator.last_result(key_b), "b")
+
     def test_begin_claims_and_coalesces_duplicate_triggers(self) -> None:
         coordinator = AppCoordinator()
 
