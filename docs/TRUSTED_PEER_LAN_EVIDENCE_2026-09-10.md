@@ -51,7 +51,8 @@ applications remain deployment validation items.
 
 ## Final Decision
 
-**REMOTE LAN PATH WORKING READ-ONLY ONLY**
+**PARTIAL - SPECIFIC GAP REMAINS**
 
 The normal production path is composed and locally proven over real TLS sockets,
+but physical two-machine LAN evidence is unavailable. Destructive remote actions
 remain outside the normal grant and were not expanded.
