@@ -1,0 +1,10 @@
+diff --git a/health.py b/health.py
+--- a/health.py
++++ b/health.py
+@@ -5,3 +5,7 @@ def probe_health(command: list[str]) -> str:
+     result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=3.0)
+     return result.stdout.strip()
++
++
++def run_health_command(command: list[str]) -> str:
++    return probe_health(command)

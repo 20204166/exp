@@ -1,0 +1,10 @@
+--- health.py
++++ health.py
+@@
+ def probe_health(command: list[str]) -> str:
+     result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=3.0)
+     return result.stdout.strip()
++
++
++def run_health_command(command: list[str]) -> str:
++    return probe_health(command)

@@ -15,3 +15,4 @@
 - `docs/bug_hunts/*` are historical evidence trails, not the source of current behavior.
 - OpenCode-specific config lives in `opencode.json`; agent definitions are under `.opencode/agents/`.
 - Current thermal UI boundary: `TemperatureTelemetry` exposes immutable `TemperatureTelemetryUpdate`/`TemperatureRenderState`; `AppWindow` prepares render intents; `UICoordinator` only coalesces, visibility-gates, and rejects stale-node deliveries; `ThermalsPage` owns graph widgets; `maintenance/ui/thermal_graph.py` owns graph geometry and Canvas drawing. Telemetry must not import Tk/UI code, and the coordinator must not draw widgets.
+- Search before create: before adding a reusable helper, search the repository for an existing implementation of the same responsibility. Prefer one canonical implementation and share mechanisms, not specialized meanings; do not duplicate a common operation under a new name.

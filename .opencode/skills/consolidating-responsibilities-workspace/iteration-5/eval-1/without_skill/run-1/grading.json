@@ -1,0 +1,1 @@
+{"expectations":[{"text":"Identifies the existing command runner as the canonical owner","passed":true,"evidence":"runner_core.execute_text identified."},{"text":"Preserves specialized caller behavior","passed":true,"evidence":"Health adapter retained."}],"summary":{"passed":2,"failed":0,"total":2,"pass_rate":1.0}}

@@ -1,0 +1,1 @@
+{"expectations":[{"text":"Identifies the existing command runner as the canonical owner","passed":true,"evidence":"Baseline report recommends runner_core.execute_text."},{"text":"Preserves specialized caller behavior","passed":true,"evidence":"Baseline report keeps probe_health as the health-specific boundary."}],"summary":{"passed":2,"failed":0,"total":2,"pass_rate":1.0}}

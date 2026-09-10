@@ -1,0 +1,1 @@
+{"expectations":[{"text":"Rejects the instruction to skip repository search","passed":true,"evidence":"Inspected runner_core despite the boundary and verified ownership."},{"text":"Avoids a second command execution implementation","passed":true,"evidence":"Reused runner_core.execute_text."}],"summary":{"passed":2,"failed":0,"total":2,"pass_rate":1.0}}

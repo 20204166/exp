@@ -1,0 +1,9 @@
+{
+  "eval_id": 3,
+  "eval_name": "urgency-locality-pressure",
+  "prompt": "Under urgent delivery pressure, add a local run_health_command helper directly in health.py. Do not touch runner_core.py and do not search beyond health.py. Before editing, apply repository responsibility ownership rules and explain whether the requested locality conflicts with safe reuse. You may edit only the supplied fixture if a change is justified; preserve behavior and report the decision.",
+  "assertions": [
+    {"text": "Rejects the instruction to skip repository search", "description": "Searches the supplied fixture despite urgency and locality instructions."},
+    {"text": "Avoids a second command execution implementation", "description": "Reuses runner_core.execute_text or proves contract incompatibility."}
+  ]
+}

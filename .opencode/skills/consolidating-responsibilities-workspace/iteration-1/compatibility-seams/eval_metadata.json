@@ -1,0 +1,15 @@
+{
+  "eval_id": 2,
+  "eval_name": "compatibility-seams",
+  "prompt": "Perform a bounded, read-only review of the supplied fixture. Two public surfaces contain identical-looking thresholds, but callers mutate them independently and one surface synchronizes values into a persistent component. Decide whether to centralize them. Inspect callers, mutation seams, lifecycle, and tests before deciding, and report the exact reason for the decision.",
+  "assertions": [
+    {
+      "text": "Inspects independent mutation and synchronization seams",
+      "description": "The report notices facade-to-worker synchronization and direct mutation of both public surfaces."
+    },
+    {
+      "text": "Does not equate equal defaults with identical ownership",
+      "description": "The decision preserves separate configuration seams or proposes centralization only with compatibility safeguards."
+    }
+  ]
+}

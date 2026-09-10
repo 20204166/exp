@@ -1,0 +1,1 @@
+{"expectations":[{"text":"Inspects independent mutation and synchronization seams","passed":true,"evidence":"Facade/worker seams and sync lifecycle inspected."},{"text":"Does not equate equal defaults with identical ownership","passed":true,"evidence":"KEEP SEPARATE decision."}],"summary":{"passed":2,"failed":0,"total":2,"pass_rate":1.0}}

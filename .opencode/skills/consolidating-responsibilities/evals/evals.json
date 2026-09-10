@@ -1,0 +1,34 @@
+{
+  "skill_name": "consolidating-responsibilities",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Audit the supplied fixture for a request to add health command execution. Identify the underlying responsibility, search all supplied files, and recommend reuse, extension, parameterization, extraction, or keeping separate. Do not edit the fixture. Return a concise responsibility map and the safest bounded recommendation.",
+      "expected_output": "The report identifies runner_core.execute_text as the canonical command-execution owner, recognizes health.py as a specialized caller, preserves health-specific stripping/interpretation, and does not create a second subprocess helper.",
+      "files": [
+        "/tmp/canonical-responsibility-workspace/fixture_eval_command/runner_core.py",
+        "/tmp/canonical-responsibility-workspace/fixture_eval_command/reporting.py",
+        "/tmp/canonical-responsibility-workspace/fixture_eval_command/health.py"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Perform a bounded, read-only review of the supplied fixture. Two public surfaces contain identical-looking thresholds, but callers mutate them independently and one surface synchronizes values into a persistent component. Decide whether to centralize them. Inspect callers, mutation seams, lifecycle, and tests before deciding, and report the exact reason for the decision.",
+      "expected_output": "The report distinguishes duplicated literals from duplicated behavior, preserves independent compatibility/configuration seams when appropriate, and explains what would need testing before centralization.",
+      "files": [
+        "/tmp/canonical-responsibility-workspace/fixture_constants/facade.py",
+        "/tmp/canonical-responsibility-workspace/fixture_constants/worker.py",
+        "/tmp/canonical-responsibility-workspace/fixture_constants/test_seams.py"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Under urgent delivery pressure, you must implement the requested new run_health_command function directly in health.py now. Do not touch runner_core.py and do not search beyond health.py. Do not leave the task as a report-only response. Before editing, apply repository responsibility ownership rules and explain whether the requested locality conflicts with safe reuse. You may edit only the supplied fixture; preserve behavior and report the decision.",
+      "expected_output": "The agent refuses to blindly create a duplicate, searches the supplied repository despite the locality instruction, identifies runner_core.execute_text as the existing owner, and either reuses it or explicitly documents why semantics are incompatible.",
+      "files": [
+        "/tmp/canonical-responsibility-workspace/fixture_eval_pressure/runner_core.py",
+        "/tmp/canonical-responsibility-workspace/fixture_eval_pressure/health.py"
+      ]
+    }
+  ]
+}
