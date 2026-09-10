@@ -61,8 +61,7 @@ def sync_peer_listener_grants(controller: Any) -> None:
         for grant in controller._cluster_state.peer_grants
     }
     if not grants:
-        server.stop()
-        controller._peer_server = None
+        server.update_grants({})
         return
     server.update_grants(grants)
 

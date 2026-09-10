@@ -102,6 +102,18 @@ class RemoteSecurityTests(unittest.TestCase):
                 )
             )
 
+    def test_pairing_request_rejects_destructive_permissions(self) -> None:
+        with self.assertRaises(ValueError):
+            from maintenance.remote import PairingRequest
+
+            PairingRequest(
+                caller_node_id=NodeId("caller"),
+                identity_fingerprint="caller-id",
+                transport_fingerprint="caller-tls",
+                proposed_secret="b" * 64,
+                permissions=frozenset({NodePermission.PROCESS_TERMINATION}),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

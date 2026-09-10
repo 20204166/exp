@@ -51,8 +51,9 @@ applications remain deployment validation items.
 
 ## Final Decision
 
-**PARTIAL - SPECIFIC GAP REMAINS**
+**BLOCKED**
 
-The normal production path is composed and locally proven over real TLS sockets,
-but physical two-machine LAN evidence is unavailable. Destructive remote actions
-remain outside the normal grant and were not expanded.
+The production listener and read-only connector are composed over real TLS
+sockets, but the initial pairing trust ceremony still needs an independently
+authenticated or out-of-band trust anchor, and physical two-machine LAN evidence
+is unavailable. Destructive remote actions remain outside the normal grant.

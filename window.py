@@ -84,8 +84,8 @@ from maintenance.remote import (
     RemoteProcessActionBackend,
     RemoteService,  # noqa: F401 - retained listener patch seam
     RemoteSocketServer,
-    SocketRemoteTransport,
-    TLSRemoteTransport,  # noqa: F401 - retained transport patch seam
+    SocketRemoteTransport,  # noqa: F401 - retained transport patch seam
+    TLSRemoteTransport,
 )
 from maintenance.ui import cluster_page as ui_cluster
 from maintenance.ui import dashboard_page as ui_dashboard
@@ -450,7 +450,7 @@ class AppWindow:
             node_id,
             messagebox_module=messagebox,
             provider_cls=AuthenticatedNodeProvider,
-            transport_cls=SocketRemoteTransport,
+            transport_cls=TLSRemoteTransport,
         )
 
     def _open_cluster_node(self, node_id: str) -> None:
@@ -461,7 +461,7 @@ class AppWindow:
             self,
             node_id,
             provider_cls=AuthenticatedNodeProvider,
-            transport_cls=SocketRemoteTransport,
+            transport_cls=TLSRemoteTransport,
             backend_cls=RemoteProcessActionBackend,
             scheduler_cls=ComponentRefreshScheduler,
         )

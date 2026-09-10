@@ -135,6 +135,9 @@ def start_peer_listener(controller: Any) -> None:
 def handle_pairing_request(controller: Any, request: PairingRequest) -> bool:
     """Ask the target's local user before installing a caller grant."""
 
+    pairing_lock = controller.__dict__.setdefault("_pairing_lock", threading.Lock())
+    if not pairing_lock.acquire(blocking=False):
+        return False
     result = {"approved": False}
     completed = threading.Event()
 
@@ -145,7 +148,8 @@ def handle_pairing_request(controller: Any, request: PairingRequest) -> bool:
             (
                 f"Allow {request.caller_node_id.value} to read this system?\n\n"
                 f"Identity fingerprint: {request.identity_fingerprint}\n"
-                f"TLS fingerprint: {request.transport_fingerprint}"
+                f"TLS fingerprint: {request.transport_fingerprint}\n"
+                f"Requested permissions: {', '.join(sorted(p.value for p in request.permissions))}"
             ),
             parent=controller.master,
         )
@@ -173,9 +177,12 @@ def handle_pairing_request(controller: Any, request: PairingRequest) -> bool:
             )
         completed.set()
 
-    controller._submit_ui(ask_on_ui)
-    completed.wait(60.0)
-    return bool(result["approved"])
+    try:
+        controller._submit_ui(ask_on_ui)
+        completed.wait(60.0)
+        return bool(result["approved"])
+    finally:
+        pairing_lock.release()
 
 
 def start_discovery(controller: Any) -> None:

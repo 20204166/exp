@@ -387,6 +387,7 @@ class NetworkDiscovery:
                 or existing.port != updated.port
                 or existing.connectable != updated.connectable
                 or existing.identity_fingerprint != updated.identity_fingerprint
+                or existing.transport_fingerprint != updated.transport_fingerprint
             )
             self._peers[candidate.stable_id] = _PeerRecord(updated, candidate.last_seen)
             if changed:

@@ -46,6 +46,7 @@ def _pairing_confirmation(candidate: Any) -> str:
         f"Pair {candidate.hostname}?\n\n"
         f"Stable node ID: {candidate.stable_id}\n\n"
         f"Identity fingerprint:\n{fingerprint_text}\n\n"
+        f"TLS fingerprint: {candidate.transport_fingerprint or 'Unavailable'}\n\n"
         "Confirm this fingerprint through a trusted channel before pairing."
     )
 

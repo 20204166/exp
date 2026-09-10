@@ -46,6 +46,7 @@ from maintenance.cluster import (
 )
 from maintenance.models import ProcessActionResult, ProcessCandidate, ResourceSummary
 from maintenance.nodes import (
+    READ_PERMISSIONS,
     NodeCapability,
     NodeId,
     NodePermission,
@@ -189,10 +190,8 @@ class PairingRequest:
         if not self.transport_fingerprint:
             raise RemoteAuthError("pairing transport fingerprint is missing")
         _validate_secret(self.proposed_secret)
-        if not self.permissions <= frozenset(
-            {NodePermission(permission.value) for permission in NodePermission}
-        ):
-            raise RemoteAuthorizationError("pairing permissions are invalid")
+        if not self.permissions <= frozenset(READ_PERMISSIONS):
+            raise RemoteAuthorizationError("pairing is read-only")
 
 
 def _validate_secret(secret: str) -> None:
