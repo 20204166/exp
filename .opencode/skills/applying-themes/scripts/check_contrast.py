@@ -38,10 +38,12 @@ def luminance(hex_color: str) -> float:
         h = "".join(ch * 2 for ch in h)
     if len(h) != 6:
         raise ValueError(f"not a hex color: {hex_color!r}")
-    r, g, b = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
-    return (0.2126 * _srgb_to_linear(r)
-            + 0.7152 * _srgb_to_linear(g)
-            + 0.0722 * _srgb_to_linear(b))
+    r, g, b = (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    return (
+        0.2126 * _srgb_to_linear(r)
+        + 0.7152 * _srgb_to_linear(g)
+        + 0.0722 * _srgb_to_linear(b)
+    )
 
 
 def contrast(fg: str, bg: str) -> float:
@@ -91,36 +93,49 @@ def check_file(path: Path) -> bool:
             continue
         if fg not in palette or bg not in palette:
             missing = [t for t in (fg, bg) if t not in palette]
-            print(f"  ?? {fg} on {bg}: token(s) not in palette table: {', '.join(missing)}")
+            print(
+                f"  ?? {fg} on {bg}: token(s) not in palette table: {', '.join(missing)}"
+            )
             ok = False
             continue
         ratio = contrast(palette[fg], palette[bg])
         passed = ratio >= need
         ok &= passed
-        print(f"  {'PASS' if passed else 'FAIL'} {fg:<11} on {bg:<9} "
-              f"{ratio:5.2f}:1  (needs {need}:1 for {level})")
+        print(
+            f"  {'PASS' if passed else 'FAIL'} {fg:<11} on {bg:<9} "
+            f"{ratio:5.2f}:1  (needs {need}:1 for {level})"
+        )
     return ok
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("files", nargs="*", type=Path, help="theme markdown files")
-    ap.add_argument("--pair", nargs=2, metavar=("FG", "BG"),
-                    help="check two hex colors directly")
+    ap.add_argument(
+        "--pair", nargs=2, metavar=("FG", "BG"), help="check two hex colors directly"
+    )
     args = ap.parse_args()
 
     if args.pair:
         ratio = contrast(*args.pair)
-        verdict = ("AAA" if ratio >= 7 else "AA" if ratio >= 4.5
-                   else "AA-large/UI only" if ratio >= 3 else "FAIL")
+        verdict = (
+            "AAA"
+            if ratio >= 7
+            else "AA"
+            if ratio >= 4.5
+            else "AA-large/UI only"
+            if ratio >= 3
+            else "FAIL"
+        )
         print(f"{args.pair[0]} on {args.pair[1]}: {ratio:.2f}:1 — {verdict}")
         return 0 if ratio >= 4.5 else 1
 
     if not args.files:
         ap.error("provide theme files or --pair")
 
-    return 0 if all([check_file(f) for f in args.files]) else 1
+    return 0 if all(check_file(f) for f in args.files) else 1
 
 
 if __name__ == "__main__":

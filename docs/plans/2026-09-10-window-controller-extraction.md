@@ -222,7 +222,9 @@ def get_discovery_session(controller: Any) -> DiscoverySession:
             coordinator=controller._coordinator,
             registry=controller._node_registry,
             get_cluster_state=lambda: controller.__dict__.get("_cluster_state"),
-            set_cluster_state=lambda state: setattr(controller, "_cluster_state", state),
+            set_cluster_state=lambda state: setattr(
+                controller, "_cluster_state", state
+            ),
             save_cluster_state=controller._save_cluster_state,
             schedule_timer=controller._schedule_timer,
             cancel_timer=controller._cancel_timer,
@@ -283,6 +285,7 @@ Use wrappers with the existing signatures, for example:
 ```python
 def handle_analyze(self) -> None:
     ui_window_scan.handle_analyze(self)
+
 
 def _show_snapshot_if_current(
     self,

@@ -117,12 +117,16 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 BASE, SURFACE, LINE = HexColor("#f7f6f0"), HexColor("#fffffb"), HexColor("#dcded1")
-INK, INK2, INK3     = HexColor("#1a271a"), HexColor("#4a5a46"), HexColor("#79876f")
-ACCENT, ACCENT_INK  = HexColor("#2f6b3c"), HexColor("#f4fbf5")
+INK, INK2, INK3 = HexColor("#1a271a"), HexColor("#4a5a46"), HexColor("#79876f")
+ACCENT, ACCENT_INK = HexColor("#2f6b3c"), HexColor("#f4fbf5")
 
 # Bundled open-licensed faces from the designing-canvas-art skill
-pdfmetrics.registerFont(TTFont("Display", "../designing-canvas-art/canvas-fonts/YoungSerif-Regular.ttf"))
-pdfmetrics.registerFont(TTFont("Text",    "../designing-canvas-art/canvas-fonts/WorkSans-Regular.ttf"))
+pdfmetrics.registerFont(
+    TTFont("Display", "../designing-canvas-art/canvas-fonts/YoungSerif-Regular.ttf")
+)
+pdfmetrics.registerFont(
+    TTFont("Text", "../designing-canvas-art/canvas-fonts/WorkSans-Regular.ttf")
+)
 ```
 
 `ink-3` is the token most likely to fail in print — many printers and projectors compress the light end. For slides projected in a lit room, use `ink-2` for anything the audience must read.

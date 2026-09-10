@@ -56,4 +56,5 @@ maintenance = ["py.typed"]
 # In-tree `pip install .`/`pip install -e .` leaves build/ and *.egg-info/
 # beside the sources; keep the documented `mypy --ignore-missing-imports .`
 # gate clean by never type-checking those copies.
+files = ["maintenance", "window.py", "main.py", "algo.py", "tests"]
 exclude = "(^|/)(build|dist)/|(^|/).*\\.egg-info/"

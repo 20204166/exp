@@ -39,25 +39,40 @@ Reviewing an interface means looking at it. Reading the source and inferring how
 
 ```python
 from playwright.sync_api import sync_playwright
-URL = "http://localhost:5173"   # or file:///abs/path/index.html
+
+URL = "http://localhost:5173"  # or file:///abs/path/index.html
 
 with sync_playwright() as p:
     b = p.chromium.launch()
     pg = b.new_page(viewport={"width": 1440, "height": 900})
     errors = []
     pg.on("console", lambda m: m.type == "error" and errors.append(m.text))
-    pg.goto(URL); pg.wait_for_load_state("networkidle")
+    pg.goto(URL)
+    pg.wait_for_load_state("networkidle")
     pg.screenshot(path="/tmp/rev-desktop.png", full_page=True)
 
     # Horizontal overflow — always a bug
-    print("OVERFLOW:", pg.evaluate("""() => [...document.querySelectorAll('*')]
+    print(
+        "OVERFLOW:",
+        pg.evaluate("""() => [...document.querySelectorAll('*')]
         .filter(e => e.getBoundingClientRect().right > document.documentElement.clientWidth + 1)
-        .slice(0, 10).map(e => e.tagName + '.' + e.className)"""))
+        .slice(0, 10).map(e => e.tagName + '.' + e.className)"""),
+    )
 
     # Every distinct value actually used — the consistency audit
-    for prop in ["font-size", "font-family", "border-radius", "box-shadow", "padding", "color"]:
-        vals = pg.evaluate("""(p) => [...new Set([...document.querySelectorAll('*')]
-            .map(e => getComputedStyle(e)[p]))].filter(v => v && v!=='none' && v!=='0px')""", prop)
+    for prop in [
+        "font-size",
+        "font-family",
+        "border-radius",
+        "box-shadow",
+        "padding",
+        "color",
+    ]:
+        vals = pg.evaluate(
+            """(p) => [...new Set([...document.querySelectorAll('*')]
+            .map(e => getComputedStyle(e)[p]))].filter(v => v && v!=='none' && v!=='0px')""",
+            prop,
+        )
         print(f"{prop}: {len(vals)} distinct →", vals[:14])
 
     pg.set_viewport_size({"width": 390, "height": 844})

@@ -1345,9 +1345,13 @@ class AppCoordinatorRunTests(unittest.TestCase):
         def reject(_worker: object) -> None:
             raise RuntimeError("executor closed")
 
+        def deliver(callback: Callable[[], None]) -> None:
+            delivered.append(callback)
+            callback()
+
         coordinator = AppCoordinator(
             runner=reject,
-            deliver=lambda callback: (delivered.append(callback), callback())[1],
+            deliver=deliver,
         )
         errors: list[str] = []
 
