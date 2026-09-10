@@ -35,6 +35,7 @@ version = { attr = "maintenance._version.__version__" }
 packages = [
     "maintenance",
     "maintenance.components",
+    "maintenance.scanner_support",
     "maintenance.ui",
     "maintenance.ui.window_supports",
 ]
