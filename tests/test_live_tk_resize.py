@@ -213,7 +213,7 @@ class LiveResizeTests(unittest.TestCase):
             )
             self.assertEqual(
                 home.category_keys,
-                ("preferences", "nodes", "cluster"),
+                ("preferences", "nodes", "cluster", "diagnostics"),
             )
 
             # Settings Home -> Preferences page (real navigation via the card button)
@@ -277,6 +277,7 @@ class LiveResizeTests(unittest.TestCase):
                     "nodes",
                     "cluster",
                     "thermals",
+                    "diagnostics",
                 ),
             )
 

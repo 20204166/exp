@@ -57,6 +57,7 @@ from maintenance.nodes import (
     ProcessTerminationRequest,
     node_identity_fingerprint,
 )
+from maintenance.remote_security import certificate_fingerprint
 
 LOGGER = logging.getLogger(__name__)
 
@@ -840,11 +841,19 @@ def _recv_exact(
     length: int,
     *,
     closed_message: str = "connection closed before response",
+    cancel_event: Any | None = None,
 ) -> bytes:
     chunks: list[bytes] = []
     remaining = length
     while remaining:
-        chunk = sock.recv(remaining)
+        if cancel_event is not None and cancel_event.is_set():
+            raise RemoteExecutionError("cancelled")
+        try:
+            chunk = sock.recv(remaining)
+        except TimeoutError:
+            if cancel_event is None:
+                raise
+            continue
         if not chunk:
             raise RemoteTransportError(closed_message)
         chunks.append(chunk)
@@ -852,12 +861,28 @@ def _recv_exact(
     return b"".join(chunks)
 
 
-def _recv_frame(sock: Any, *, max_bytes: int, closed_message: str) -> bytes:
-    header = _recv_exact(sock, 4, closed_message=closed_message)
+def _recv_frame(
+    sock: Any,
+    *,
+    max_bytes: int,
+    closed_message: str,
+    cancel_event: Any | None = None,
+) -> bytes:
+    header = _recv_exact(
+        sock,
+        4,
+        closed_message=closed_message,
+        cancel_event=cancel_event,
+    )
     length = struct.unpack(">I", header)[0]
     if length > max_bytes:
         raise RemoteTransportError("envelope is too large")
-    return _recv_exact(sock, length, closed_message=closed_message)
+    return _recv_exact(
+        sock,
+        length,
+        closed_message=closed_message,
+        cancel_event=cancel_event,
+    )
 
 
 def _send_frame(sock: Any, payload: bytes, *, max_bytes: int) -> None:
@@ -906,7 +931,7 @@ class SocketRemoteTransport:
                     certificate = sock.getpeercert(binary_form=True)
                     if certificate is None:
                         raise RemoteAuthError("peer certificate is missing")
-                    fingerprint = _certificate_fingerprint(certificate)
+                    fingerprint = certificate_fingerprint(certificate)
                     if (
                         self._expected_fingerprint is not None
                         and not hmac.compare_digest(
@@ -918,18 +943,12 @@ class SocketRemoteTransport:
                     min(self._timeout, 0.25) if cancel_event else self._timeout
                 )
                 _send_frame(sock, data, max_bytes=MAX_ENVELOPE_BYTES)
-                if cancel_event is None:
-                    body = _recv_frame(
-                        sock,
-                        max_bytes=MAX_ENVELOPE_BYTES,
-                        closed_message="connection closed before response",
-                    )
-                else:
-                    header = _recv_exact_with_cancel(sock, 4, cancel_event)
-                    length = struct.unpack(">I", header)[0]
-                    if length > MAX_ENVELOPE_BYTES:
-                        raise RemoteTransportError("envelope is too large")
-                    body = _recv_exact_with_cancel(sock, length, cancel_event)
+                body = _recv_frame(
+                    sock,
+                    max_bytes=MAX_ENVELOPE_BYTES,
+                    closed_message="connection closed before response",
+                    cancel_event=cancel_event,
+                )
         except RemoteTransportError:
             raise
         except RemoteAuthError:
@@ -945,11 +964,6 @@ class SocketRemoteTransport:
             return body.decode("utf-8")
         except UnicodeDecodeError as error:
             raise RemoteProtocolError("response is not valid UTF-8") from error
-
-
-def _certificate_fingerprint(certificate: bytes) -> str:
-    digest = hashlib.sha256(certificate).hexdigest()
-    return ":".join(digest[index : index + 4] for index in range(0, 64, 4))
 
 
 class TLSRemoteTransport(SocketRemoteTransport):
@@ -972,23 +986,6 @@ class TLSRemoteTransport(SocketRemoteTransport):
             ssl_context=client_context(),
             expected_fingerprint=expected_fingerprint,
         )
-
-
-def _recv_exact_with_cancel(sock: Any, length: int, cancel_event: Any) -> bytes:
-    chunks: list[bytes] = []
-    remaining = length
-    while remaining:
-        if cancel_event.is_set():
-            raise RemoteExecutionError("cancelled")
-        try:
-            chunk = sock.recv(remaining)
-        except TimeoutError:
-            continue
-        if not chunk:
-            raise RemoteTransportError("connection closed before response")
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
 
 
 class RemoteSocketServer:

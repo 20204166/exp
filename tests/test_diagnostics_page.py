@@ -20,7 +20,11 @@ def empty_snapshot() -> DiagnosticsSnapshot:
 class DiagnosticsPageTests(unittest.TestCase):
     def make_page(self):
         recorder = WidgetRecorder()
-        callbacks = DiagnosticsPageCallbacks(on_back=Mock(), on_copy=Mock())
+        back_callback = Mock()
+        copy_callback = Mock()
+        callbacks = DiagnosticsPageCallbacks(
+            on_back=back_callback, on_copy=copy_callback
+        )
         page = DiagnosticsPage(
             recorder.parent(),
             callbacks=callbacks,
@@ -33,20 +37,20 @@ class DiagnosticsPageTests(unittest.TestCase):
             canvas_cls=recorder.canvas_cls(),
             scrollbar_cls=recorder.scrollbar_cls(),
         )
-        return page, callbacks, recorder
+        return page, callbacks, copy_callback, recorder
 
     def test_empty_state_messages_are_visible(self) -> None:
-        _page, _callbacks, recorder = self.make_page()
+        _page, _callbacks, _copy_callback, recorder = self.make_page()
         texts = recorder.label_texts()
         self.assertIn("No recent failures", texts)
         self.assertIn("Nothing currently running", texts)
         self.assertIn("No remote nodes configured", texts)
 
     def test_copy_callback_receives_serialized_snapshot(self) -> None:
-        page, callbacks, _recorder = self.make_page()
+        page, _callbacks, copy_callback, _recorder = self.make_page()
         page.copy_button.kwargs["command"]()
-        callbacks.on_copy.assert_called_once()
-        self.assertIn("components", callbacks.on_copy.call_args.args[0])
+        copy_callback.assert_called_once()
+        self.assertIn("components", copy_callback.call_args.args[0])
 
 
 if __name__ == "__main__":

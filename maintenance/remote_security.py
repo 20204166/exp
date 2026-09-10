@@ -18,6 +18,13 @@ class TLSMaterial:
     fingerprint: str
 
 
+def certificate_fingerprint(certificate: bytes) -> str:
+    """Return the stable display/pinning fingerprint for DER certificate bytes."""
+
+    digest = hashlib.sha256(certificate).hexdigest()
+    return ":".join(digest[index : index + 4] for index in range(0, 64, 4))
+
+
 def ensure_tls_material(directory: Path, node_id: str) -> TLSMaterial:
     directory.mkdir(parents=True, exist_ok=True)
     certificate = directory / "peer-tls.crt"
@@ -54,9 +61,7 @@ def ensure_tls_material(directory: Path, node_id: str) -> TLSMaterial:
     os.chmod(private_key, 0o600)
     os.chmod(certificate, 0o644)
     der = ssl.PEM_cert_to_DER_cert(certificate.read_text(encoding="ascii"))
-    digest = hashlib.sha256(der).hexdigest()
-    fingerprint = ":".join(digest[index : index + 4] for index in range(0, 64, 4))
-    return TLSMaterial(certificate, private_key, fingerprint)
+    return TLSMaterial(certificate, private_key, certificate_fingerprint(der))
 
 
 def server_context(material: TLSMaterial) -> ssl.SSLContext:

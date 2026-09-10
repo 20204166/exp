@@ -794,6 +794,22 @@ class SocketTransportTests(unittest.TestCase):
                 closed_message="connection closed before request",
             )
 
+    def test_frame_receive_cancellation_is_checked_after_timeout(self) -> None:
+        cancel_event = threading.Event()
+
+        class TimeoutThenCancelSocket:
+            def recv(self, _length):
+                cancel_event.set()
+                raise TimeoutError
+
+        with self.assertRaises(RemoteExecutionError):
+            _recv_frame(
+                TimeoutThenCancelSocket(),
+                max_bytes=10,
+                closed_message="connection closed before response",
+                cancel_event=cancel_event,
+            )
+
     def test_loopback_socket_round_trip(self) -> None:
         service = _service()
         server = RemoteSocketServer(service)
