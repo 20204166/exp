@@ -316,6 +316,13 @@ rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/system-analyzer.desktop
 python -m unittest discover -s tests -v
 ```
 
+For the declared Python 3.10 floor, install the test compatibility dependency
+before running the suite:
+
+```sh
+python -m pip install -r requirements-dev.txt
+```
+
 GUI tests use fake masters/widgets (or a live Tk root only when a display is
 available) so the suite runs headless. Static checks:
 

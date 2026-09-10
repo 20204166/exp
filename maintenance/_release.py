@@ -249,14 +249,12 @@ def write_current_version(package_dir: Path, version: str) -> None:
 
 
 def rewrite_sha256sums(dist_dir: Path) -> None:
-    wheels: list[tuple[tuple[int, int, int, int], Path]] = []
-    for wheel in dist_dir.glob("system_analyzer-*.whl"):
-        match = _WHEEL_NAME_RE.match(wheel.name)
-        if match is None:
-            continue
-        wheels.append((_parse_version(match.group(1)), wheel))
-    wheels.sort()
-    lines = [f"{_sha256_bytes(path.read_bytes())}  {path.name}" for _, path in wheels]
+    wheel = _newest_wheel(dist_dir)
+    lines = (
+        [f"{_sha256_bytes(wheel.read_bytes())}  {wheel.name}"]
+        if wheel is not None
+        else []
+    )
     (dist_dir / "SHA256SUMS").write_text(
         "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
     )

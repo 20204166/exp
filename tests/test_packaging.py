@@ -3,14 +3,14 @@
 import unittest
 from pathlib import Path
 
-import tomllib
+from tests.support.toml import load as toml_load
 
 REPO = Path(__file__).parents[1]
 
 
 def _pyproject() -> dict:
     with (REPO / "pyproject.toml").open("rb") as file:
-        return tomllib.load(file)
+        return toml_load(file)
 
 
 class PyprojectConfigurationTests(unittest.TestCase):

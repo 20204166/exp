@@ -52,6 +52,10 @@ py-modules = [
 "*" = ["*.md"]
 maintenance = ["py.typed"]
 
+[tool.ruff]
+# Wheels and audit/history directories are not production Python sources.
+exclude = ["build", "dist", "docs/bug_hunts", ".opencode", ".venv", "tools"]
+
 [tool.mypy]
 # In-tree `pip install .`/`pip install -e .` leaves build/ and *.egg-info/
 # beside the sources; keep the documented `mypy --ignore-missing-imports .`

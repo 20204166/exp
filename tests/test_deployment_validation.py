@@ -8,16 +8,29 @@ from email.parser import Parser
 from pathlib import Path
 from zipfile import ZipFile
 
-import tomllib
+from tests.support.toml import load as toml_load
 
 REPO = Path(__file__).parents[1]
 
 
 def latest_wheel() -> Path:
-    wheels = sorted((REPO / "dist").glob("system_analyzer-*.whl"))
+    wheels = list((REPO / "dist").glob("system_analyzer-*.whl"))
     if not wheels:
         raise AssertionError("no built system_analyzer wheel found in dist/")
-    return wheels[-1]
+    return max(wheels, key=_wheel_version)
+
+
+def _wheel_version(path: Path) -> tuple[int, int, int, int]:
+    version = path.name.removeprefix("system_analyzer-").removesuffix(
+        "-py3-none-any.whl"
+    )
+    try:
+        parts = tuple(int(part) for part in version.split("."))
+    except ValueError as error:
+        raise AssertionError(f"invalid wheel filename: {path.name}") from error
+    if len(parts) != 4:
+        raise AssertionError(f"invalid wheel filename: {path.name}")
+    return parts  # type: ignore[return-value]
 
 
 def wheel_members(path: Path) -> set[str]:
@@ -55,7 +68,7 @@ def wheel_metadata(path: Path) -> tuple[str, list[str], str]:
 
 def _project() -> dict:
     with (REPO / "pyproject.toml").open("rb") as file:
-        return tomllib.load(file)
+        return toml_load(file)
 
 
 class BuiltWheelTests(unittest.TestCase):

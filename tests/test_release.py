@@ -164,25 +164,21 @@ class WheelManifestTests(unittest.TestCase):
             self.assertEqual(second, version_after_first)
             self.assertEqual(_release.read_current_version(root), version_after_first)
 
-    def test_rewrite_sha256sums_sorts_and_matches(self) -> None:
+    def test_rewrite_sha256sums_contains_only_newest_wheel(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _make_package(root, "1.0.0.0")
-            older = _wheel_from_package(root, "1.0.0.0")
+            _wheel_from_package(root, "1.0.0.0")
             newer = _wheel_from_package(root, "1.1.0.0")
             _release.rewrite_sha256sums(root / "dist")
             lines = (root / "dist" / "SHA256SUMS").read_text().splitlines()
 
-            self.assertEqual(len(lines), 2)
+            self.assertEqual(len(lines), 1)
             self.assertTrue(
-                lines[0].endswith("system_analyzer-1.0.0.0-py3-none-any.whl"), lines[0]
+                lines[0].endswith("system_analyzer-1.1.0.0-py3-none-any.whl"), lines[0]
             )
-            self.assertTrue(
-                lines[1].endswith("system_analyzer-1.1.0.0-py3-none-any.whl"), lines[1]
-            )
-            for line, wheel in zip(lines, sorted([older, newer])):
-                expected = hashlib.sha256(wheel.read_bytes()).hexdigest()
-                self.assertEqual(line.split()[0], expected)
+            expected = hashlib.sha256(newer.read_bytes()).hexdigest()
+            self.assertEqual(lines[0].split()[0], expected)
 
 
 class WheelVerifyTests(unittest.TestCase):

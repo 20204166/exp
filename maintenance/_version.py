@@ -7,4 +7,4 @@ module so setuptools can read it at build time without importing Tkinter or
 the optional psutil/pynvml modules.
 """
 
-__version__ = "1.4.8.1"
+__version__ = "1.4.8.2"
