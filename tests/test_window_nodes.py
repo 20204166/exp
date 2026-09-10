@@ -35,10 +35,11 @@ from maintenance.nodes import (
     node_identity_fingerprint,
     node_operation_key,
 )
+from maintenance.ui import window_node_actions
 from maintenance.ui.render_coordinator import UICoordinator
 from maintenance.ui.window_supports import node_specs
 from tests.support.models import make_snapshot, make_summary
-from tests.support.scheduling import TimerMaster
+from tests.support.scheduling import DeferredRunner, TimerMaster
 from window import AppWindow
 
 
@@ -342,6 +343,148 @@ class WindowNodeSelectorTests(unittest.TestCase):
             _trusted_context("dev", "Dev Node", cpu_value="x", host_label="dev")
         )
         self.assertTrue(window._multi_node_selectable())
+
+
+class WindowNodeConnectionTests(unittest.TestCase):
+    def _window(self, runner: DeferredRunner) -> Any:
+        window = _make_window(start_discovery=False)
+        window._cluster_state = ClusterState(
+            local_node_id="local",
+            trusted_nodes=(
+                trusted_node_record(
+                    node_id="peer-a",
+                    display_name="Peer A",
+                    hostname="peer-a",
+                    host="192.0.2.10",
+                    port=5000,
+                    secret="secret",
+                ),
+            ),
+        )
+        window._coordinator = AppCoordinator(
+            runner=runner,
+            deliver=lambda callback: callback(),
+        )
+        return window
+
+    @staticmethod
+    def _provider(result: dict[str, Any]) -> Mock:
+        provider = Mock()
+        provider.hello.return_value = result
+        return provider
+
+    def test_test_connection_submits_node_qualified_coordinator_run(self) -> None:
+        runner = DeferredRunner()
+        window = self._window(runner)
+        provider_cls = Mock(return_value=self._provider({"node_id": "peer-a"}))
+
+        window_node_actions.test_connection(
+            window,
+            "peer-a",
+            provider_cls=provider_cls,
+            transport_cls=Mock,
+        )
+
+        key = "node:peer-a:test_connection"
+        self.assertEqual(runner.pending, 1)
+        self.assertTrue(window._coordinator.in_flight(key))
+
+    def test_test_connection_delivers_success(self) -> None:
+        runner = DeferredRunner()
+        window = self._window(runner)
+        messages = Mock()
+        provider_cls = Mock(
+            return_value=self._provider({"node_id": "peer-a", "app_version": "x"})
+        )
+
+        window_node_actions.test_connection(
+            window,
+            "peer-a",
+            messagebox_module=messages,
+            provider_cls=provider_cls,
+            transport_cls=Mock,
+        )
+        runner.run_next()
+
+        messages.showinfo.assert_called_once()
+        messages.showerror.assert_not_called()
+
+    def test_test_connection_delivers_provider_error(self) -> None:
+        runner = DeferredRunner()
+        window = self._window(runner)
+        messages = Mock()
+        provider_cls = Mock(side_effect=RuntimeError("connection refused"))
+
+        window_node_actions.test_connection(
+            window,
+            "peer-a",
+            messagebox_module=messages,
+            provider_cls=provider_cls,
+            transport_cls=Mock,
+        )
+        runner.run_next()
+
+        messages.showerror.assert_called_once()
+        self.assertIn("connection refused", messages.showerror.call_args.args[1])
+
+    def test_cancelled_test_connection_drops_late_success(self) -> None:
+        runner = DeferredRunner()
+        window = self._window(runner)
+        messages = Mock()
+        provider_cls = Mock(
+            return_value=self._provider({"node_id": "peer-a", "app_version": "x"})
+        )
+        key = "node:peer-a:test_connection"
+
+        window_node_actions.test_connection(
+            window,
+            "peer-a",
+            messagebox_module=messages,
+            provider_cls=provider_cls,
+            transport_cls=Mock,
+        )
+        cancel_event = window._coordinator.state(key).cancel_event
+        self.assertIsNotNone(cancel_event)
+        window._coordinator.cancel(key)
+        self.assertTrue(cancel_event.is_set())  # type: ignore[union-attr]
+        runner.run_next()
+
+        messages.showinfo.assert_not_called()
+
+    def test_stale_test_connection_result_cannot_replace_cancelled_run(self) -> None:
+        runner = DeferredRunner()
+        window = self._window(runner)
+        messages = Mock()
+        first = self._provider({"node_id": "peer-a", "app_version": "old"})
+        replacement = self._provider(
+            {"node_id": "peer-a", "app_version": "replacement"}
+        )
+        provider_cls = Mock(side_effect=[first, replacement])
+        key = "node:peer-a:test_connection"
+
+        window_node_actions.test_connection(
+            window,
+            "peer-a",
+            messagebox_module=messages,
+            provider_cls=provider_cls,
+            transport_cls=Mock,
+        )
+        window._coordinator.cancel(key)
+        window_node_actions.test_connection(
+            window,
+            "peer-a",
+            messagebox_module=messages,
+            provider_cls=provider_cls,
+            transport_cls=Mock,
+        )
+
+        runner.run_next()
+        messages.showinfo.assert_not_called()
+        self.assertEqual(runner.pending, 1)
+        runner.run_next()
+
+        messages.showinfo.assert_called_once()
+        self.assertIn("replacement", messages.showinfo.call_args.args[1])
 
 
 class WindowNodeSwitchingTests(unittest.TestCase):

@@ -13,7 +13,6 @@ from typing import Any
 
 from maintenance.cluster import ClusterState, PeerGrantRecord, trusted_node_record
 from maintenance.components.coordinator import ComponentRefreshScheduler
-from maintenance.dialogs import run_in_thread
 from maintenance.nodes import (
     READ_PERMISSIONS,
     NodeCapability,
@@ -473,7 +472,6 @@ def test_connection(
     messagebox_module: Any = messagebox,
     provider_cls: Any = AuthenticatedNodeProvider,
     transport_cls: Any = SocketRemoteTransport,
-    run_in_thread_fn: Any = run_in_thread,
 ) -> None:
     record = controller._cluster_state.record(node_id)
     if record is None:
@@ -526,7 +524,20 @@ def test_connection(
             parent=controller.master,
         )
 
-    run_in_thread_fn(controller.master, task, on_success, on_error)
+    key = node_operation_key(node, "test_connection")
+
+    def coordinated_task(
+        _cancel_event: threading.Event,
+        _progress: Callable[[str], None],
+    ) -> dict[str, Any]:
+        return task()
+
+    controller._coordinator.run(
+        key,
+        coordinated_task,
+        on_result=lambda _key, result: on_success(result),
+        on_error=lambda _key, message: on_error(message),
+    )
 
 
 def open_cluster_node(controller: Any, node_id: str) -> None:

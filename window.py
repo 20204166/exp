@@ -50,7 +50,6 @@ from maintenance.dialogs import (
     ProcessDialog,  # noqa: F401 - retained dialog patch seam
     ResourceCard,
     StorageDialog,  # noqa: F401 - retained dialog patch seam
-    run_in_thread,
 )
 from maintenance.models import (
     CapabilityState,
@@ -451,7 +450,6 @@ class AppWindow:
             messagebox_module=messagebox,
             provider_cls=AuthenticatedNodeProvider,
             transport_cls=SocketRemoteTransport,
-            run_in_thread_fn=run_in_thread,
         )
 
     def _open_cluster_node(self, node_id: str) -> None:
