@@ -1,6 +1,7 @@
 import threading
 import tkinter as tk
 import unittest
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -501,6 +502,55 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
             self.assertTrue(cancel_event.is_set())
             runner.run_next()
 
+        dialog.on_changed.assert_not_called()
+        dialog.scan.assert_not_called()
+        show_result.assert_not_called()
+
+    def test_trash_delivery_stays_on_injected_ui_boundary(self) -> None:
+        runner = DeferredRunner()
+        delivery_threads: list[threading.Thread] = []
+
+        def deliver(callback: Callable[[], None]) -> None:
+            delivery_threads.append(threading.current_thread())
+            callback()
+
+        dialog = self._dialog()
+        dialog.coordinator = AppCoordinator(runner=runner, deliver=deliver)
+        dialog.tree = FakeTree(("0",))
+        dialog.candidates = {
+            "0": FileCandidate(
+                Path("x"),
+                1,
+                datetime.now(timezone.utc),
+                "large",
+            )
+        }
+        dialog.manager = Mock(
+            move_to_trash=Mock(return_value=FileActionResult(1, (), ()))
+        )
+        dialog.scan = Mock()
+        dialog.on_changed = Mock()
+        dialog._read_only = False
+
+        with (
+            patch("maintenance.dialogs.messagebox.askyesno", return_value=True),
+            patch("maintenance.dialogs.show_action_result") as show_result,
+        ):
+            dialog.move_selected()
+
+            self.assertEqual(runner.pending, 1)
+            self.assertTrue(dialog.coordinator.in_flight("storage_trash"))
+            dialog._closed = True
+            dialog.coordinator.cancel("storage_trash")
+            cancel_event = dialog.coordinator.state("storage_trash").cancel_event
+            self.assertIsNotNone(cancel_event)
+            assert cancel_event is not None
+            self.assertTrue(cancel_event.is_set())
+            dialog.coordinator.cancel("storage_trash")
+            runner.run_next()
+
+        dialog.manager.move_to_trash.assert_called_once_with([Path("x")])
+        self.assertEqual(delivery_threads, [threading.main_thread()])
         dialog.on_changed.assert_not_called()
         dialog.scan.assert_not_called()
         show_result.assert_not_called()

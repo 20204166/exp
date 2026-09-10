@@ -29,7 +29,7 @@ baseline tests prove the stated property.
 | `AppCoordinator` | `run` claims one per-key state and invokes the injected runner. Default runner is `ThreadPoolExecutor(max_workers=4)`; tests inject deferred runners. | One in-flight run per key plus one coalesced rerun; state is retained per key. | Cooperative `threading.Event`; cancellation holds in-flight until completion delivery. No generic operation timeout. | Every progress, success, error, and cancellation callback goes through injected `deliver`; default delivery is synchronous for tests. | Generation checks drop late completion; cancellation drops progress/results and wakes subscribers. `cancel_all` and `shutdown(wait=False, cancel_futures=True)` exist. Node binding is caller-owned, not intrinsic. | Focused baseline passed coordinator run/cancel/coalescing and delivery tests; `test_two_hundred_cycles_keep_state_bounded`, `test_two_hundred_open_close_cycles_clear_subscribers`, and `test_cancel_all_wakes_each_tracked_operation_once` passed in the focused command. Failed-submission behavior is source-visible but has no dedicated baseline test. |
 | `DashboardScanLifecycle` + `BackgroundOrchestrator` | Dashboard provider work runs in a daemon thread through `run_in_background`; lifecycle owns scan generation and state. | Background queue carries callbacks and finished markers; task count and busy state are maintained by `BackgroundOrchestrator`. Polling is scheduled only from the main thread. | Lifecycle creates a cancellation event, schedules timeout and grace timers, cancels cooperatively, and retains a timed-out lease until worker completion or grace expiry. | Worker callbacks enter the queue; `drain_queue` invokes delivered callbacks and batches render work through the injected render coordinator. | Lifecycle rejects old generations and closing state; reruns are scheduled after resolution. Node generation/id checks occur in `window_scan.py`. Shutdown cancellation is wired from `window_lifecycle.finalize_shutdown`. | `test_start_orders_state_timer_then_worker_and_coalesces_rerun`, `test_timeout_reports_immediately_and_worker_completion_releases_lease`, `test_late_generation_cannot_resolve_current_scan`, and background queue close/poll tests passed. |
 | Dialog scans and process actions via `AppCoordinator` | Dialog scan tasks accept cancel event/progress callback; process action and node activation tasks use coordinator keys and callbacks. Work is runner-dependent, defaulting to the shared executor. | Per-operation keys prevent scan/process interference; duplicate dialog scans subscribe or coalesce. | Cooperative cancellation; dialog close unsubscribes/cancels its scan. Action-specific cancellation semantics are specialized to the dialog. | Shared coordinator delivery; dialog callbacks update widgets only after delivery. Standalone dialogs use `TkDeliveryQueue` through `_standalone_coordinator`. | Generation and subscriber removal prevent stale dialog delivery. Node activation additionally checks closing state, generation, identity, and current registry context. | Storage shared-scan tests, `test_process_and_storage_keys_stay_isolated_on_one_coordinator`, coordinator delivery tests, and node tests are present; standalone action lifecycle coverage is NOT VERIFIED by the focused baseline. |
-| `BackgroundTaskRunner` / `TkDeliveryQueue` | `BackgroundTaskRunner` starts one daemon `threading.Thread` per submitted task. It supports a plain task or a progress task with an event. | Internal `Queue` buffers worker callbacks for real Tk widgets; non-Tk fakes use `after` directly. No concurrency limit or coalescing. | Optional cooperative event only; no timeout or cancellation owner. Widget destruction closes the delivery queue and cancels its timer where possible. | Queue drain is scheduled with `widget.after`; callback invocation catches Tk teardown errors. | No generation or node binding. Delivery is suppressed after widget destruction/closure. Runner has no shutdown method. | `test_real_tk_delivery_queue_never_calls_after_from_worker`, `test_run_ignores_runtime_error_during_widget_teardown`, and legacy delegation tests passed. `StorageDialog.move_selected` still uses this path at baseline. |
+| `BackgroundTaskRunner` / `TkDeliveryQueue` | `BackgroundTaskRunner` starts one daemon `threading.Thread` per submitted task. It supports a plain task or a progress task with an event. | Internal `Queue` buffers worker callbacks for real Tk widgets; non-Tk fakes use `after` directly. No concurrency limit or coalescing. | Optional cooperative event only; no timeout or cancellation owner. Widget destruction closes the delivery queue and cancels its timer where possible. | Queue drain is scheduled with `widget.after`; callback invocation catches Tk teardown errors. | No generation or node binding. Delivery is suppressed after widget destruction/closure. Runner has no shutdown method. | `test_real_tk_delivery_queue_never_calls_after_from_worker`, `test_run_ignores_runtime_error_during_widget_teardown`, and legacy delegation tests passed. Storage cleanup no longer uses this path after the coordinator migration. |
 | CPU sampler (`SystemScanner` / dashboard scanner support) | One persistent daemon worker per scanner waits on a request event and publishes one non-blocking `psutil.cpu_percent` sample. | Request/result events serialize requests; `_start_cpu_worker` refuses to create a second live worker. | Request wait honors scan cancellation in polling slices; sampler stop sets stop/request events and joins for up to one second. No per-sample timeout beyond the bounded wait. | The scanner returns the sample to its caller; Tk handoff is owned by the enclosing scan path. | Stop is idempotent. No generation is needed for CPU samples; node binding is owned by the scanner/provider context. | Source plus Task 5 `CpuSamplingTests` passed; exact process thread count is NOT VERIFIED. |
 | GPU probe (`scanner_support/gpu.py`) | Each probe uses a daemon `threading.Thread`; caller joins only for `GPU_QUERY_TIMEOUT_SECONDS`. | Lock-protected in-flight flag refuses stacked probes; one probe is active per scanner. | Explicit join timeout; a wedged call is abandoned. Stop increments query generation and invalidates late `finally` cleanup without joining. | Probe result returns to the calling scan worker; enclosing application path owns Tk delivery. | Generation protects a newer query from an old completion. Node binding is provided by the scanner instance/caller. | Source plus Task 5 `GpuConcurrencyTests` passed; provider interruption after abandon is NOT VERIFIED. |
 | `RemoteSocketServer` | Listener runs on one daemon thread; `ThreadingTCPServer` creates daemon request handlers. | `BoundedSemaphore(max_active_handlers)` rejects over-admission; server `request_queue_size` is 16. | Per-socket timeout bounds idle/malformed clients; service cancellation is cooperative at the request/service layer. | Framed response returns over the socket, never through Tk. | `stop` calls server shutdown and close; `daemon_threads=True` and `block_on_close=False` keep shutdown bounded. Authentication and request identity are service-owned. | Source proves admission, frame-size, timeout, and shutdown settings. `test_cancelled_request_raises_before_send` and `test_socket_server_shutdown_releases_handler_permits` exist but were not part of the focused baseline command. |
@@ -38,12 +38,11 @@ baseline tests prove the stated property.
 
 ## Duplicate Mechanisms Proven
 
-At this baseline, `BackgroundTaskRunner` is a second general-purpose submission
-and Tk-delivery mechanism alongside `AppCoordinator`. The proven internal callers
-are `StorageDialog.move_selected` and the default-injected path of
-`window_node_actions.test_connection`. The plan explicitly targets Storage cleanup
-for later migration; the test-connection caller remains an unresolved scope
-question rather than being omitted from this audit.
+`BackgroundTaskRunner` remains a second general-purpose submission and Tk-delivery
+mechanism alongside `AppCoordinator`, but the two proven internal callers have
+been migrated. `StorageDialog.move_selected` now uses the dialog coordinator's
+`storage_trash` key, and `window_node_actions.test_connection` now uses the
+window coordinator's node-qualified `test_connection` key.
 
 The legacy runner itself is also an exported compatibility surface through
 `maintenance.components` and is covered by tests. No compatibility surface is
@@ -83,15 +82,28 @@ NOT VERIFIED and must not be inferred from these tests.
 
 ## Tk Delivery Verification
 
-The focused baseline passed the coordinator delivery test and the
-`BackgroundTaskRunner` real-Tk delivery/teardown tests. Task 5 additionally
-passed window queue delivery and late-payload tests, dashboard stale-generation
-tests, discovery late-event tests, and node stale/cancelled-result tests. Source
-shows that `AppCoordinator`, `BackgroundOrchestrator`, and `TkDeliveryQueue`
-route worker callbacks through injected delivery, a queue, or `after`; no
-inspected worker path intentionally calls Tk directly. Remote handlers return
-over sockets and never use Tk. Main-thread delivery for every specialized
-worker, and a global queue bound, are NOT VERIFIED by this task.
+The Task 6 Storage boundary test uses `DeferredRunner` and an injected
+`deliver` callback. It proves that the manager runs only when the deferred worker
+executes, delivery records the main thread, and closing/cancelling before result
+settlement prevents `show_action_result`, `on_changed`, and `scan` callbacks.
+The existing coordinator, dashboard, standalone Tk queue, remote, and node
+tests below provide the remaining delivery and stale-generation evidence.
+
+| Path | Worker emits | Delivery seam | Stale/closed guard | Evidence |
+|---|---|---|---|---|
+| AppCoordinator operation | result/error/progress | injected `deliver` | key generation and cancelled state | `tests.test_components.AppCoordinatorRunTests.test_run_delivers_progress_and_result_through_delivery`; `tests.test_components.AppCoordinatorRunTests.test_failed_submission_delivers_error_and_settles_run` |
+| Dashboard scan | snapshot/error/finished marker | `BackgroundOrchestrator` queue + `TimerDelivery` | scan generation/node id/closing | `tests.test_dashboard_scan.DashboardScanLifecycleTests.test_timeout_reports_immediately_and_worker_completion_releases_lease`; `tests.test_window.AppWindowTests.test_late_scan_completion_after_timeout_is_dropped` |
+| Dialog standalone fallback | result/error/progress | `TkDeliveryQueue` | widget destroy/closed state | `tests.test_storage_dialog.StorageDialogTests.test_worker_delivery_ignores_runtime_error_during_tk_teardown`; `tests.test_components.BackgroundTaskRunnerTests.test_run_ignores_runtime_error_during_widget_teardown` |
+| Storage cleanup | `FileActionResult` | injected `AppCoordinator.deliver` | cancelled/closed dialog state | `tests.test_storage_dialog.StorageDialogCoordinatorTests.test_trash_delivery_stays_on_injected_ui_boundary`; `tests.test_storage_dialog.StorageDialogCoordinatorTests.test_close_cancels_trash_and_late_result_is_ignored` |
+| Remote handler | framed response | socket, never Tk | request auth and service bounds | `tests.test_remote_contract.RemoteServiceRoundTripTests.test_cancelled_request_raises_before_send`; `tests.test_remote_contract.SocketTransportTests.test_socket_server_shutdown_releases_handler_permits` |
+
+Task 6 delivery/stale-generation command:
+
+```text
+python -m unittest tests.test_components tests.test_background_orchestration tests.test_render_coordinator tests.test_window_nodes tests.test_storage_dialog -v
+```
+
+Exact result: `Ran 197 tests in 9.065s` followed by `OK` (process exit 0).
 
 ## Task 5 Specialized-Lifecycle Verification
 
