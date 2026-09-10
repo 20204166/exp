@@ -41,12 +41,13 @@ def _pairing_confirmation(candidate: Any) -> str:
     """Keep the full identity values readable without changing their value."""
 
     fingerprint = candidate.identity_fingerprint or "Unavailable"
+    transport_fingerprint = getattr(candidate, "transport_fingerprint", None)
     fingerprint_text = "\n".join(fingerprint_lines(fingerprint))
     return (
         f"Pair {candidate.hostname}?\n\n"
         f"Stable node ID: {candidate.stable_id}\n\n"
         f"Identity fingerprint:\n{fingerprint_text}\n\n"
-        f"TLS fingerprint: {candidate.transport_fingerprint or 'Unavailable'}\n\n"
+        f"TLS fingerprint: {transport_fingerprint or 'Unavailable'}\n\n"
         "Confirm this fingerprint through a trusted channel before pairing."
     )
 
