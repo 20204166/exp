@@ -2,6 +2,7 @@
 
 import json
 import socket
+import threading
 import time
 import unittest
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from typing import Any, cast
 
 from maintenance.cluster import (
     ClusterDataError,
+    node_snapshot_to_dict,
     process_action_result_from_dict,
     process_action_result_to_dict,
     resource_summary_to_dict,
@@ -28,9 +30,13 @@ from maintenance.nodes import (
     NodePermission,
     NodeSnapshot,
     NodeStatus,
+    ProcessActionKind,
+    ProcessRef,
+    ProcessTerminationRequest,
 )
 from maintenance.remote import (
     DEFAULT_FRESHNESS_SECONDS,
+    MAX_ENVELOPE_BYTES,
     READ_CAPABILITIES,
     AuthenticatedNodeProvider,
     MemoryRemoteTransport,
@@ -42,6 +48,7 @@ from maintenance.remote import (
     RemoteService,
     RemoteSocketServer,
     RemoteTransportError,
+    RemoteUnavailableError,
     ReplayCache,
     SocketRemoteTransport,
     _recv_frame,
@@ -113,6 +120,7 @@ def _service(
     provider=None,
     capabilities=READ_CAPABILITIES,
     secret=SECRET,
+    permissions=None,
 ) -> RemoteService:
     return RemoteService(
         node_id=NodeId("peer"),
@@ -124,6 +132,7 @@ def _service(
         provider=provider or FakeProvider(),
         secret=secret,
         app_version="1.2.4.0",
+        permissions=permissions,
     )
 
 
@@ -262,6 +271,163 @@ class SigningAndVerificationTests(unittest.TestCase):
 
 
 class RemoteServiceRoundTripTests(unittest.TestCase):
+    def test_remote_cleanup_rejects_arbitrary_path(self) -> None:
+        request = sign_request(
+            node_id="peer",
+            op="cleanup",
+            params={"path": "/etc/passwd"},
+            request_id="arbitrary-path",
+            nonce="arbitrary-path-nonce",
+            timestamp=time.time(),
+            secret=SECRET,
+        )
+
+        with self.assertRaises(RemoteProtocolError):
+            _service().handle(json.dumps(request))
+
+    def test_process_action_requires_matching_allowlisted_kind(self) -> None:
+        request = sign_request(
+            node_id="peer",
+            op="process_request_quit",
+            params={"processes": [{"pid": 42}], "action": "kill"},
+            request_id="bad-action",
+            nonce="bad-action-nonce",
+            timestamp=time.time(),
+            secret=SECRET,
+        )
+        service = _service(
+            capabilities=frozenset({NodeCapability.PROCESS_TERMINATION}),
+            permissions=frozenset({NodePermission.PROCESS_TERMINATION}),
+        )
+        with self.assertRaises(RemoteProtocolError):
+            service.handle(json.dumps(request))
+
+    def test_process_action_requires_create_time(self) -> None:
+        request = sign_request(
+            node_id="peer",
+            op="process_request_quit",
+            params={"processes": [{"pid": 42}], "action": "request_quit"},
+            request_id="missing-create-time",
+            nonce="missing-create-time-nonce",
+            timestamp=time.time(),
+            secret=SECRET,
+        )
+        service = _service(
+            capabilities=frozenset({NodeCapability.PROCESS_TERMINATION}),
+            permissions=frozenset({NodePermission.PROCESS_TERMINATION}),
+        )
+        with self.assertRaises(RemoteProtocolError):
+            service.handle(json.dumps(request))
+
+    def test_same_destructive_request_id_is_rejected_with_fresh_nonce(self) -> None:
+        class FakeProcessManager:
+            def request_quit(self, pids, create_times):
+                return ProcessActionResult(len(pids), tuple(pids), (), ())
+
+        service = RemoteService(
+            node_id=NodeId("peer"),
+            display_name="Peer",
+            hostname="peer-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=frozenset({NodeCapability.PROCESS_TERMINATION}),
+            permissions=frozenset({NodePermission.PROCESS_TERMINATION}),
+            provider=FakeProvider(),
+            process_manager=FakeProcessManager(),
+            secret=SECRET,
+        )
+        params = {
+            "processes": [{"pid": 42, "create_time": 10.5}],
+            "action": "request_quit",
+        }
+        first = sign_request(
+            node_id="peer",
+            op="process_request_quit",
+            params=params,
+            request_id="same-id",
+            nonce="nonce-one",
+            timestamp=time.time(),
+            secret=SECRET,
+        )
+        second = dict(first)
+        second["nonce"] = "nonce-two"
+        second["sig"] = sign_request(
+            node_id="peer",
+            op="process_request_quit",
+            params=params,
+            request_id="same-id",
+            nonce="nonce-two",
+            timestamp=first["ts"],
+            secret=SECRET,
+        )["sig"]
+
+        service.handle(json.dumps(first))
+        with self.assertRaises(RemoteAuthError):
+            service.handle(json.dumps(second))
+
+    def test_offline_target_denies_before_manager(self) -> None:
+        class Manager:
+            def terminate(self, _request):
+                raise AssertionError("offline target must not invoke the manager")
+
+        service = RemoteService(
+            node_id=NodeId("peer"),
+            display_name="Peer",
+            hostname="peer-host",
+            platform="Linux",
+            status=NodeStatus.OFFLINE,
+            capabilities=frozenset({NodeCapability.PROCESS_TERMINATION}),
+            permissions=frozenset({NodePermission.PROCESS_TERMINATION}),
+            provider=FakeProvider(),
+            process_manager=Manager(),
+            secret=SECRET,
+        )
+        with self.assertRaises(RemoteUnavailableError):
+            _client(service).request_quit([{"pid": 42, "create_time": 10.5}])
+
+    def test_typed_request_rejects_a_different_target(self) -> None:
+        request = ProcessTerminationRequest(
+            target_node_id=NodeId("other"),
+            processes=(ProcessRef(NodeId("other"), 42, 10.5),),
+            action=ProcessActionKind.REQUEST_QUIT,
+        )
+        with self.assertRaises(RemoteAuthError):
+            _client(_service()).terminate(request)
+
+    def test_inner_snapshot_target_mismatch_is_rejected(self) -> None:
+        class WrongSnapshotTransport:
+            def request(self, envelope_text: str) -> str:
+                envelope = json.loads(envelope_text)
+                snapshot = NodeSnapshot(
+                    node_id=NodeId("other"),
+                    display_name="Other",
+                    hostname="other-host",
+                    platform="Linux",
+                    status=NodeStatus.ONLINE,
+                    capabilities=frozenset(),
+                    scanned_at=_now(),
+                    dashboard=FakeProvider().dashboard_snapshot(),
+                )
+                return json.dumps(
+                    sign_response(
+                        node_id="peer",
+                        request_id=envelope["request_id"],
+                        status="ok",
+                        payload={"snapshot": node_snapshot_to_dict(snapshot)},
+                        timestamp=time.time(),
+                        secret=SECRET,
+                    )
+                )
+
+        client = AuthenticatedNodeProvider(
+            node_id=NodeId("peer"),
+            secret=SECRET,
+            transport=WrongSnapshotTransport(),
+        )
+
+        with self.assertRaises(RemoteAuthError):
+            client.node_snapshot()
+
     def test_hello_returns_ok(self) -> None:
         client = _client(_service())
         result = client.hello()
@@ -475,6 +641,33 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
         with self.assertRaises(RemoteAuthorizationError):
             client.process_candidates()
 
+    def test_two_installations_require_target_owned_grant_before_activation(
+        self,
+    ) -> None:
+        target = _service()
+        caller_secret = "c" * 64
+        caller = AuthenticatedNodeProvider(
+            node_id=NodeId("peer"),
+            caller_node_id=NodeId("caller"),
+            secret=caller_secret,
+            transport=MemoryRemoteTransport(target),
+        )
+
+        with self.assertRaises(RemoteAuthError):
+            caller.hello()
+
+        target.update_grants(
+            {
+                NodeId("caller"): PeerGrant(
+                    caller_node_id=NodeId("caller"),
+                    secret=caller_secret,
+                    permissions=frozenset({NodePermission.DASHBOARD_READ}),
+                )
+            }
+        )
+
+        self.assertTrue(caller.hello()["ok"])
+
     def test_unknown_operation_is_rejected(self) -> None:
         service = _service()
         with self.assertRaises(RemoteProtocolError):
@@ -621,6 +814,135 @@ class SocketTransportTests(unittest.TestCase):
         finally:
             server.stop()
 
+    def test_socket_server_bounds_concurrent_handlers_and_rejects_excess(self) -> None:
+        entered = threading.Event()
+        both_entered = threading.Event()
+        release = threading.Event()
+        state_lock = threading.Lock()
+        active = 0
+        maximum = 0
+
+        class BlockingProvider(FakeProvider):
+            def dashboard_snapshot(self, cancel_event=None, progress_callback=None):
+                nonlocal active, maximum
+                with state_lock:
+                    active += 1
+                    maximum = max(maximum, active)
+                    entered.set()
+                    if active == 2:
+                        both_entered.set()
+                release.wait(2)
+                with state_lock:
+                    active -= 1
+                return super().dashboard_snapshot(cancel_event, progress_callback)
+
+        server = RemoteSocketServer(
+            _service(provider=BlockingProvider()),
+            timeout=2,
+            max_active_handlers=2,
+        )
+        server.start()
+        workers: list[threading.Thread] = []
+        errors: list[BaseException] = []
+        try:
+            port = server.bound_port
+            assert port is not None
+
+            def run_client(index: int) -> None:
+                try:
+                    request = json.dumps(
+                        sign_request(
+                            node_id="peer",
+                            op="dashboard_snapshot",
+                            params={},
+                            request_id=f"bounded-request-{index}",
+                            nonce=f"bounded-nonce-{index}",
+                            timestamp=time.time(),
+                            secret=SECRET,
+                        )
+                    ).encode("utf-8")
+                    with socket.create_connection(
+                        ("127.0.0.1", port), timeout=2
+                    ) as sock:
+                        _send_frame(sock, request, max_bytes=MAX_ENVELOPE_BYTES)
+                        _recv_frame(
+                            sock,
+                            max_bytes=MAX_ENVELOPE_BYTES,
+                            closed_message="connection closed before response",
+                        )
+                except Exception as error:  # noqa: BLE001 - report worker failures.
+                    errors.append(error)
+
+            for index in range(2):
+                worker = threading.Thread(target=run_client, args=(index,))
+                workers.append(worker)
+                worker.start()
+            self.assertTrue(entered.wait(1))
+            self.assertTrue(both_entered.wait(1))
+            request = json.dumps(
+                sign_request(
+                    node_id="peer",
+                    op="dashboard_snapshot",
+                    params={},
+                    request_id="bounded-request-excess",
+                    nonce="bounded-nonce-excess",
+                    timestamp=time.time(),
+                    secret=SECRET,
+                )
+            ).encode("utf-8")
+            with socket.create_connection(("127.0.0.1", port), timeout=2) as excess:
+                _send_frame(excess, request, max_bytes=MAX_ENVELOPE_BYTES)
+                excess.settimeout(1)
+                try:
+                    received = excess.recv(1)
+                except ConnectionResetError:
+                    received = b""
+                self.assertEqual(received, b"")
+            with state_lock:
+                self.assertEqual(maximum, 2)
+        finally:
+            release.set()
+            for worker in workers:
+                worker.join(2)
+            server.stop()
+        self.assertFalse(errors)
+
+    def test_socket_server_shutdown_releases_handler_permits(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingProvider(FakeProvider):
+            def dashboard_snapshot(self, cancel_event=None, progress_callback=None):
+                entered.set()
+                release.wait(2)
+                return super().dashboard_snapshot(cancel_event, progress_callback)
+
+        server = RemoteSocketServer(
+            _service(provider=BlockingProvider()),
+            timeout=2,
+            max_active_handlers=1,
+        )
+        server.start()
+        port = server.bound_port
+        assert port is not None
+        worker = threading.Thread(
+            target=lambda: AuthenticatedNodeProvider(
+                node_id=NodeId("peer"),
+                secret=SECRET,
+                transport=SocketRemoteTransport("127.0.0.1", port, timeout=2),
+            ).dashboard_snapshot()
+        )
+        worker.start()
+        self.assertTrue(entered.wait(1))
+        try:
+            server.stop()
+        finally:
+            release.set()
+            worker.join(2)
+        self.assertIsNotNone(server._admission)
+        assert server._admission is not None
+        self.assertEqual(server._admission._value, 1)
+
     def test_connection_refused_maps_to_transport_error(self) -> None:
         from maintenance.remote import RemoteTransportError
 
@@ -661,6 +983,22 @@ class ProcessActionCodecTests(unittest.TestCase):
 
     def test_process_action_codec_rejects_missing_or_non_object_payload(self) -> None:
         payloads: tuple[object, ...] = (None, [], {"requested": 1})
+        for payload in payloads:
+            with self.assertRaises(ClusterDataError):
+                process_action_result_from_dict(payload)
+
+    def test_process_action_codec_rejects_coercion_and_invariant_violations(
+        self,
+    ) -> None:
+        payloads: tuple[object, ...] = (
+            {"requested": True, "stopped": [], "force_required": [], "errors": []},
+            {"requested": 1, "stopped": ["42"], "force_required": [], "errors": []},
+            {"requested": -1, "stopped": [], "force_required": [], "errors": []},
+            {"requested": 1, "stopped": [42, 42], "force_required": [], "errors": []},
+            {"requested": 1, "stopped": [42], "force_required": [42], "errors": []},
+            {"requested": 0, "stopped": [42], "force_required": [], "errors": []},
+            {"requested": 1, "stopped": [], "force_required": [], "errors": [42]},
+        )
         for payload in payloads:
             with self.assertRaises(ClusterDataError):
                 process_action_result_from_dict(payload)

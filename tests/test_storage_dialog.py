@@ -299,6 +299,18 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         self.assertEqual(dialog.trash_button.state, tk.DISABLED)
         self.assertEqual(dialog.scan_button.state, tk.NORMAL)
 
+    def test_read_only_dialog_keeps_trash_disabled_after_error(self) -> None:
+        dialog: Any = object.__new__(StorageDialog)
+        dialog._read_only = True
+        dialog.scan_button = FakeControl()
+        dialog.trash_button = FakeControl()
+        dialog.status_label = FakeControl()
+
+        with patch("maintenance.dialogs.messagebox.showerror"):
+            dialog._show_error("scan failed")
+
+        self.assertEqual(dialog.trash_button.state, tk.DISABLED)
+
     def test_second_instance_waits_instead_of_duplicate_scan(self) -> None:
         owner = self._dialog()
         waiter = self._dialog()
@@ -388,6 +400,7 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
             runner=runner, deliver=lambda callback: callback()
         )
         dialog.analyzer = Mock()
+        dialog.provider = dialog.analyzer
         dialog.analyzer.storage_candidates.side_effect = RuntimeError("boom")
         dialog._waiting_for_shared = False
         dialog._scan_active = False

@@ -23,6 +23,7 @@ class NodeSelection:
         refresh_thermals: Callable[[NodeContext], None],
         schedule_scan: Callable[[], None],
         logger: logging.Logger,
+        cancel_peer_connection: Callable[[NodeContext], None] | None = None,
     ) -> None:
         self._registry = registry
         self._selected_id = selected_id
@@ -35,6 +36,7 @@ class NodeSelection:
         self._refresh_thermals = refresh_thermals
         self._schedule_scan = schedule_scan
         self._logger = logger
+        self._cancel_peer_connection = cancel_peer_connection or (lambda _context: None)
 
     def selected_context(self) -> NodeContext | None:
         selected = self._selected_id()
@@ -69,6 +71,8 @@ class NodeSelection:
         self._cancel_active_scan()
         self._invalidate_render_targets(node_id)
         self._cancel_node_operations(old_context)
+        if old_context is not None:
+            self._cancel_peer_connection(old_context)
         self._sync_selected_context(context)
         self._render_selected_node(context)
         self._refresh_thermals(context)

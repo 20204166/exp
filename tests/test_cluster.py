@@ -32,6 +32,7 @@ from maintenance.models import (
     CapabilityState,
     DashboardSnapshot,
     FileCandidate,
+    ProcessActionState,
     ProcessCandidate,
     ResourceSummary,
 )
@@ -124,6 +125,43 @@ class DashboardCodecTests(unittest.TestCase):
 
 
 class NodeSnapshotCodecTests(unittest.TestCase):
+    def test_resources_and_capability_states_are_preserved_for_all_categories(
+        self,
+    ) -> None:
+        resources = tuple(
+            ResourceSummary(
+                key=key,
+                title=key,
+                value=f"{key}-value",
+                subtitle="state",
+                percent=None,
+                details=(key,),
+                capability=(
+                    CapabilityState.UNSUPPORTED
+                    if key in {"gpu", "battery"}
+                    else CapabilityState.SUPPORTED
+                ),
+            )
+            for key in ("cpu", "memory", "storage", "gpu", "network", "battery")
+        )
+        original = NodeSnapshot(
+            node_id=NodeId("peer"),
+            display_name="Peer",
+            hostname="peer-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=frozenset({NodeCapability.DASHBOARD_READ}),
+            scanned_at=NOW,
+            dashboard=DashboardSnapshot("Peer", NOW, resources),
+        )
+
+        decoded = node_snapshot_from_dict(node_snapshot_to_dict(original))
+
+        self.assertEqual(decoded.resources, resources)
+        self.assertEqual(
+            decoded.resource("battery").capability, CapabilityState.UNSUPPORTED
+        )
+
     def test_round_trip_preserves_snapshot(self) -> None:
         original = _snapshot()
         decoded = node_snapshot_from_dict(node_snapshot_to_dict(original))
@@ -164,6 +202,23 @@ class ProcessAndFileCodecTests(unittest.TestCase):
     def test_process_candidate_round_trip(self) -> None:
         original = ProcessCandidate(
             1, "app", 100, 1.0, 2.0, "Active", "user", True, 1.5
+        )
+        decoded = process_candidate_from_dict(process_candidate_to_dict(original))
+        self.assertEqual(decoded, original)
+
+    def test_process_candidate_round_trip_preserves_target_identity_state(self) -> None:
+        original = ProcessCandidate(
+            42,
+            "protected-app",
+            100,
+            1.0,
+            2.0,
+            "Active",
+            "user",
+            False,
+            12.5,
+            True,
+            ProcessActionState.PROTECTED,
         )
         decoded = process_candidate_from_dict(process_candidate_to_dict(original))
         self.assertEqual(decoded, original)
@@ -269,7 +324,7 @@ class ClusterStoreTests(unittest.TestCase):
         )
         self.assertTrue(loaded.local_node_id.startswith("node-"))
 
-    def test_legacy_trusted_record_gets_read_only_permissions(self) -> None:
+    def test_legacy_trusted_record_gets_no_permissions(self) -> None:
         store, path = self._store()
         path.write_text(
             json.dumps(
@@ -296,15 +351,7 @@ class ClusterStoreTests(unittest.TestCase):
 
         record = store.load().trusted_nodes[0]
 
-        self.assertEqual(
-            record.permissions,
-            {
-                NodePermission.DASHBOARD_READ,
-                NodePermission.COMPONENT_READ,
-                NodePermission.PROCESS_REVIEW,
-                NodePermission.STORAGE_REVIEW,
-            },
-        )
+        self.assertEqual(record.permissions, frozenset())
 
     def test_malformed_file_falls_back_to_defaults(self) -> None:
         store, path = self._store()

@@ -24,6 +24,7 @@ from maintenance.nodes import (
     NodePermission,
     NodeStatus,
     NodeTrustState,
+    is_trusted_descriptor,
     node_operation_key,
 )
 from maintenance.remote import (
@@ -59,7 +60,11 @@ def apply_discovery_enabled(controller: Any, enabled: bool) -> None:
 
 
 def pair_discovered_node(
-    controller: Any, node_id: str, *, messagebox_module: Any = messagebox
+    controller: Any,
+    node_id: str,
+    *,
+    messagebox_module: Any = messagebox,
+    provision_target_grant: Callable[[PeerGrantRecord], bool] | None = None,
 ) -> None:
     registry = controller.__dict__.get("_node_registry")
     if registry is None:
@@ -94,6 +99,18 @@ def pair_discovered_node(
         controller._nodes_status(f"Pairing cancelled for {candidate.hostname}")
         return
     node = NodeId(node_id)
+    # The target must durably accept this grant before the initiator records
+    # the peer as trusted.  There is intentionally no automatic trust path.
+    provisioner = provision_target_grant or controller.__dict__.get(
+        "_provision_target_grant"
+    )
+    if not callable(provisioner):
+        registry.fail_pairing(node)
+        controller._refresh_nodes_page()
+        controller._nodes_error(
+            "Pairing requires explicit target-side grant provisioning"
+        )
+        return
     previous_context = None
     previous_selected = False
     try:
@@ -122,6 +139,27 @@ def pair_discovered_node(
         permissions=READ_PERMISSIONS,
         identity_fingerprint=candidate.identity_fingerprint,
     )
+    grant = PeerGrantRecord(
+        caller_node_id=controller._cluster_state.local_node_id,
+        secret=record.secret,
+        permissions=READ_PERMISSIONS,
+    )
+    try:
+        provisioned = provisioner(grant)
+    except Exception:  # noqa: BLE001 - provisioning failure is fail-closed.
+        provisioned = False
+    if not provisioned:
+        registry.revoke_trusted(node)
+        if previous_context is not None:
+            registry.register_context(previous_context)
+            registry.update_discovered(candidate)
+            if previous_selected:
+                registry.select(node)
+        else:
+            registry.update_discovered(candidate)
+            registry.fail_pairing(node)
+        controller._nodes_error("Target did not provision the peer grant")
+        return
     existing_record = controller._cluster_state.record(node_id)
     trusted_nodes = tuple(
         record if item.node_id == node_id else item
@@ -134,18 +172,7 @@ def pair_discovered_node(
         trusted_nodes=trusted_nodes,
         local_node_id=controller._cluster_state.local_node_id,
         local_identity_persisted=controller._cluster_state.local_identity_persisted,
-        peer_grants=tuple(
-            grant
-            for grant in controller._cluster_state.peer_grants
-            if grant.caller_node_id != node_id
-        )
-        + (
-            PeerGrantRecord(
-                caller_node_id=node_id,
-                secret=record.secret,
-                permissions=READ_PERMISSIONS,
-            ),
-        ),
+        peer_grants=controller._cluster_state.peer_grants,
     )
     if not controller._save_cluster_state(state):
         registry.revoke_trusted(node)
@@ -530,11 +557,36 @@ def activate_remote_node(
         controller._nodes_error("That trusted node has no authenticated remote port")
         return
     key = node_operation_key(node_id, "connect")
+    generations = controller.__dict__.setdefault("_activation_generations", {})
+    generation = int(generations.get(node_id, 0)) + 1
+    generations[node_id] = generation
+
+    def is_current() -> bool:
+        if controller.__dict__.get("_is_closing", False):
+            return False
+        if generations.get(node_id) != generation:
+            return False
+        current_state = controller.__dict__.get("_cluster_state")
+        if current_state is None or current_state.record(node_id.value) != record:
+            return False
+        try:
+            current_context = registry.context(node_id)
+        except KeyError:
+            return False
+        descriptor = current_context.descriptor
+        return (
+            is_trusted_descriptor(descriptor)
+            and descriptor.identity_status is not NodeIdentityStatus.MISMATCH
+            and (
+                record.identity_fingerprint is None
+                or descriptor.identity_fingerprint == record.identity_fingerprint
+            )
+        )
 
     def task(
         _cancel_event: threading.Event,
         _progress: Callable[[str], None],
-    ) -> tuple[AuthenticatedNodeProvider, frozenset[NodeCapability]]:
+    ) -> tuple[AuthenticatedNodeProvider, frozenset[NodeCapability], str]:
         provider = provider_cls(
             node_id=node_id,
             secret=record.secret,
@@ -559,14 +611,24 @@ def activate_remote_node(
             if isinstance(raw, str)
             and raw in {capability.value for capability in NodeCapability}
         )
-        return provider, capabilities
+        return provider, capabilities, actual_fingerprint
 
     def on_result(
         _key: str,
-        result: tuple[AuthenticatedNodeProvider, frozenset[NodeCapability]],
+        result: tuple[AuthenticatedNodeProvider, frozenset[NodeCapability], str],
     ) -> None:
-        context = registry.context(node_id)
-        provider, capabilities = result
+        provider, capabilities, fingerprint = result
+        if not is_current():
+            return
+        try:
+            context = registry.context(node_id)
+        except KeyError:
+            return
+        if (
+            context.descriptor.identity_fingerprint is not None
+            and context.descriptor.identity_fingerprint != fingerprint
+        ):
+            return
         context.descriptor = replace(
             context.descriptor,
             capabilities=capabilities,
@@ -585,6 +647,8 @@ def activate_remote_node(
         controller._show_dashboard_page()
 
     def on_error(_key: str, message: str) -> None:
+        if not is_current():
+            return
         controller._nodes_error(
             f"Could not authenticate {record.display_name}: {message}"
         )

@@ -8,6 +8,7 @@ from typing import Any
 from maintenance.nodes import NodeId, NodeIdentityStatus, is_trusted_descriptor
 from maintenance.ui import cluster_page as ui_cluster
 from maintenance.ui import nodes_connections as ui_nodes
+from maintenance.ui.target_state import render_target_state
 
 
 def discovered_peer_specs(registry: Any) -> list[ui_nodes.DiscoveredPeerSpec]:
@@ -69,6 +70,7 @@ def trusted_node_specs(
                     sorted(permission.value for permission in descriptor.permissions)
                 ),
                 pairing_state=descriptor.pairing_state.value,
+                target_state=render_target_state(descriptor, context.snapshot).label,
             )
         )
     return specs
@@ -107,6 +109,7 @@ def manual_node_specs(
                     sorted(permission.value for permission in descriptor.permissions)
                 ),
                 pairing_state=descriptor.pairing_state.value,
+                target_state=render_target_state(descriptor, context.snapshot).label,
             )
         )
     return specs
@@ -120,6 +123,7 @@ def cluster_node_specs(registry: Any) -> list[ui_cluster.ClusterNodeSpec]:
     for context in registry.contexts():
         descriptor = context.descriptor
         snapshot = context.snapshot
+        presentation = render_target_state(descriptor, snapshot)
         specs.append(
             ui_cluster.ClusterNodeSpec(
                 node_id=descriptor.id.value,
@@ -138,6 +142,7 @@ def cluster_node_specs(registry: Any) -> list[ui_cluster.ClusterNodeSpec]:
                     if snapshot is not None
                     else None
                 ),
+                target_state=presentation.label,
             )
         )
     for candidate in registry.discovered_candidates():
@@ -153,6 +158,7 @@ def cluster_node_specs(registry: Any) -> list[ui_cluster.ClusterNodeSpec]:
                 is_local=False,
                 selectable=False,
                 pairing_state=registry.pairing_state(NodeId(candidate.stable_id)).value,
+                target_state="Unsupported",
             )
         )
     name_counts = Counter(spec.display_name for spec in specs)

@@ -59,6 +59,7 @@ class DiscoverySession:
         ),
         on_stabilized: Callable[[], None] | None = None,
         stabilization_milliseconds: int = 100,
+        on_presence_changed: Callable[[], None] | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._registry = registry
@@ -75,6 +76,7 @@ class DiscoverySession:
         self._is_closing = is_closing
         self._get_listener_endpoint = get_listener_endpoint
         self._on_stabilized = on_stabilized or (lambda: None)
+        self._on_presence_changed = on_presence_changed or (lambda: None)
         self._stabilization_milliseconds = min(
             max(stabilization_milliseconds, 0), _MAX_STABILIZATION_MILLISECONDS
         )
@@ -147,10 +149,12 @@ class DiscoverySession:
 
     def _handle_candidate(self, candidate: Any) -> None:
         self._on_candidate(candidate)
+        self._on_presence_changed()
         self._schedule_stabilization()
 
     def _handle_lost(self, stable_id: str) -> None:
         self._on_lost(stable_id)
+        self._on_presence_changed()
         self._schedule_stabilization()
 
     def _schedule_stabilization(self) -> None:

@@ -17,7 +17,8 @@ from maintenance.dialogs import (
     rebuild_tree_rows,
     selected_items,
 )
-from maintenance.models import ProcessCandidate
+from maintenance.models import ProcessActionResult, ProcessCandidate
+from maintenance.nodes import NodeId
 from maintenance.scanner import SystemScanner
 from tests.support.scheduling import DeferredRunner
 
@@ -254,6 +255,12 @@ class ProcessDialogCoordinatorTests(unittest.TestCase):
         self.assertFalse(dialog.coordinator.in_flight("process"))
         dialog._show_error.assert_called_once_with("boom")
 
+    def test_stale_callback_is_ignored_after_dialog_close(self) -> None:
+        dialog = self._dialog()
+        dialog._closed = True
+        dialog._on_refresh_result(["stale"])
+        dialog._show_processes.assert_not_called()
+
 
 class ActivityClassificationTests(unittest.TestCase):
     def test_activity_label_uses_delta_threshold(self) -> None:
@@ -411,6 +418,136 @@ def _dialog_with(processes: dict[int, ProcessCandidate]) -> Any:
 
 
 class ProcessDialogNodeTests(unittest.TestCase):
+    def _action_dialog(
+        self,
+        coordinator: AppCoordinator,
+        manager: Any,
+    ) -> Any:
+        dialog: Any = object.__new__(ProcessDialog)
+        dialog.coordinator = coordinator
+        dialog.manager = manager
+        dialog.node_id = NodeId("target")
+        dialog._closed = False
+        dialog._action_generation = 1
+        dialog._action_in_flight = True
+        dialog._action_unknown = False
+        dialog._after_normal_quit = Mock()
+        dialog._after_force_quit = Mock()
+        dialog.status_label = Mock()
+        dialog.quit_button = Mock()
+        dialog._action_subscription_key = None
+        dialog._action_subscription = None
+        return dialog
+
+    def test_two_dialogs_share_one_process_action_lease(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        first = self._action_dialog(coordinator, Mock())
+        second = self._action_dialog(coordinator, Mock())
+
+        first._run_shared_process_action("request_quit", [42], {42: 10.0}, 1)
+        second._run_shared_process_action("request_quit", [42], {42: 10.0}, 1)
+
+        self.assertEqual(len(runner.workers), 1)
+        runner.run_next()
+        first.manager.request_quit.assert_called_once_with([42], {42: 10.0})
+        second.manager.request_quit.assert_not_called()
+        first._after_normal_quit.assert_called_once()
+        second._after_normal_quit.assert_called_once()
+
+    def test_fresh_transport_nonce_does_not_make_a_second_action_key(self) -> None:
+        coordinator = AppCoordinator(deliver=lambda callback: None)
+        first = self._action_dialog(coordinator, Mock())
+        second = self._action_dialog(coordinator, Mock())
+
+        first_key = first._process_action_key("request_quit", [42], {42: 10.0})
+        second_key = second._process_action_key("request_quit", [42], {42: 10.0})
+
+        self.assertEqual(first_key, second_key)
+        self.assertIn("node:target:process_action:request_quit", first_key)
+
+    def test_response_loss_is_unknown_in_both_dialogs(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        first = self._action_dialog(coordinator, Mock())
+        second = self._action_dialog(coordinator, Mock())
+        first.manager.request_quit.side_effect = RuntimeError(
+            "remote transport failed: connection closed"
+        )
+
+        first._run_shared_process_action("request_quit", [42], {42: 10.0}, 1)
+        second._run_shared_process_action("request_quit", [42], {42: 10.0}, 1)
+        runner.run_next()
+
+        self.assertTrue(first._action_unknown)
+        self.assertTrue(second._action_unknown)
+        self.assertTrue(first._action_in_flight)
+        self.assertTrue(second._action_in_flight)
+        self.assertEqual(first.quit_button.config.call_count, 1)
+        self.assertEqual(second.quit_button.config.call_count, 1)
+
+    def test_normal_to_force_transition_stays_one_in_flight_request(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        first = self._action_dialog(coordinator, Mock())
+        second = self._action_dialog(coordinator, Mock())
+        first._after_normal_quit = ProcessDialog._after_normal_quit.__get__(first)
+        second._after_normal_quit = ProcessDialog._after_normal_quit.__get__(second)
+        first._selected_create_times = {42: 10.0}
+        second._selected_create_times = {42: 10.0}
+        normal = ProcessActionResult(1, (), (42,), ())
+
+        with patch("maintenance.dialogs.messagebox.askyesno", return_value=True):
+            first._after_normal_quit(normal)
+            second._after_normal_quit(normal)
+
+        self.assertEqual(len(runner.workers), 1)
+        runner.run_next()
+        first.manager.force_quit.assert_called_once_with([42], {42: 10.0})
+        second.manager.force_quit.assert_not_called()
+
+    def test_closed_dialog_drops_shared_action_result(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        dialog = self._action_dialog(coordinator, Mock())
+
+        dialog._run_shared_process_action("request_quit", [42], {42: 10.0}, 1)
+        dialog._closed = True
+        runner.run_next()
+
+        dialog._after_normal_quit.assert_not_called()
+
+    def test_duplicate_click_is_denied_while_action_is_in_flight(self) -> None:
+        dialog: Any = object.__new__(ProcessDialog)
+        dialog._action_in_flight = True
+        dialog.quit_selected = ProcessDialog.quit_selected.__get__(dialog)
+        dialog._read_only = False
+        dialog.manager = Mock()
+        dialog.quit_selected()
+        dialog.manager.request_quit.assert_not_called()
+
+    def test_stale_action_result_is_ignored_after_generation_changes(self) -> None:
+        dialog: Any = object.__new__(ProcessDialog)
+        dialog._closed = False
+        dialog._action_generation = 2
+        dialog._after_normal_quit = Mock()
+        dialog._after_normal_quit_for_generation(1, Mock())
+        dialog._after_normal_quit.assert_not_called()
+
+    def test_lost_action_response_stays_unknown_and_disabled(self) -> None:
+        dialog: Any = object.__new__(ProcessDialog)
+        dialog._closed = False
+        dialog._action_generation = 1
+        dialog.quit_button = FakeControl()
+        dialog.status_label = FakeControl()
+        dialog._action_in_flight = True
+        dialog._process_action_error(1, "remote transport failed: connection closed")
+        self.assertTrue(dialog._action_in_flight)
+        self.assertEqual(dialog.quit_button.state, tk.DISABLED)
+        self.assertIsNotNone(dialog.status_label.text)
+        assert dialog.status_label.text is not None
+        self.assertIn("unknown", dialog.status_label.text)
+
     def test_node_qualified_operation_key_is_used(self) -> None:
         from maintenance.components.coordinator import AppCoordinator
 
@@ -443,6 +580,28 @@ class ProcessDialogNodeTests(unittest.TestCase):
         dialog._render_rows()
 
         self.assertEqual(dialog.quit_button.state, tk.DISABLED)
+
+    def test_dialog_source_provider_is_target_bound(self) -> None:
+        dialog: Any = object.__new__(ProcessDialog)
+        provider_a = Mock()
+        dialog.provider = provider_a
+        dialog.analyzer = Mock()
+        dialog.node_id = "node-a"
+        dialog._closed = False
+        dialog._refresh_active = False
+        dialog._waiting_for_shared = False
+        dialog.coordinator = AppCoordinator(
+            runner=lambda worker: None,
+            deliver=lambda callback: None,
+        )
+        dialog._operation_key = "node:node-a:process_candidates"
+        dialog.status_label = FakeControl()
+        dialog.refresh_button = FakeControl()
+        dialog.quit_button = FakeControl()
+        dialog._show_processes = Mock()
+        dialog.refresh()
+        self.assertIs(dialog.provider, provider_a)
+        dialog.analyzer.process_candidates.assert_not_called()
 
 
 class ProcessDialogEmptyStateTests(unittest.TestCase):

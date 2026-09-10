@@ -25,6 +25,14 @@ class CapabilityState(str, Enum):
     UNKNOWN = "unknown"
 
 
+class ProcessActionState(str, Enum):
+    """Target-reported state for the process action affordance."""
+
+    ALLOWED = "allowed"
+    PROTECTED = "protected"
+    UNAVAILABLE = "unavailable"
+
+
 @dataclass(frozen=True, slots=True)
 class ResourceSummary:
     key: str
@@ -84,6 +92,19 @@ class ProcessCandidate:
     username: str
     action_allowed: bool
     create_time: float | None = None
+    protected: bool = False
+    action_state: ProcessActionState = ProcessActionState.ALLOWED
+
+    def __post_init__(self) -> None:
+        # Legacy callers only supplied ``action_allowed``; keep that shape
+        # equivalent to the richer target-reported state.
+        if (
+            not self.action_allowed
+            and not self.protected
+            and self.action_state is ProcessActionState.ALLOWED
+        ):
+            object.__setattr__(self, "protected", True)
+            object.__setattr__(self, "action_state", ProcessActionState.PROTECTED)
 
 
 @dataclass(frozen=True, slots=True)

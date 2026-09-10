@@ -6,6 +6,7 @@ from maintenance.dialogs import ResourceCard
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
+from maintenance.ui.target_state import render_target_state
 
 
 def build(controller: Any, parent: Any) -> Any:
@@ -38,6 +39,19 @@ def build(controller: Any, parent: Any) -> Any:
     controller.node_title_label = getattr(
         controller.header_actions, "_dashboard_node_label", None
     )
+    controller.target_status_label = controller.ttk.Label(
+        controller.header_actions,
+        text=(
+            f"{rendered.label} · {rendered.identity} · "
+            f"capabilities: {', '.join(rendered.capabilities) or 'none'}"
+            if (context := controller._selected_context()) is not None
+            and (rendered := render_target_state(context.descriptor, context.snapshot))
+            else ""
+        ),
+        wraplength=680,
+        style="Description.TLabel",
+    )
+    controller.target_status_label.pack(anchor="e", pady=(2, 0))
     controller.discovery_status_label = getattr(
         controller.header_actions, "_dashboard_discovery_label", None
     )

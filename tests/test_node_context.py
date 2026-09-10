@@ -10,6 +10,7 @@ from maintenance.components.node_context import (
 )
 from maintenance.nodes import (
     LOCAL_NODE_ID,
+    LocalNodeProvider,
     NodeContext,
     NodeId,
     NodeRegistry,
@@ -20,6 +21,24 @@ from maintenance.nodes import (
 
 
 class NodeContextTests(unittest.TestCase):
+    def test_local_provider_binds_descriptor_without_changing_dashboard_shape(
+        self,
+    ) -> None:
+        dashboard = Mock()
+        dashboard.scanned_at = Mock()
+        analyzer = Mock()
+        analyzer.dashboard_snapshot.return_value = dashboard
+        descriptor = local_node_descriptor()
+
+        snapshot = LocalNodeProvider(analyzer, descriptor).node_snapshot()
+
+        self.assertEqual(snapshot.node_id, descriptor.id)
+        self.assertIs(snapshot.dashboard, dashboard)
+        analyzer.dashboard_snapshot.assert_called_once_with(
+            cancel_event=None,
+            progress_callback=None,
+        )
+
     def test_build_local_context_uses_persisted_identity_and_dependencies(self) -> None:
         analyzer = Mock()
         process_manager = Mock()

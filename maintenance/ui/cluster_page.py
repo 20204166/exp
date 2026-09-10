@@ -59,6 +59,7 @@ class ClusterNodeSpec:
     selectable: bool
     last_refresh: str | None = None
     pairing_state: str = "trusted"
+    target_state: str = "Unknown"
 
 
 class ClusterPage:
@@ -204,7 +205,9 @@ class ClusterPage:
 
         trust_text = _TRUST_TEXT.get(spec.trust, spec.trust)
         pairing_text = _PAIRING_TEXT.get(spec.pairing_state, spec.pairing_state)
-        meta = f"{pairing_text}  ·  {trust_text}  ·  {spec.status}"
+        meta = (
+            f"{spec.target_state}  ·  {pairing_text}  ·  {trust_text}  ·  {spec.status}"
+        )
         if spec.capabilities:
             meta += f"  ·  {', '.join(spec.capabilities)}"
         if spec.last_refresh:
@@ -218,7 +221,7 @@ class ClusterPage:
             anchor="w",
         ).pack(anchor="w", pady=(2, 0))
 
-        if spec.selectable:
+        if spec.selectable and spec.status != "offline":
 
             def open_node(node_id: str = spec.node_id) -> None:
                 self.callbacks.on_open_node(node_id)

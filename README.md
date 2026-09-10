@@ -29,8 +29,9 @@ pyproject.toml           local packaging configuration
   (`pip install -e .` installs it by default; the app runs without it, showing
   "GPU information unavailable").
 - `zeroconf>=0.131` — local-network mDNS discovery of other running System
-  Analyzer instances. It advertises only presence metadata; remote metrics and
-  actions are not implemented.
+  Analyzer instances. Discovery is presence-only; authenticated trusted nodes
+  can provide the verified remote read paths and target-side guarded process
+  actions. Remote file cleanup remains read-only.
 
 The GUI additionally requires a Python build with `tkinter` available.
 

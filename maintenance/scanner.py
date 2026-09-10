@@ -75,6 +75,7 @@ from maintenance.models import (
     CapabilityState,
     DashboardSnapshot,
     FileCandidate,
+    ProcessActionState,
     ProcessCandidate,
     ResourceSummary,
     unavailable_summary,
@@ -1594,6 +1595,12 @@ class SystemScanner:
                     username=username,
                     action_allowed=action_allowed,
                     create_time=float(current_create_time),
+                    protected=not action_allowed,
+                    action_state=(
+                        ProcessActionState.ALLOWED
+                        if action_allowed
+                        else ProcessActionState.PROTECTED
+                    ),
                 )
             )
 

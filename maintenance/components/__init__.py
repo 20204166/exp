@@ -32,6 +32,7 @@ from .network_discovery import (
     NetworkDiscovery,
 )
 from .node_selection import NodeSelection
+from .peer_connection import PeerConnectionManager
 from .process_safety import (
     PROTECTED_PROCESS_NAMES,
     ProcessSafetyPolicy,
@@ -85,6 +86,7 @@ __all__ = [
     "HashFingerprint",
     "NetworkDiscovery",
     "NodeSelection",
+    "PeerConnectionManager",
     "ProcessSafetyPolicy",
     "ProgressCallback",
     "ProgressTask",

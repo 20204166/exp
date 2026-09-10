@@ -43,13 +43,16 @@ from maintenance.cluster import (
     resource_summary_from_dict,
     resource_summary_to_dict,
 )
-from maintenance.models import ProcessActionResult, ResourceSummary
+from maintenance.models import ProcessActionResult, ProcessCandidate, ResourceSummary
 from maintenance.nodes import (
     NodeCapability,
     NodeId,
     NodePermission,
     NodeSnapshot,
     NodeStatus,
+    ProcessActionKind,
+    ProcessRef,
+    ProcessTerminationRequest,
     node_identity_fingerprint,
 )
 
@@ -60,6 +63,7 @@ MAX_ENVELOPE_BYTES = 8 * 1024 * 1024
 DEFAULT_FRESHNESS_SECONDS = 60.0
 DEFAULT_REPLAY_TTL_SECONDS = 300.0
 DEFAULT_REPLAY_MAX_ENTRIES = 4096
+DEFAULT_MAX_ACTIVE_HANDLERS = 8
 
 READ_CAPABILITIES = frozenset(
     {
@@ -110,6 +114,53 @@ class RemoteExecutionError(RuntimeError):
 
 class RemoteTransportError(RuntimeError):
     """Raised when the transport cannot complete an authenticated exchange."""
+
+
+class RemoteUnavailableError(RemoteExecutionError):
+    """Raised when the authenticated target cannot currently perform an action."""
+
+
+def parse_hello_capabilities(payload: Any) -> frozenset[NodeCapability]:
+    """Decode advertised capabilities without granting unknown values."""
+
+    if not isinstance(payload, dict):
+        raise RemoteProtocolError("hello payload must be an object")
+    raw_capabilities = payload.get("capabilities", [])
+    if not isinstance(raw_capabilities, list):
+        raise RemoteProtocolError("hello capabilities must be a list")
+    capabilities: set[NodeCapability] = set()
+    for raw in raw_capabilities:
+        if not isinstance(raw, str):
+            raise RemoteProtocolError("hello capability must be a string")
+        try:
+            capabilities.add(NodeCapability(raw))
+        except ValueError:
+            # Unknown values are forward metadata, never permissions.
+            continue
+    return frozenset(capabilities)
+
+
+def validate_hello_payload(
+    payload: Any, *, expected_node_id: NodeId | None = None
+) -> frozenset[NodeCapability]:
+    """Validate the security-bearing portion of a hello response."""
+
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        raise RemoteProtocolError("hello response is invalid")
+    if (
+        payload.get("protocol_version", REMOTE_PROTOCOL_VERSION)
+        != REMOTE_PROTOCOL_VERSION
+    ):
+        raise RemoteProtocolError("unsupported remote protocol version")
+    node_id = payload.get("node_id")
+    if not isinstance(node_id, str) or not node_id:
+        raise RemoteAuthError("hello node identity is invalid")
+    if expected_node_id is not None and node_id != expected_node_id.value:
+        raise RemoteAuthError("hello came from the wrong node")
+    fingerprint = payload.get("identity_fingerprint")
+    if not isinstance(fingerprint, str) or not fingerprint:
+        raise RemoteAuthError("hello identity fingerprint is missing")
+    return parse_hello_capabilities(payload)
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +288,7 @@ class ReplayCache:
         self._ttl = ttl_seconds
         self._max_entries = max_entries
         self._seen: dict[tuple[str, str, str], float] = {}
+        self._request_ids: dict[tuple[str, str], float] = {}
         self._lock = threading.Lock()
 
     def check_and_record(
@@ -262,8 +314,30 @@ class ReplayCache:
             for key, recorded_at in self._seen.items()
             if now - recorded_at > self._ttl
         ]
-        for key in expired:
-            del self._seen[key]
+        for replay_key in expired:
+            del self._seen[replay_key]
+        expired_ids = [
+            request_key
+            for request_key, recorded_at in self._request_ids.items()
+            if now - recorded_at > self._ttl
+        ]
+        for request_key in expired_ids:
+            del self._request_ids[request_key]
+
+    def check_and_record_request_id(
+        self, node_id: str, request_id: str, seen_at: float
+    ) -> bool:
+        """Reject destructive request-ID reuse even when its nonce is fresh."""
+
+        with self._lock:
+            self._prune(seen_at)
+            key = (node_id, request_id)
+            if key in self._request_ids:
+                return False
+            if len(self._request_ids) >= self._max_entries:
+                return False
+            self._request_ids[key] = seen_at
+            return True
 
     def __len__(self) -> int:
         return len(self._seen)
@@ -412,6 +486,8 @@ def verify_response(
 
 
 def validate_operation_params(op: str, params: dict[str, Any]) -> None:
+    if op not in OP_REQUIRED_CAPABILITY:
+        raise RemoteProtocolError(f"unknown operation: {op}")
     if op == "component_summary":
         key = params.get("key")
         if not isinstance(key, str) or not key:
@@ -431,13 +507,21 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
             ):
                 raise RemoteProtocolError("process reference pid is invalid")
             create_time = item.get("create_time")
-            if create_time is not None and (
+            if create_time is None or (
                 not isinstance(create_time, (int, float))
                 or isinstance(create_time, bool)
                 or not math.isfinite(float(create_time))
+                or float(create_time) < 0
             ):
-                raise RemoteProtocolError("process reference create_time is invalid")
-        if set(params) != {"processes"}:
+                raise RemoteProtocolError("process reference create_time is required")
+        expected_action = (
+            ProcessActionKind.REQUEST_QUIT.value
+            if op == "process_request_quit"
+            else ProcessActionKind.FORCE_QUIT.value
+        )
+        if params.get("action") != expected_action:
+            raise RemoteProtocolError("process action is not allowlisted")
+        if set(params) != {"processes", "action"}:
             raise RemoteProtocolError(f"{op} has unexpected parameters")
         return
     if params:
@@ -546,6 +630,13 @@ class RemoteService:
             raise RemoteAuthError("request caller identity is invalid")
         if request.node_id != self._node_id:
             raise RemoteAuthError("request target identity is invalid")
+        if request.op in {
+            "process_request_quit",
+            "process_force_quit",
+        } and not self._replay_cache.check_and_record_request_id(
+            request.node_id.value, request.request_id, self._clock()
+        ):
+            raise RemoteAuthError("destructive request_id has already been used")
         try:
             payload = self._solve(request, grant=grant)
         except RemoteAuthorizationError as error:
@@ -558,6 +649,16 @@ class RemoteService:
                     if "not authorised" in str(error)
                     else "permission_denied"
                 ),
+                timestamp=self._clock(),
+                secret=response_secret,
+            )
+            return json.dumps(response)
+        except RemoteUnavailableError:
+            response = sign_response(
+                node_id=self._node_id.value,
+                request_id=request.request_id,
+                status="error",
+                error="target_offline",
                 timestamp=self._clock(),
                 secret=response_secret,
             )
@@ -643,21 +744,39 @@ class RemoteService:
             processes = self._provider.process_candidates()
             return {"processes": [process_candidate_to_dict(p) for p in processes]}
         if request.op in {"process_request_quit", "process_force_quit"}:
+            if self._status is not NodeStatus.ONLINE:
+                raise RemoteUnavailableError("target is offline")
             if self._process_manager is None:
                 raise RemoteExecutionError("process actions are unavailable")
             refs = request.params["processes"]
-            pids = [int(item["pid"]) for item in refs]
-            create_times = {
-                int(item["pid"]): float(item["create_time"])
-                for item in refs
-                if item.get("create_time") is not None
-            }
-            action = (
-                self._process_manager.force_quit
-                if request.op == "process_force_quit"
-                else self._process_manager.request_quit
+            action_kind = ProcessActionKind(request.params["action"])
+            termination = ProcessTerminationRequest(
+                target_node_id=self._node_id,
+                processes=tuple(
+                    ProcessRef(
+                        node_id=self._node_id,
+                        pid=int(item["pid"]),
+                        create_time=float(item["create_time"]),
+                    )
+                    for item in refs
+                ),
+                action=action_kind,
             )
-            result = action(pids, create_times)
+            if hasattr(self._process_manager, "terminate"):
+                result = self._process_manager.terminate(termination)
+            else:
+                pids = [process.pid for process in termination.processes]
+                create_times = {
+                    process.pid: process.create_time
+                    for process in termination.processes
+                    if process.create_time is not None
+                }
+                action = (
+                    self._process_manager.force_quit
+                    if action_kind is ProcessActionKind.FORCE_QUIT
+                    else self._process_manager.request_quit
+                )
+                result = action(pids, create_times)
             if not isinstance(result, ProcessActionResult):
                 raise RemoteExecutionError("target returned an invalid action result")
             return process_action_result_to_dict(result)
@@ -806,13 +925,18 @@ class RemoteSocketServer:
         host: str = "127.0.0.1",
         port: int = 0,
         timeout: float = 10.0,
+        max_active_handlers: int = DEFAULT_MAX_ACTIVE_HANDLERS,
     ) -> None:
+        if max_active_handlers < 1:
+            raise ValueError("max_active_handlers must be positive")
         self._service = service
         self._host = host
         self._port = port
         self._timeout = timeout
+        self._max_active_handlers = max_active_handlers
         self._server: Any = None
         self._thread: Any = None
+        self._admission: threading.BoundedSemaphore | None = None
 
     @property
     def bound_port(self) -> int | None:
@@ -826,25 +950,29 @@ class RemoteSocketServer:
 
         def make_handler(
             service: RemoteService,
+            admission: threading.BoundedSemaphore,
         ) -> type[socketserver.BaseRequestHandler]:
             class _Handler(socketserver.BaseRequestHandler):
                 def handle(self) -> None:
                     try:
-                        self.request.settimeout(service_timeout)
-                        body = _recv_frame(
+                        try:
+                            self.request.settimeout(service_timeout)
+                            body = _recv_frame(
+                                self.request,
+                                max_bytes=MAX_ENVELOPE_BYTES,
+                                closed_message="connection closed before request",
+                            )
+                            response = service.handle(body.decode("utf-8"))
+                        except Exception:  # noqa: BLE001 - auth failures close silently.
+                            return
+                        payload = response.encode("utf-8")
+                        _send_frame(
                             self.request,
+                            payload,
                             max_bytes=MAX_ENVELOPE_BYTES,
-                            closed_message="connection closed before request",
                         )
-                        response = service.handle(body.decode("utf-8"))
-                    except Exception:  # noqa: BLE001 - auth failures close silently.
-                        return
-                    payload = response.encode("utf-8")
-                    _send_frame(
-                        self.request,
-                        payload,
-                        max_bytes=MAX_ENVELOPE_BYTES,
-                    )
+                    finally:
+                        admission.release()
 
             return _Handler
 
@@ -854,9 +982,22 @@ class RemoteSocketServer:
             allow_reuse_address = True
             request_queue_size = 16
 
+            def process_request(self, request: Any, client_address: Any) -> None:
+                if not admission.acquire(blocking=False):
+                    request.close()
+                    return
+                try:
+                    super().process_request(request, client_address)
+                except BaseException:
+                    admission.release()
+                    request.close()
+                    raise
+
+        admission = threading.BoundedSemaphore(self._max_active_handlers)
+        self._admission = admission
         server = _Server(
             (self._host, self._port),
-            make_handler(self._service),
+            make_handler(self._service, admission),
         )
         # A provider may not honour cooperative cancellation. Daemon handlers
         # and non-blocking close keep application shutdown bounded; idle and
@@ -911,7 +1052,9 @@ class AuthenticatedNodeProvider:
         self._freshness_seconds = freshness_seconds
 
     def hello(self, cancel_event: Any | None = None) -> dict[str, Any]:
-        return self._request("hello", {}, cancel_event)
+        payload = self._request("hello", {}, cancel_event)
+        validate_hello_payload(payload, expected_node_id=self._node_id)
+        return payload
 
     def dashboard_snapshot(
         self,
@@ -962,7 +1105,7 @@ class AuthenticatedNodeProvider:
     def process_candidates(
         self,
         cancel_event: Any | None = None,
-    ) -> list[Any]:
+    ) -> list[ProcessCandidate]:
         self._check_cancel(cancel_event)
         payload = self._request("process_candidates", {}, cancel_event)
         try:
@@ -983,15 +1126,47 @@ class AuthenticatedNodeProvider:
             raise RemoteExecutionError("remote sent invalid storage data") from error
 
     def request_quit(self, refs: list[dict[str, Any]]) -> ProcessActionResult:
-        return self._process_action("process_request_quit", refs)
+        return self.terminate(self._typed_request(refs, ProcessActionKind.REQUEST_QUIT))
 
     def force_quit(self, refs: list[dict[str, Any]]) -> ProcessActionResult:
-        return self._process_action("process_force_quit", refs)
+        return self.terminate(self._typed_request(refs, ProcessActionKind.FORCE_QUIT))
+
+    def terminate(self, request: ProcessTerminationRequest) -> ProcessActionResult:
+        if request.target_node_id != self._node_id:
+            raise RemoteAuthError("process request target does not match provider")
+        return self._process_action(
+            "process_request_quit"
+            if request.action is ProcessActionKind.REQUEST_QUIT
+            else "process_force_quit",
+            {
+                "action": request.action.value,
+                "processes": [
+                    {"pid": ref.pid, "create_time": ref.create_time}
+                    for ref in request.processes
+                ],
+            },
+        )
+
+    def _typed_request(
+        self, refs: list[dict[str, Any]], action: ProcessActionKind
+    ) -> ProcessTerminationRequest:
+        return ProcessTerminationRequest(
+            target_node_id=self._node_id,
+            processes=tuple(
+                ProcessRef(
+                    node_id=self._node_id,
+                    pid=ref["pid"],
+                    create_time=ref["create_time"],
+                )
+                for ref in refs
+            ),
+            action=action,
+        )
 
     def _process_action(
-        self, operation: str, refs: list[dict[str, Any]]
+        self, operation: str, refs: dict[str, Any]
     ) -> ProcessActionResult:
-        payload = self._request(operation, {"processes": refs})
+        payload = self._request(operation, refs)
         try:
             return process_action_result_from_dict(payload)
         except (ClusterDataError, TypeError, ValueError) as error:
@@ -1057,6 +1232,8 @@ class AuthenticatedNodeProvider:
                 raise RemoteAuthorizationError("caller lacks permission")
             if response.error == "capability_unavailable":
                 raise RemoteAuthorizationError("node capability is unavailable")
+            if response.error == "target_offline":
+                raise RemoteUnavailableError("target is offline")
             raise RemoteExecutionError(response.error or "remote operation failed")
         if response.payload is None:
             raise RemoteProtocolError("successful response has no payload")

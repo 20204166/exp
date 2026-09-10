@@ -8,6 +8,12 @@ from typing import Any
 from unittest.mock import patch
 
 from maintenance.actions import ProcessManager
+from maintenance.nodes import (
+    NodeId,
+    ProcessActionKind,
+    ProcessRef,
+    ProcessTerminationRequest,
+)
 from tests.support.process_actions import ActionProcess as FakeProcess
 from tests.support.process_actions import ActionPsutil as FakePsutil
 
@@ -22,6 +28,27 @@ def _manager_with(
 
 
 class ProcessProtectionTests(unittest.TestCase):
+    def test_typed_request_reuses_target_revalidation(self) -> None:
+        manager, fake, patcher = _manager_with(
+            {
+                50001: FakeProcess(
+                    50001, "Example App", getpass.getuser(), create_time=2000.0
+                )
+            }
+        )
+        request = ProcessTerminationRequest(
+            target_node_id=NodeId("local"),
+            processes=(ProcessRef(NodeId("local"), 50001, 1000.0),),
+            action=ProcessActionKind.REQUEST_QUIT,
+        )
+        try:
+            result = manager.terminate(request)
+        finally:
+            patcher.stop()
+        self.assertEqual(result.stopped, ())
+        self.assertFalse(fake.processes[50001].terminated)
+        self.assertTrue(any("changed" in error for error in result.errors))
+
     def test_create_time_change_before_action_is_rejected(self) -> None:
         class ChangingProcess(FakeProcess):
             def __init__(self) -> None:

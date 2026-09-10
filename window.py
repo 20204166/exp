@@ -15,12 +15,14 @@ from maintenance.cluster import (
     ClusterSaveError,
     ClusterState,
     ClusterStore,
+    PeerGrantRecord,
     default_cluster_path,
 )
 from maintenance.components import (
     DOWNLOADS_SCAN_CANCELLED,
     DashboardScanLifecycle,
     NodeSelection,
+    PeerConnectionManager,
     ResourceFeatureCatalog,
     ScanCoordinator,
     node_context,
@@ -61,7 +63,10 @@ from maintenance.models import (
     unavailable_summary,
 )
 from maintenance.nodes import (
+    ConnectionState,
+    LocalNodeProvider,
     NodeCapability,
+    NodeConnectionStatus,
     NodeContext,
     NodeId,
     NodeIdentityStatus,
@@ -103,6 +108,7 @@ from maintenance.ui import window_node_actions as ui_node_actions
 from maintenance.ui import window_pages as ui_window_pages
 from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.navigation import PageRouter, PageSpec
+from maintenance.ui.target_state import render_target_state
 from maintenance.ui.window_supports import card_policy, node_specs, snapshot_state
 from maintenance.ui.window_supports.timer_delivery import TimerDelivery
 
@@ -163,6 +169,7 @@ class AppWindow:
         *,
         preferences_store: PreferencesStore | None = None,
         cluster_store: ClusterStore | None = None,
+        provision_target_grant: Callable[[PeerGrantRecord], bool] | None = None,
     ) -> None:
         self.analyzer = algo.Analyzer()
         self.process_manager = ProcessManager()
@@ -173,6 +180,7 @@ class AppWindow:
         self._preferences = self._preferences_store.load()
         self._cluster_store = cluster_store or ClusterStore(default_cluster_path())
         self._cluster_state = self._cluster_store.load()
+        self._provision_target_grant = provision_target_grant
         self.snapshot: DashboardSnapshot | None = None
         self._is_closing = False
         self._pending_after_ids: set[str] = set()
@@ -201,6 +209,7 @@ class AppWindow:
         self._node_registry = NodeRegistry()
         self._selected_node_id: NodeId | None = None
         self._discovery_tick_id: str | None = None
+        self._peer_reconcile_timer_id: str | None = None
         self._build_local_node_context()
         self._restore_trusted_nodes()
         self._peer_server: RemoteSocketServer | None = None
@@ -380,6 +389,7 @@ class AppWindow:
             ),
             schedule_scan=self._schedule_selected_node_scan,
             logger=LOGGER,
+            cancel_peer_connection=self._cancel_peer_connection,
         )
         self.__dict__["_node_selection_component"] = selection
         return selection
@@ -676,8 +686,17 @@ class AppWindow:
         ui_node_actions.apply_discovery_enabled(self, enabled)
 
     def _pair_discovered_node(self, node_id: str) -> None:
+        self.__dict__.setdefault("_activation_generations", {})[NodeId(node_id)] = (
+            self.__dict__.setdefault("_activation_generations", {}).get(
+                NodeId(node_id), 0
+            )
+            + 1
+        )
         ui_node_actions.pair_discovered_node(
-            self, node_id, messagebox_module=messagebox
+            self,
+            node_id,
+            messagebox_module=messagebox,
+            provision_target_grant=getattr(self, "_provision_target_grant", None),
         )
 
     def _reject_discovered_node(self, node_id: str) -> None:
@@ -695,6 +714,12 @@ class AppWindow:
         ui_node_actions.set_node_color(self, node_id, color)
 
     def _revoke_trusted_node(self, node_id: str) -> None:
+        self.__dict__.setdefault("_activation_generations", {})[NodeId(node_id)] = (
+            self.__dict__.setdefault("_activation_generations", {}).get(
+                NodeId(node_id), 0
+            )
+            + 1
+        )
         ui_node_actions.revoke_trusted_node(self, node_id)
 
     def _add_manual_host(
@@ -911,7 +936,16 @@ class AppWindow:
         snapshot = context.snapshot
         node_title_label = getattr(self, "node_title_label", None)
         if node_title_label is not None:
+            presentation = render_target_state(context.descriptor, snapshot)
             node_title_label.config(text=context.descriptor.display_name.upper())
+            target_status_label = getattr(self, "target_status_label", None)
+            if target_status_label is not None:
+                target_status_label.config(
+                    text=(
+                        f"{presentation.label} · {presentation.identity} · "
+                        f"capabilities: {', '.join(presentation.capabilities) or 'none'}"
+                    )
+                )
         if snapshot is None:
             self.refreshed_label.config(text="Not refreshed yet")
             self.scan_time_label.config(text="Not scanned yet")
@@ -921,6 +955,10 @@ class AppWindow:
             for card in self.cards.values():
                 card.reset_summary()
             return
+        for key, card in self.cards.items():
+            card.set_action_enabled(
+                render_target_state(context.descriptor, snapshot, key).can_review
+            )
         for resource in snapshot.resources:
             if resource.key in self.cards:
                 self.cards[resource.key].update_summary(resource)
@@ -950,6 +988,7 @@ class AppWindow:
                 app_version=__version__,
                 is_closing=lambda: self._is_closing,
                 get_listener_endpoint=self._listener_endpoint,
+                on_presence_changed=self._reconcile_peer_connections,
             )
             session.timer_id = self.__dict__.get("_discovery_tick_id")
             self._discovery_session = session
@@ -975,7 +1014,8 @@ class AppWindow:
         }
         if not grants:
             return
-        descriptor = self._node_registry.selected_context().descriptor
+        local_context = self._node_registry.context(NodeId("local"))
+        descriptor = local_context.descriptor
         service = RemoteService(
             node_id=descriptor.id,
             display_name=descriptor.display_name,
@@ -983,8 +1023,8 @@ class AppWindow:
             platform=descriptor.platform,
             status=descriptor.status,
             capabilities=descriptor.capabilities,
-            provider=self.analyzer,
-            process_manager=self.process_manager,
+            provider=local_context.provider,
+            process_manager=local_context.process_manager,
             secret=generate_node_secret(),
             app_version=__version__,
             grants=grants,
@@ -1031,6 +1071,52 @@ class AppWindow:
         session = self._get_discovery_session()
         session.tick()
         self._discovery_tick_id = session.timer_id
+
+    def _peer_connections(self) -> PeerConnectionManager | None:
+        manager = self.__dict__.get("_peer_connection_manager")
+        if manager is not None:
+            return cast(PeerConnectionManager, manager)
+        registry = self.__dict__.get("_node_registry")
+        coordinator = self.__dict__.get("_coordinator")
+        if registry is None or coordinator is None:
+            return None
+        # No unauthenticated connection operation is installed. A later
+        # authenticated provider can replace this composition seam explicitly.
+        manager = PeerConnectionManager(
+            registry=registry,
+            coordinator=coordinator,
+            connect=lambda _context, _cancel_event, _progress: None,
+            is_closing=lambda: self._is_closing,
+            can_connect=lambda _context: False,
+        )
+        self.__dict__["_peer_connection_manager"] = manager
+        return manager
+
+    def _cancel_peer_connection(self, context: NodeContext) -> None:
+        manager = self._peer_connections()
+        if manager is not None:
+            manager.cancel(context.node_id)
+
+    def _reconcile_peer_connections(self) -> None:
+        manager = self._peer_connections()
+        if manager is None or self._is_closing:
+            return
+        deadline = manager.reconcile()
+        self._schedule_peer_reconciliation(deadline)
+
+    def _schedule_peer_reconciliation(self, deadline: float | None) -> None:
+        self._cancel_timer(self.__dict__.get("_peer_reconcile_timer_id"))
+        self.__dict__["_peer_reconcile_timer_id"] = None
+        if deadline is None or self._is_closing:
+            return
+        delay = max(0, int((deadline - time.monotonic()) * 1000))
+        self.__dict__["_peer_reconcile_timer_id"] = self._schedule_timer(
+            delay, self._run_peer_reconciliation
+        )
+
+    def _run_peer_reconciliation(self) -> None:
+        self.__dict__["_peer_reconcile_timer_id"] = None
+        self._reconcile_peer_connections()
 
     def _on_discovered_candidate(self, candidate: Any) -> None:
         if self._is_closing:
@@ -1504,16 +1590,9 @@ class AppWindow:
                         if source_context is not None
                         else local_node_descriptor()
                     )
-                    result = NodeSnapshot(
-                        node_id=source_node_id or descriptor.id,
-                        display_name=descriptor.display_name,
-                        hostname=descriptor.hostname,
-                        platform=descriptor.platform,
-                        status=descriptor.status,
-                        capabilities=descriptor.capabilities,
-                        scanned_at=dashboard.scanned_at,
-                        dashboard=dashboard,
-                    )
+                    result = LocalNodeProvider(
+                        source_provider, descriptor
+                    ).snapshot_from_dashboard(dashboard)
                 if not isinstance(result, NodeSnapshot):
                     raise TypeError("provider returned an invalid node snapshot")
                 if source_node_id is not None and result.node_id != source_node_id:
@@ -1717,6 +1796,22 @@ class AppWindow:
         rerun_requested = self._resolution_for_generation(generation)
         if rerun_requested is None:
             return
+        if node_id is not None:
+            try:
+                context = self._node_registry.context(node_id)
+            except (AttributeError, KeyError):
+                context = None
+            if context is not None and not context.descriptor.is_local:
+                status = (
+                    NodeConnectionStatus.AUTHENTICATION_FAILED
+                    if "author" in message.lower()
+                    else NodeConnectionStatus.OFFLINE
+                )
+                context.connection = ConnectionState(
+                    status,
+                    reason=message,
+                    changed_at=time.monotonic(),
+                )
         if node_id is not None and node_id != self.__dict__.get("_selected_node_id"):
             self._schedule_rerun_if_requested(rerun_requested)
             return
@@ -1749,6 +1844,11 @@ class AppWindow:
         coordinator = self.__dict__.get("_coordinator")
         if coordinator is not None:
             coordinator.store(self._operation_key("snapshot:dashboard"), merged)
+            if node_snapshot is not None:
+                coordinator.store(
+                    node_operation_key(node_snapshot.node_id, "node_snapshot"),
+                    node_snapshot,
+                )
         for resource in snapshot.resources:
             self._observe_capability(resource.key, resource)
             self._record_thermal_summary(resource.key, resource)
@@ -1866,6 +1966,16 @@ class AppWindow:
         summary = self.snapshot.get(resource_key)
         feature = self._feature_catalog.get(resource_key)
         context = self._selected_context()
+        if (
+            context is not None
+            and not render_target_state(
+                context.descriptor, context.snapshot, resource_key
+            ).can_review
+        ):
+            self._nodes_error(
+                f"{context.descriptor.display_name} is not available for {resource_key} review"
+            )
+            return
         node_id = context.node_id if context is not None else None
         node_title = (
             context.descriptor.display_name
@@ -1886,6 +1996,7 @@ class AppWindow:
             ProcessDialog(
                 self.master,
                 analyzer=context.provider if context is not None else self.analyzer,
+                provider=context.provider if context is not None else self.analyzer,
                 manager=(
                     context.process_manager
                     if context is not None
@@ -1906,13 +2017,13 @@ class AppWindow:
             ):
                 self._nodes_error("This node is not authorised for storage review")
                 return
-            read_only = context is not None and not (
-                context.descriptor.has(NodeCapability.CLEANUP)
-                and NodePermission.CLEANUP in context.descriptor.permissions
-            )
+            # Remote cleanup remains disabled until an opaque target-owned
+            # candidate contract and target-side revalidation exist.
+            read_only = context is not None
             StorageDialog(
                 self.master,
                 analyzer=context.provider if context is not None else self.analyzer,
+                provider=context.provider if context is not None else self.analyzer,
                 manager=(
                     context.file_manager if context is not None else self.file_manager
                 ),
@@ -2504,6 +2615,11 @@ class AppWindow:
         if peer_server is not None:
             peer_server.stop()
         self._stop_discovery()
+        peer_manager = self.__dict__.get("_peer_connection_manager")
+        if peer_manager is not None:
+            peer_manager.shutdown()
+        self._cancel_timer(self.__dict__.get("_peer_reconcile_timer_id"))
+        self.__dict__["_peer_reconcile_timer_id"] = None
         self._dashboard_scan_lifecycle().cancel()
         self._sync_dashboard_scan_state()
         coordinator = self.__dict__.get("_coordinator")

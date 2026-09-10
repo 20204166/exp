@@ -74,6 +74,31 @@ class NodeSelectionTests(unittest.TestCase):
 
         callback.assert_not_called()
 
+    def test_switch_cancels_old_peer_connection(self) -> None:
+        old_context = Mock()
+        registry = Mock()
+        registry.context.return_value = old_context
+        registry.selected_context.return_value = Mock()
+        cancel_peer = Mock()
+        selection = NodeSelection(
+            registry=registry,
+            selected_id=lambda: NodeId("old"),
+            set_selected_id=Mock(),
+            cancel_active_scan=Mock(),
+            invalidate_render_targets=Mock(),
+            cancel_node_operations=Mock(),
+            sync_selected_context=Mock(),
+            render_selected_node=Mock(),
+            refresh_thermals=Mock(),
+            schedule_scan=Mock(),
+            logger=Mock(),
+            cancel_peer_connection=cancel_peer,
+        )
+
+        selection.switch(NodeId("new"))
+
+        cancel_peer.assert_called_once_with(old_context)
+
 
 if __name__ == "__main__":
     unittest.main()

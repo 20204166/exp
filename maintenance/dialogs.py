@@ -1,6 +1,7 @@
 import threading
 import tkinter as tk
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any, TypeVar
@@ -355,6 +356,18 @@ def _dispatch_coordinated_shared_result(
     on_shared_result(result)
 
 
+@dataclass(frozen=True, slots=True)
+class _ProcessActionOutcome:
+    """Shared process-action completion, including transport uncertainty."""
+
+    result: ProcessActionResult | None = None
+    error: str | None = None
+
+
+def _process_action_is_unknown(message: str) -> bool:
+    return "remote transport failed" in message or "connection closed" in message
+
+
 class ResourceCard(tk.Frame):
     """Clickable summary card for one system resource."""
 
@@ -449,6 +462,15 @@ class ResourceCard(tk.Frame):
         for child in (self, *self.winfo_children()):
             self._bind_affordance(child)
 
+    def set_action_enabled(self, enabled: bool) -> None:
+        """Keep the card affordance synchronized with the selected target."""
+
+        if self._button_coordinator is not None and self._action_id is not None:
+            self._button_coordinator.set_enabled(self._action_id, enabled)
+        self.details_label.config(
+            text=("Review and clean  →" if enabled else "Unavailable  →")
+        )
+
     def _rewrap(self, _widget: Any = None) -> None:
         """Re-fit headline, subtitle and metric wraps to the current card width.
 
@@ -526,6 +548,10 @@ class ResourceCard(tk.Frame):
     def reset_summary(self) -> None:
         """Restore the intentionally empty state before this node is scanned."""
 
+        coordinator = getattr(self, "_button_coordinator", None)
+        action_id = getattr(self, "_action_id", None)
+        if coordinator is not None and action_id is not None:
+            coordinator.set_enabled(action_id, False)
         self.value_label.config(text="—")
         self.subtitle_label.config(text="Run a scan to load details")
         self.progress.config(value=0)
@@ -728,16 +754,25 @@ class ProcessDialog(tk.Toplevel):
         node_id: NodeId | None = None,
         node_title: str | None = None,
         read_only: bool = False,
+        provider: Any | None = None,
     ) -> None:
         super().__init__(master)
-        self.analyzer = analyzer
+        # Keep ``analyzer`` as a compatibility alias, but bind all reads to the
+        # provider captured for this dialog's target at construction time.
+        self.provider = analyzer if provider is None else provider
+        self.analyzer = self.provider
         self.manager = manager
         self.resource_key = resource_key
         self.colors = colors
         self.on_changed = on_changed
         self.coordinator = coordinator or _standalone_coordinator(self)
         self.node_id = node_id
-        self._operation_key = operation_key(node_id, "process")
+        self._operation_key = (
+            operation_key(node_id, "process_candidates")
+            if node_id is not None
+            else "process"
+        )
+        self._action_operation_key = operation_key(node_id, "process_termination")
         self._read_only = read_only
         self.processes: dict[int, ProcessCandidate] = {}
         self._displayed: list[ProcessCandidate] = []
@@ -746,6 +781,12 @@ class ProcessDialog(tk.Toplevel):
         self.normal_quit_result: ProcessActionResult | None = None
         self._refresh_active = False
         self._waiting_for_shared = False
+        self._closed = False
+        self._action_in_flight = False
+        self._action_unknown = False
+        self._action_generation = 0
+        self._action_subscription_key: str | None = None
+        self._action_subscription: Callable[[str, Any | None], None] | None = None
 
         title = "Memory Processes" if resource_key == "memory" else "CPU Processes"
         if node_title is not None:
@@ -882,11 +923,12 @@ class ProcessDialog(tk.Toplevel):
             cancel_event: threading.Event,
             _progress: Callable[[str], None],
         ) -> list[ProcessCandidate]:
+            provider = getattr(self, "provider", self.analyzer)
             return call_legacy_compatible(
-                lambda: self.analyzer.process_candidates(
+                lambda: provider.process_candidates(
                     cancel_event=cancel_event,
                 ),
-                lambda: self.analyzer.process_candidates(),
+                lambda: provider.process_candidates(),
             )
 
         _start_coordinated_dialog_scan(
@@ -907,10 +949,14 @@ class ProcessDialog(tk.Toplevel):
         self.status_label.config(text="Analyzing processes...")
 
     def _on_refresh_result(self, processes: list[ProcessCandidate]) -> None:
+        if getattr(self, "_closed", False):
+            return
         self._finish_refresh()
         self._show_processes(processes)
 
     def _on_refresh_error(self, message: str) -> None:
+        if getattr(self, "_closed", False):
+            return
         self._finish_refresh()
         self._show_error(message)
 
@@ -934,6 +980,8 @@ class ProcessDialog(tk.Toplevel):
         )
 
     def _show_shared_processes(self, processes: list[ProcessCandidate]) -> None:
+        if getattr(self, "_closed", False):
+            return
         self._show_processes(processes)
         self.refresh_button.config(state=tk.NORMAL)
 
@@ -1022,6 +1070,8 @@ class ProcessDialog(tk.Toplevel):
         self.refresh_button.config(state=tk.NORMAL)
 
     def quit_selected(self) -> None:
+        if self._action_in_flight or self._action_unknown:
+            return
         if self._read_only:
             self._show_error("This node is read-only; processes cannot be terminated.")
             return
@@ -1049,17 +1099,81 @@ class ProcessDialog(tk.Toplevel):
 
         self.quit_button.config(state=tk.DISABLED)
         self.status_label.config(text="Requesting a normal quit...")
+        self._action_in_flight = True
+        self._action_generation += 1
+        action_generation = self._action_generation
         self._selected_create_times: dict[int, float] = {}
         for pid in allowed:
             create_time = self.processes[pid].create_time
             if create_time is not None:
                 self._selected_create_times[pid] = create_time
-        run_in_thread(
-            self,
-            lambda: self.manager.request_quit(allowed, self._selected_create_times),
-            self._after_normal_quit,
-            self._show_error,
+        self._run_shared_process_action(
+            "request_quit", allowed, self._selected_create_times, action_generation
         )
+
+    def _process_action_key(
+        self,
+        action: str,
+        pids: list[int],
+        create_times: dict[int, float],
+    ) -> str:
+        target = self.node_id or NodeId("local")
+        identity = tuple((pid, create_times.get(pid)) for pid in sorted(set(pids)))
+        return operation_key(target, f"process_action:{action}:{identity!r}")
+
+    def _run_shared_process_action(
+        self,
+        action: str,
+        pids: list[int],
+        create_times: dict[int, float],
+        generation: int,
+    ) -> None:
+        key = self._process_action_key(action, pids, create_times)
+        self._action_operation_key = key
+
+        def on_shared_outcome(_key: str, outcome: Any | None) -> None:
+            if self._closed or generation != self._action_generation:
+                return
+            if not isinstance(outcome, _ProcessActionOutcome):
+                self._process_action_error(
+                    generation, "process action outcome unavailable"
+                )
+                return
+            if outcome.error is not None:
+                self._process_action_error(generation, outcome.error)
+                return
+            if outcome.result is not None:
+                if action == "request_quit":
+                    self._after_normal_quit(outcome.result)
+                else:
+                    self._after_force_quit(outcome.result)
+
+        self.coordinator.subscribe(key, on_shared_outcome)
+        self._action_subscription_key = key
+        self._action_subscription = on_shared_outcome
+
+        def action_task(
+            _cancel_event: threading.Event,
+            _progress: Callable[[str], None],
+        ) -> _ProcessActionOutcome:
+            try:
+                if action == "request_quit":
+                    result = self.manager.request_quit(pids, create_times)
+                else:
+                    result = self.manager.force_quit(pids, create_times)
+            except Exception as error:  # noqa: BLE001 - shared with every dialog.
+                return _ProcessActionOutcome(error=str(error))
+            return _ProcessActionOutcome(result=result)
+
+        if not self.coordinator.in_flight(key):
+            self.coordinator.run(key, action_task)
+
+    def _after_normal_quit_for_generation(
+        self, generation: int, result: ProcessActionResult
+    ) -> None:
+        if self._closed or generation != self._action_generation:
+            return
+        self._after_normal_quit(result)
 
     def _after_normal_quit(self, result: ProcessActionResult) -> None:
         self.normal_quit_result = result
@@ -1073,14 +1187,11 @@ class ProcessDialog(tk.Toplevel):
             if force:
                 self.status_label.config(text="Force quitting selected processes...")
                 create_times = getattr(self, "_selected_create_times", {})
-                run_in_thread(
-                    self,
-                    lambda: self.manager.force_quit(
-                        list(result.force_required),
-                        create_times,
-                    ),
-                    self._after_force_quit,
-                    self._show_error,
+                self._run_shared_process_action(
+                    "force_quit",
+                    list(result.force_required),
+                    create_times,
+                    self._action_generation,
                 )
                 return
 
@@ -1100,7 +1211,15 @@ class ProcessDialog(tk.Toplevel):
         )
         self._finish_process_action(combined)
 
+    def _after_force_quit_for_generation(
+        self, generation: int, result: ProcessActionResult
+    ) -> None:
+        if self._closed or generation != self._action_generation:
+            return
+        self._after_force_quit(result)
+
     def _finish_process_action(self, result: ProcessActionResult) -> None:
+        self._action_in_flight = False
         show_action_result(
             self,
             "Process Cleanup",
@@ -1111,6 +1230,18 @@ class ProcessDialog(tk.Toplevel):
         self.refresh()
 
     def _close(self) -> None:
+        self._closed = True
+        self._action_generation += 1
+        if (
+            self._action_subscription_key is not None
+            and self._action_subscription is not None
+        ):
+            self.coordinator.unsubscribe(
+                self._action_subscription_key,
+                self._action_subscription,
+            )
+            self._action_subscription_key = None
+            self._action_subscription = None
         close_coordinated_dialog(
             self,
             key=self._operation_key,
@@ -1124,6 +1255,19 @@ class ProcessDialog(tk.Toplevel):
         self.quit_button.config(state=tk.NORMAL)
         self.status_label.config(text="Operation failed")
         messagebox.showerror("Process Error", message, parent=self)
+
+    def _process_action_error(self, generation: int, message: str) -> None:
+        if self._closed or generation != self._action_generation:
+            return
+        if _process_action_is_unknown(message):
+            self.status_label.config(
+                text="Termination outcome unknown; refresh before acting again"
+            )
+            self.quit_button.config(state=tk.DISABLED)
+            self._action_unknown = True
+            return
+        self._action_in_flight = False
+        self._show_error(message)
 
 
 class StorageDialog(tk.Toplevel):
@@ -1142,9 +1286,11 @@ class StorageDialog(tk.Toplevel):
         node_title: str | None = None,
         read_only: bool = False,
         on_close: Callable[[], None] | None = None,
+        provider: Any | None = None,
     ) -> None:
         super().__init__(master)
-        self.analyzer = analyzer
+        self.provider = analyzer if provider is None else provider
+        self.analyzer = self.provider
         self.manager = manager
         self.colors = colors
         self.on_changed = on_changed
@@ -1321,11 +1467,11 @@ class StorageDialog(tk.Toplevel):
             progress: Callable[[str], None],
         ) -> list[FileCandidate]:
             return call_legacy_compatible(
-                lambda: self.analyzer.storage_candidates(
+                lambda: self.provider.storage_candidates(
                     progress_callback=progress,
                     cancel_event=cancel_event,
                 ),
-                lambda: self.analyzer.storage_candidates(),
+                lambda: self.provider.storage_candidates(),
             )
 
         _start_coordinated_dialog_scan(
@@ -1492,6 +1638,8 @@ class StorageDialog(tk.Toplevel):
 
     def _show_error(self, message: str) -> None:
         self.scan_button.config(state=tk.NORMAL)
-        self.trash_button.config(state=tk.NORMAL)
+        self.trash_button.config(
+            state=tk.NORMAL if not self._read_only else tk.DISABLED
+        )
         self.status_label.config(text="Operation failed")
         messagebox.showerror("Storage Error", message, parent=self)

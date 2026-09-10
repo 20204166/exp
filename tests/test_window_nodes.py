@@ -1,6 +1,7 @@
 """Window node integration tests: selector, switching, isolation, discovery."""
 
 import threading
+import time
 import unittest
 from dataclasses import replace
 from queue import Queue
@@ -160,6 +161,19 @@ def _make_window(
 
 
 class WindowNodeSelectorTests(unittest.TestCase):
+    def test_peer_reconciliation_owns_one_replacement_timer(self) -> None:
+        window = _make_window(start_discovery=False)
+        manager = Mock()
+        manager.reconcile.return_value = time.monotonic() + 1.0
+        window._peer_connection_manager = manager
+        window._peer_reconcile_timer_id = "old-timer"
+
+        window._reconcile_peer_connections()
+
+        window._cancel_timer.assert_called_once_with("old-timer")
+        window._schedule_timer.assert_called_once()
+        self.assertEqual(window._peer_reconcile_timer_id, "timer-1")
+
     def test_cluster_specs_disambiguate_duplicate_display_names(self) -> None:
         local = _local_context()
         peer = _trusted_context(
@@ -866,6 +880,8 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
             )
         )
         window._node_registry.update_discovered(_candidate("peer-a", "replacement"))
+        provision = Mock(return_value=True)
+        window._provision_target_grant = provision
 
         with patch("window.messagebox.askyesno", return_value=True):
             window._pair_discovered_node("peer-a")
@@ -874,6 +890,71 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].identity_fingerprint, "replacement")
         self.assertIs(window._cluster_state.record("peer-a"), records[0])
+        self.assertEqual(provision.call_args.args[0].caller_node_id, "local")
+        self.assertEqual(window._cluster_state.peer_grants, ())
+
+    def test_pairing_without_target_grant_is_not_marked_trusted(self) -> None:
+        window = _make_window(start_discovery=False)
+        window._cluster_state = ClusterState()
+        window._nodes_error = Mock()
+        window._refresh_nodes_page = Mock()
+        window._node_registry.update_discovered(
+            _candidate("peer-a", node_identity_fingerprint("peer-a"))
+        )
+
+        with patch("window.messagebox.askyesno", return_value=True):
+            window._pair_discovered_node("peer-a")
+
+        self.assertIsNone(window._cluster_state.record("peer-a"))
+        with self.assertRaises(KeyError):
+            window._node_registry.context(NodeId("peer-a"))
+        window._nodes_error.assert_called_once_with(
+            "Pairing requires explicit target-side grant provisioning"
+        )
+
+    def test_activation_result_is_ignored_after_record_replacement(self) -> None:
+        window = _make_window(start_discovery=False)
+        context = _trusted_context(
+            "peer-a", "Peer A", cpu_value="peer", host_label="peer"
+        )
+        context.provider = None
+        context.descriptor = replace(
+            context.descriptor,
+            identity_fingerprint=node_identity_fingerprint("peer-a"),
+            identity_status=NodeIdentityStatus.VERIFIED,
+        )
+        window._node_registry.register_context(context)
+        record = trusted_node_record(
+            node_id="peer-a",
+            display_name="Peer A",
+            hostname="peer-a",
+            host="peer-a",
+            port=5000,
+            identity_fingerprint=node_identity_fingerprint("peer-a"),
+        )
+        window._cluster_state = ClusterState(trusted_nodes=(record,))
+        workers: list[Any] = []
+        deliveries: list[Any] = []
+        window._coordinator = AppCoordinator(
+            runner=lambda worker: workers.append(worker),
+            deliver=lambda callback: deliveries.append(callback),
+        )
+        provider = Mock()
+        provider.hello.return_value = {
+            "node_id": "peer-a",
+            "identity_fingerprint": record.identity_fingerprint,
+            "capabilities": ["dashboard_read"],
+        }
+
+        with patch("window.AuthenticatedNodeProvider", return_value=provider):
+            window._activate_remote_node(NodeId("peer-a"))
+        workers[0]()
+        window._cluster_state = ClusterState(
+            trusted_nodes=(replace(record, secret="b" * 64),)
+        )
+        deliveries[0]()
+
+        self.assertIsNone(context.provider)
 
     def test_discovery_status_lists_untrusted_peers_and_hides_when_lost(self) -> None:
         window = _make_window()
@@ -909,6 +990,7 @@ class WindowOpenResourceNodeTests(unittest.TestCase):
             window.open_resource("cpu")
         self.assertEqual(dialog.call_args.kwargs["read_only"], False)
         self.assertEqual(dialog.call_args.kwargs["node_id"], NodeId(LOCAL_NODE_ID))
+        self.assertIs(dialog.call_args.kwargs["provider"], window.analyzer)
 
     def test_remote_without_termination_capability_is_read_only(self) -> None:
         window = _make_window(
@@ -928,6 +1010,27 @@ class WindowOpenResourceNodeTests(unittest.TestCase):
             window.open_resource("cpu")
         self.assertEqual(dialog.call_args.kwargs["read_only"], True)
         self.assertEqual(dialog.call_args.kwargs["node_title"], "Dev Node")
+        self.assertIs(dialog.call_args.kwargs["provider"], window.analyzer)
+
+    def test_remote_cleanup_metadata_does_not_enable_storage_mutation(self) -> None:
+        window = _make_window(
+            _trusted_context(
+                "dev",
+                "Dev Node",
+                cpu_value="x",
+                host_label="dev",
+                capabilities=frozenset(
+                    {NodeCapability.STORAGE_REVIEW, NodeCapability.CLEANUP}
+                ),
+            )
+        )
+        window._switch_selected_node(NodeId("dev"))
+        window.snapshot = Mock()
+        window.snapshot.get = Mock(return_value=_summary("storage"))
+        window._feature_catalog.get = Mock(return_value=Mock(action_kind="storage"))
+        with patch("window.StorageDialog") as dialog:
+            window.open_resource("storage")
+        self.assertEqual(dialog.call_args.kwargs["read_only"], True)
 
     def test_dialog_change_callback_does_not_rescan_a_newly_selected_node(self) -> None:
         window = _make_window(

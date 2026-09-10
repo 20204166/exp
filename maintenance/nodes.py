@@ -18,6 +18,7 @@ Invariants that every caller must preserve:
   action; capability is never inferred from a hostname or from ``is_local``.
 """
 
+import math
 import secrets
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from maintenance.components.temperature import TemperatureTelemetry
-from maintenance.models import DashboardSnapshot
+from maintenance.models import DashboardSnapshot, ProcessCandidate, ResourceSummary
 
 LOCAL_NODE_ID = "local"
 LOCAL_NODE_HOSTNAME = "localhost"
@@ -58,6 +59,126 @@ class NodeStatus(str, Enum):
     ONLINE = "online"
     OFFLINE = "offline"
     UNKNOWN = "unknown"
+
+
+class NodeConnectionStatus(str, Enum):
+    """Runtime connectivity state, independent of trust and authorization."""
+
+    UNKNOWN = "unknown"
+    CONNECTING = "connecting"
+    ONLINE = "online"
+    OFFLINE = "offline"
+    AUTHENTICATION_FAILED = "authentication_failed"
+    IDENTITY_CHANGED = "identity_changed"
+
+
+class PeerFailure(str, Enum):
+    """Classified peer failures used by the bounded reconnect policy."""
+
+    TIMEOUT = "timeout"
+    CONNECTION_REFUSED = "connection_refused"
+    ROUTE_FAILURE = "route_failure"
+    DISAPPEARED = "disappeared"
+    AUTHENTICATION_FAILED = "authentication_failed"
+    IDENTITY_CHANGED = "identity_changed"
+
+
+def classify_peer_failure(error: BaseException | str) -> PeerFailure:
+    """Classify coordinator-delivered peer errors without retrying trust failures."""
+
+    error_name = type(error).__name__ if isinstance(error, BaseException) else ""
+    if error_name in {"RemoteAuthError", "RemoteProtocolError"}:
+        return PeerFailure.AUTHENTICATION_FAILED
+    message = str(error).lower()
+    if any(
+        marker in message
+        for marker in (
+            "auth",
+            "signature",
+            "identity",
+            "wrong node",
+            "caller",
+            "target identity",
+        )
+    ):
+        return PeerFailure.AUTHENTICATION_FAILED
+    if "timeout" in message or "timed out" in message:
+        return PeerFailure.TIMEOUT
+    if "refused" in message:
+        return PeerFailure.CONNECTION_REFUSED
+    if any(marker in message for marker in ("route", "network is unreachable")):
+        return PeerFailure.ROUTE_FAILURE
+    return PeerFailure.DISAPPEARED
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionState:
+    """A peer's runtime connection state and the time it was observed."""
+
+    status: NodeConnectionStatus
+    reason: str | None = None
+    changed_at: float | None = None
+
+    @classmethod
+    def unknown(cls, *, now: float | None = None) -> "ConnectionState":
+        return cls(NodeConnectionStatus.UNKNOWN, changed_at=now)
+
+    @classmethod
+    def connecting(cls, *, now: float | None = None) -> "ConnectionState":
+        return cls(NodeConnectionStatus.CONNECTING, changed_at=now)
+
+    @classmethod
+    def online(cls, *, now: float | None = None) -> "ConnectionState":
+        return cls(NodeConnectionStatus.ONLINE, changed_at=now)
+
+    @classmethod
+    def offline(
+        cls, reason: str | None = None, *, now: float | None = None
+    ) -> "ConnectionState":
+        return cls(NodeConnectionStatus.OFFLINE, reason=reason, changed_at=now)
+
+
+@dataclass(slots=True)
+class RetryState:
+    """Bounded retry timing for one peer, without owning a timer."""
+
+    attempt: int = 0
+    next_attempt_at: float | None = None
+    automatic_retry: bool = True
+    last_failure: PeerFailure | None = None
+
+    def record_failure(
+        self,
+        failure: PeerFailure,
+        *,
+        now: float,
+        jitter: Callable[[int], float] | None = None,
+        base_seconds: float = 1.0,
+        max_seconds: float = 300.0,
+        max_backoff_exponent: int = 8,
+    ) -> None:
+        self.last_failure = failure
+        self.attempt += 1
+        if failure in (
+            PeerFailure.AUTHENTICATION_FAILED,
+            PeerFailure.IDENTITY_CHANGED,
+        ):
+            self.next_attempt_at = None
+            self.automatic_retry = False
+            return
+        delay = min(
+            max_seconds,
+            base_seconds * (2 ** min(self.attempt - 1, max_backoff_exponent)),
+        )
+        extra = 0.0 if jitter is None else max(0.0, float(jitter(self.attempt)))
+        self.next_attempt_at = now + delay + extra
+        self.automatic_retry = True
+
+    def reset(self) -> None:
+        self.attempt = 0
+        self.next_attempt_at = None
+        self.automatic_retry = True
+        self.last_failure = None
 
 
 class NodeIdentityStatus(str, Enum):
@@ -121,6 +242,13 @@ class NodePermission(str, Enum):
     PROCESS_FORCE_TERMINATION = "process_force_termination"
     STORAGE_REVIEW = "storage_review"
     CLEANUP = "cleanup"
+
+
+class ProcessActionKind(str, Enum):
+    """The only process actions that may cross a node boundary."""
+
+    REQUEST_QUIT = "request_quit"
+    FORCE_QUIT = "force_quit"
 
 
 READ_PERMISSIONS = frozenset(
@@ -195,6 +323,19 @@ class NodeSnapshot:
     dashboard: DashboardSnapshot | None = None
     schema_version: int = NODE_SNAPSHOT_SCHEMA_VERSION
 
+    @property
+    def resources(self) -> tuple[ResourceSummary, ...]:
+        """Return the dashboard resources without exposing the wire envelope."""
+
+        return () if self.dashboard is None else self.dashboard.resources
+
+    def resource(self, key: str) -> ResourceSummary:
+        """Return one normalized resource from this node's snapshot."""
+
+        if self.dashboard is None:
+            raise KeyError(f"Snapshot has no resources: {key}")
+        return self.dashboard.get(key)
+
     def is_stale(
         self,
         *,
@@ -202,6 +343,10 @@ class NodeSnapshot:
         max_age: timedelta,
     ) -> bool:
         current = datetime.now(timezone.utc).astimezone() if now is None else now
+        if current.tzinfo is None and self.scanned_at.tzinfo is not None:
+            current = current.replace(tzinfo=self.scanned_at.tzinfo)
+        elif current.tzinfo is not None and self.scanned_at.tzinfo is None:
+            current = current.replace(tzinfo=None)
         return current - self.scanned_at > max_age
 
 
@@ -306,6 +451,39 @@ class ProcessRef:
 
 
 @dataclass(frozen=True, slots=True)
+class ProcessTerminationRequest:
+    """A target-bound, explicitly allowlisted process action request."""
+
+    target_node_id: NodeId
+    processes: tuple[ProcessRef, ...]
+    action: ProcessActionKind
+
+    def __post_init__(self) -> None:
+        if not self.processes:
+            raise ValueError("at least one process is required")
+        if not isinstance(self.action, ProcessActionKind):
+            raise TypeError("unsupported process action")
+        for process in self.processes:
+            if (
+                not isinstance(process.pid, int)
+                or isinstance(process.pid, bool)
+                or process.pid < 0
+            ):
+                raise ValueError("process reference pid is invalid")
+            if process.create_time is None:
+                raise ValueError("process reference create_time is required")
+            if (
+                not isinstance(process.create_time, (int, float))
+                or isinstance(process.create_time, bool)
+                or not math.isfinite(float(process.create_time))
+                or float(process.create_time) < 0
+            ):
+                raise ValueError("process reference create_time is invalid")
+        if any(process.node_id != self.target_node_id for process in self.processes):
+            raise ValueError("process references must match the target node")
+
+
+@dataclass(frozen=True, slots=True)
 class FileRef:
     """A file reference bound to one node."""
 
@@ -367,7 +545,7 @@ class NodeProvider(Protocol):
         self,
         cancel_event: Any | None = None,
         progress_callback: Callable[[str], None] | None = None,
-    ) -> Any: ...
+    ) -> DashboardSnapshot: ...
 
     def node_snapshot(
         self,
@@ -379,12 +557,12 @@ class NodeProvider(Protocol):
         self,
         key: str,
         cancel_event: Any | None = None,
-    ) -> Any: ...
+    ) -> ResourceSummary: ...
 
     def process_candidates(
         self,
         cancel_event: Any | None = None,
-    ) -> list[Any]: ...
+    ) -> list[ProcessCandidate]: ...
 
     def storage_candidates(
         self,
@@ -397,6 +575,53 @@ class NodeProvider(Protocol):
     def stop_background_workers(self) -> None: ...
 
 
+class LocalNodeProvider:
+    """Adapt the existing local analyzer to the node-bound read contract.
+
+    The wrapped analyzer remains available to existing callers; this adapter
+    only adds the local descriptor to a dashboard result.
+    """
+
+    def __init__(self, provider: Any, descriptor: NodeDescriptor) -> None:
+        self._provider = provider
+        self._descriptor = descriptor
+
+    def dashboard_snapshot(
+        self,
+        cancel_event: Any | None = None,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> DashboardSnapshot:
+        return self._provider.dashboard_snapshot(
+            cancel_event=cancel_event,
+            progress_callback=progress_callback,
+        )
+
+    def node_snapshot(
+        self,
+        cancel_event: Any | None = None,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> NodeSnapshot:
+        dashboard = self.dashboard_snapshot(cancel_event, progress_callback)
+        return self.snapshot_from_dashboard(dashboard)
+
+    def snapshot_from_dashboard(self, dashboard: DashboardSnapshot) -> NodeSnapshot:
+        """Bind an already-collected local dashboard result to its node."""
+
+        return NodeSnapshot(
+            node_id=self._descriptor.id,
+            display_name=self._descriptor.display_name,
+            hostname=self._descriptor.hostname,
+            platform=self._descriptor.platform,
+            status=self._descriptor.status,
+            capabilities=self._descriptor.capabilities,
+            scanned_at=dashboard.scanned_at,
+            dashboard=dashboard,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._provider, name)
+
+
 class ProcessActionBackend(Protocol):
     """Target-bound interface for process termination.
 
@@ -406,12 +631,14 @@ class ProcessActionBackend(Protocol):
 
     def request_quit(
         self,
-        refs: list[ProcessRef],
+        pids: list[int],
+        expected_create_times: dict[int, float] | None = None,
     ) -> Any: ...
 
     def force_quit(
         self,
-        refs: list[ProcessRef],
+        pids: list[int],
+        expected_create_times: dict[int, float] | None = None,
     ) -> Any: ...
 
 
@@ -446,6 +673,9 @@ class NodeContext:
     capability_counts: dict[str, int] = field(default_factory=dict)
     failed_card_counts: dict[str, int] = field(default_factory=dict)
     full_snapshot_applied_at: float | None = None
+    connection: ConnectionState = field(default_factory=ConnectionState.unknown)
+    retry: RetryState = field(default_factory=RetryState)
+    connection_generation: int = 0
 
     @property
     def node_id(self) -> NodeId:

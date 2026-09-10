@@ -11,6 +11,7 @@ from maintenance.components import (
 )
 from maintenance.components.process_safety import is_protected_process_name
 from maintenance.models import FileActionResult, ProcessActionResult
+from maintenance.nodes import ProcessActionKind, ProcessTerminationRequest
 from maintenance.scanner import SystemScanner
 
 try:
@@ -43,6 +44,29 @@ class ProcessManager:
             lambda process: process.terminate(),
             expected_create_times=expected_create_times,
         )
+
+    def terminate(self, request: ProcessTerminationRequest) -> ProcessActionResult:
+        """Execute only a typed, allowlisted request through local safety checks."""
+
+        if request.action is ProcessActionKind.REQUEST_QUIT:
+            return self.request_quit(
+                [process.pid for process in request.processes],
+                {
+                    process.pid: process.create_time
+                    for process in request.processes
+                    if process.create_time is not None
+                },
+            )
+        if request.action is ProcessActionKind.FORCE_QUIT:
+            return self.force_quit(
+                [process.pid for process in request.processes],
+                {
+                    process.pid: process.create_time
+                    for process in request.processes
+                    if process.create_time is not None
+                },
+            )
+        raise ValueError("unsupported process action")
 
     def force_quit(
         self,

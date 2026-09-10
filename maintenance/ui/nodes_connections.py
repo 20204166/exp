@@ -75,6 +75,7 @@ class TrustedNodeSpec:
     identity_status: str = "unverified"
     permissions: tuple[str, ...] = ()
     pairing_state: str = "trusted"
+    target_state: str = "Unknown"
 
 
 class NodesConnectionsPage:
@@ -331,7 +332,7 @@ class NodesConnectionsPage:
         if spec.hostname and spec.hostname != spec.display_name:
             text += f"  ·  {spec.hostname}"
         text += f"  ·  ID {spec.node_id}"
-        text += f"  ·  {spec.status}"
+        text += f"  ·  {spec.target_state}  ·  {spec.status}"
         if spec.identity_status == "mismatch":
             text += "  ·  IDENTITY MISMATCH"
         text += f"  ·  {spec.pairing_state.replace('_', ' ').title()}"
@@ -384,24 +385,21 @@ class NodesConnectionsPage:
                 "Danger.TButton",
             ),
         ):
+            enabled = text_ != "Open" or (spec.selectable and spec.status != "offline")
             action_id = f"nodes:trusted:{spec.node_id}:{text_.lower()}"
             button = self.button_cls(
                 actions,
                 text=text_,
                 command=command,
                 style=style,
-                state=(
-                    tk.NORMAL
-                    if text_ != "Open" or spec.selectable or spec.openable
-                    else tk.DISABLED
-                ),
+                state=(tk.NORMAL if enabled else tk.DISABLED),
             )
             button.pack(side="left", padx=(6, 0))
             self._register_button(
                 action_id,
                 command,
                 button,
-                text_ != "Open" or spec.selectable or spec.openable,
+                enabled,
             )
         if self.callbacks.on_permissions is not None:
             on_permissions = self.callbacks.on_permissions

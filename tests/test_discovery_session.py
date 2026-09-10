@@ -167,6 +167,30 @@ class DiscoverySessionTests(unittest.TestCase):
             ["timer.cancel", "coordinator.stop", "timer.cancel", "coordinator.stop"],
         )
 
+    def test_presence_change_notifies_peer_lifecycle_hook(self) -> None:
+        presence_changed = Mock()
+        session = DiscoverySession(
+            coordinator=self.coordinator,
+            registry=self.registry,
+            get_cluster_state=lambda: self.state,
+            set_cluster_state=self._set_state,
+            save_cluster_state=self._save_state,
+            schedule_timer=self.schedule,
+            cancel_timer=self.cancel,
+            start_background_poll=Mock(),
+            on_candidate=Mock(),
+            on_lost=Mock(),
+            discovery_factory=lambda *_args, **_kwargs: self.discovery,
+            on_presence_changed=presence_changed,
+        )
+        session.start()
+        handlers = self.coordinator.start_discovery.call_args.kwargs
+
+        handlers["on_candidate"](object())
+        handlers["on_lost"]("peer")
+
+        self.assertEqual(presence_changed.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

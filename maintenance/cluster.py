@@ -14,6 +14,7 @@ display. The authenticated transport that consumes these envelopes lives in
 
 import json
 import logging
+import math
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
@@ -30,12 +31,12 @@ from maintenance.models import (
     DashboardSnapshot,
     FileCandidate,
     ProcessActionResult,
+    ProcessActionState,
     ProcessCandidate,
     ResourceSummary,
 )
 from maintenance.nodes import (
     NODE_SNAPSHOT_SCHEMA_VERSION,
-    READ_PERMISSIONS,
     NodeCapability,
     NodeId,
     NodePermission,
@@ -166,17 +167,47 @@ def process_action_result_to_dict(result: ProcessActionResult) -> dict[str, Any]
 def process_action_result_from_dict(data: Any) -> ProcessActionResult:
     """Decode one process-action result without applying action policy."""
 
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or set(data) != {
+        "requested",
+        "stopped",
+        "force_required",
+        "errors",
+    }:
         raise ClusterDataError("process action result must be an object")
-    try:
-        return ProcessActionResult(
-            requested=int(data["requested"]),
-            stopped=tuple(int(pid) for pid in data["stopped"]),
-            force_required=tuple(int(pid) for pid in data["force_required"]),
-            errors=tuple(str(error) for error in data["errors"]),
-        )
-    except (KeyError, TypeError, ValueError) as error:
-        raise ClusterDataError("invalid process action result") from error
+    requested = data["requested"]
+    if not isinstance(requested, int) or isinstance(requested, bool) or requested < 0:
+        raise ClusterDataError("process action result requested is invalid")
+
+    def pids(value: Any, field: str) -> tuple[int, ...]:
+        if not isinstance(value, list):
+            raise ClusterDataError(f"process action result {field} must be a list")
+        if any(
+            not isinstance(pid, int) or isinstance(pid, bool) or pid < 0
+            for pid in value
+        ):
+            raise ClusterDataError(f"process action result {field} has invalid PIDs")
+        result = tuple(value)
+        if len(set(result)) != len(result):
+            raise ClusterDataError(f"process action result {field} has duplicate PIDs")
+        return result
+
+    stopped = pids(data["stopped"], "stopped")
+    force_required = pids(data["force_required"], "force_required")
+    if set(stopped).intersection(force_required):
+        raise ClusterDataError("process action result has overlapping PIDs")
+    if len(stopped) + len(force_required) > requested:
+        raise ClusterDataError("process action result exceeds requested count")
+    errors = data["errors"]
+    if not isinstance(errors, list) or any(
+        not isinstance(error, str) for error in errors
+    ):
+        raise ClusterDataError("process action result errors must be a string list")
+    return ProcessActionResult(
+        requested=requested,
+        stopped=stopped,
+        force_required=force_required,
+        errors=tuple(errors),
+    )
 
 
 def dashboard_snapshot_to_dict(snapshot: DashboardSnapshot) -> dict[str, Any]:
@@ -298,6 +329,8 @@ def process_candidate_to_dict(process: ProcessCandidate) -> dict[str, Any]:
         "username": process.username,
         "action_allowed": process.action_allowed,
         "create_time": process.create_time,
+        "protected": process.protected,
+        "action_state": process.action_state.value,
     }
 
 
@@ -305,17 +338,44 @@ def process_candidate_from_dict(data: Any) -> ProcessCandidate:
     if not isinstance(data, dict):
         raise ClusterDataError("process candidate must be an object")
     pid = data.get("pid")
-    if not isinstance(pid, int) or isinstance(pid, bool):
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         raise ClusterDataError("process candidate pid must be an integer")
     for field in ("name", "activity", "username"):
         if not isinstance(data.get(field), str):
             raise ClusterDataError(f"process candidate {field} must be a string")
     for field in ("memory_bytes", "memory_percent", "cpu_percent"):
-        if not isinstance(data.get(field), (int, float)):
+        value = data.get(field)
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+            or value < 0
+        ):
             raise ClusterDataError(f"process candidate {field} must be a number")
     create_time = data.get("create_time")
-    if create_time is not None and not isinstance(create_time, (int, float)):
+    if create_time is not None and (
+        not isinstance(create_time, (int, float))
+        or isinstance(create_time, bool)
+        or not math.isfinite(float(create_time))
+        or create_time < 0
+    ):
         raise ClusterDataError("process candidate create_time must be a number")
+    action_allowed = data.get("action_allowed")
+    if not isinstance(action_allowed, bool):
+        raise ClusterDataError("process candidate action_allowed must be a boolean")
+    protected = data.get("protected", not action_allowed)
+    if not isinstance(protected, bool):
+        raise ClusterDataError("process candidate protected must be a boolean")
+    action_state_value = data.get(
+        "action_state",
+        ProcessActionState.ALLOWED.value
+        if action_allowed and not protected
+        else ProcessActionState.PROTECTED.value,
+    )
+    try:
+        action_state = ProcessActionState(action_state_value)
+    except ValueError as error:
+        raise ClusterDataError("process candidate action_state is invalid") from error
     return ProcessCandidate(
         pid=pid,
         name=data["name"],
@@ -324,8 +384,10 @@ def process_candidate_from_dict(data: Any) -> ProcessCandidate:
         cpu_percent=float(data["cpu_percent"]),
         activity=data["activity"],
         username=data["username"],
-        action_allowed=bool(data["action_allowed"]),
+        action_allowed=action_allowed,
         create_time=cast(float | None, create_time),
+        protected=protected,
+        action_state=action_state,
     )
 
 
@@ -573,10 +635,14 @@ class ClusterStore:
         if not isinstance(node_id, str):
             LOGGER.warning("Ignoring trusted-node record without an id")
             return None
-        for field in ("display_name", "hostname", "host"):
+        for field in ("display_name", "hostname"):
             if not isinstance(item.get(field), str):
                 LOGGER.warning("Ignoring malformed trusted-node record %s", node_id)
                 return None
+        host = item.get("host", "")
+        if not isinstance(host, str):
+            LOGGER.warning("Ignoring malformed trusted-node record %s", node_id)
+            return None
         port = item.get("port")
         if port is not None and (
             not isinstance(port, int)
@@ -615,7 +681,7 @@ class ClusterStore:
             hostname=item["hostname"],
             platform=platform,
             color=color,
-            host=item["host"],
+            host=host,
             port=port,
             capabilities=frozenset(capabilities),
             secret=secret,
@@ -631,17 +697,18 @@ class ClusterStore:
     @staticmethod
     def _parse_permissions(value: Any) -> frozenset[NodePermission]:
         if value is None:
-            return READ_PERMISSIONS
+            return frozenset()
         if not isinstance(value, list):
             return frozenset()
         permissions: set[NodePermission] = set()
         for raw in value:
             if not isinstance(raw, str):
-                continue
+                return frozenset()
             try:
                 permissions.add(NodePermission(raw))
             except ValueError:
                 LOGGER.warning("Ignoring unknown node permission %r", raw)
+                return frozenset()
         return frozenset(permissions)
 
     @staticmethod

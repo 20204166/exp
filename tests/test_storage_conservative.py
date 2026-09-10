@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from maintenance.actions import FileManager
@@ -220,6 +221,43 @@ class FileManagerSafetyTests(unittest.TestCase):
             self.assertEqual(result.moved, ())
             self.assertEqual(moved, [])
             self.assertEqual(len(result.errors), 1)
+
+    def test_file_changed_between_stat_checks_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            downloads = root / "Downloads"
+            downloads.mkdir()
+            target = downloads / "race.bin"
+            replacement = downloads / "replacement.bin"
+            target.write_bytes(b"original")
+            replacement.write_bytes(b"replacement")
+            target_stat = target.stat()
+            replacement_stat = replacement.stat()
+            resolved_target = target.resolve()
+            original_stat = Path.stat
+            target_reads = 0
+
+            def changing_stat(path: Path, *args: Any, **kwargs: Any) -> Any:
+                nonlocal target_reads
+                if path == resolved_target:
+                    target_reads += 1
+                    if target_reads <= 2:
+                        return target_stat
+                    return replacement_stat
+                return original_stat(path, *args, **kwargs)
+
+            moved: list[str] = []
+            with (
+                patch.object(Path, "stat", changing_stat),
+                patch("maintenance.actions.send2trash", moved.append),
+            ):
+                result = self._manager(downloads).move_to_trash([target])
+
+            self.assertEqual(result.moved, ())
+            self.assertEqual(moved, [])
+            self.assertTrue(
+                any("changed during validation" in error for error in result.errors)
+            )
 
     def test_symlinked_ancestor_escaping_root_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

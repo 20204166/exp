@@ -15,6 +15,7 @@ from maintenance.components import (
     gpu,
     network_discovery,
     node_selection,
+    peer_connection,
     process_safety,
     scan_support,
     temperature,
@@ -39,6 +40,7 @@ class ComponentPackageLayoutTests(unittest.TestCase):
             "network_discovery.py",
             "node_selection.py",
             "node_context.py",
+            "peer_connection.py",
             "process_safety.py",
             "scan_support.py",
             "temperature.py",
@@ -95,6 +97,7 @@ class ComponentFacadeReexportTests(unittest.TestCase):
             "DEFAULT_TTL_SECONDS": network_discovery,
             "SERVICE_TYPE": network_discovery,
             "NodeSelection": node_selection,
+            "PeerConnectionManager": peer_connection,
         }
         for name, home in moved.items():
             with self.subTest(name=name):
@@ -139,6 +142,7 @@ class ComponentFacadeReexportTests(unittest.TestCase):
             "DiscoverySession",
             "DiscoveryStartResult",
             "NodeSelection",
+            "PeerConnectionManager",
             "DashboardScanLifecycle",
             "windows_windll",
         }
