@@ -217,6 +217,7 @@ class AppWindow:
             is_closing=lambda: self._is_closing,
             pending_ids=self._pending_after_ids,
             logger=LOGGER,
+            on_interrupt=self._close,
         )
         self.master.title("System Analyzer")
         self.master.geometry("1040x760")

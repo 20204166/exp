@@ -6,7 +6,10 @@ from unittest.mock import Mock
 from maintenance.models import CapabilityState
 from maintenance.preferences import AppPreferences
 from maintenance.ui.window_supports import card_policy, snapshot_state
-from maintenance.ui.window_supports.timer_delivery import TimerDelivery
+from maintenance.ui.window_supports.timer_delivery import (
+    TimerDelivery,
+    deadline_delay_ms,
+)
 from tests.support.models import make_snapshot, make_summary
 from tests.support.scheduling import TimerMaster
 
@@ -197,6 +200,27 @@ class TimerDeliveryTests(unittest.TestCase):
         TimerDelivery.invoke(Mock(side_effect=RuntimeError("dead widget")), logger)
 
         logger.warning.assert_called_once()
+
+    def test_timer_interrupt_closes_window_instead_of_reentering_tk(self) -> None:
+        close = Mock()
+        delivery = TimerDelivery(
+            master=self.master,
+            is_closing=lambda: False,
+            pending_ids=self.pending_ids,
+            logger=Mock(),
+            on_interrupt=close,
+        )
+        identifier = delivery.schedule(500, Mock(side_effect=KeyboardInterrupt()))
+        assert identifier is not None
+
+        cast(Callable[[], None], self.master.scheduled[0][1])()
+
+        close.assert_called_once_with()
+        self.assertNotIn(identifier, self.pending_ids)
+
+    def test_deadline_delay_is_milliseconds_and_never_negative(self) -> None:
+        self.assertEqual(deadline_delay_ms(12.25, 12.0), 250)
+        self.assertEqual(deadline_delay_ms(11.9, 12.0), 0)
 
 
 if __name__ == "__main__":

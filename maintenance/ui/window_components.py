@@ -18,6 +18,7 @@ from maintenance.nodes import NodeId
 from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.window_supports import card_policy, snapshot_state
+from maintenance.ui.window_supports.timer_delivery import deadline_delay_ms
 
 
 def _window_symbols() -> Any:
@@ -41,11 +42,11 @@ def component_poll_delay(controller: Any) -> int | None:
         if deadline is None:
             return None if has_pending else controller.COMPONENT_POLL_MILLISECONDS
         if deadline > now:
-            return max(0, int((deadline - now) * 1000))
+            return deadline_delay_ms(deadline, now)
         return 0 if has_pending else controller.COMPONENT_POLL_MILLISECONDS
     if deadline is None:
         return None
-    return max(0, int((deadline - now) * 1000))
+    return deadline_delay_ms(deadline, now)
 
 
 def schedule_component_poll(

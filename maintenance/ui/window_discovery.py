@@ -18,6 +18,7 @@ from maintenance.nodes import (
 from maintenance.remote import PeerGrant
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui import render_coordinator as ui_render
+from maintenance.ui.window_supports.timer_delivery import deadline_delay_ms
 
 LOGGER = logging.getLogger(__name__)
 
@@ -171,7 +172,7 @@ def schedule_peer_reconciliation(controller: Any, deadline: float | None) -> Non
     controller.__dict__["_peer_reconcile_timer_id"] = None
     if deadline is None or controller._is_closing:
         return
-    delay = max(0, int((deadline - time.monotonic()) * 1000))
+    delay = deadline_delay_ms(deadline, time.monotonic())
     controller.__dict__["_peer_reconcile_timer_id"] = controller._schedule_timer(
         delay, controller._run_peer_reconciliation
     )

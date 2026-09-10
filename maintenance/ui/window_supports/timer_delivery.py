@@ -8,6 +8,12 @@ from collections.abc import Callable
 from typing import Any
 
 
+def deadline_delay_ms(deadline: float, now: float) -> int:
+    """Convert a monotonic deadline into a non-negative Tk delay."""
+
+    return max(0, int((deadline - now) * 1000))
+
+
 class TimerDelivery:
     """Track, schedule, cancel, and safely deliver window timers."""
 
@@ -18,11 +24,13 @@ class TimerDelivery:
         is_closing: Callable[[], bool],
         pending_ids: set[str],
         logger: logging.Logger,
+        on_interrupt: Callable[[], None] | None = None,
     ) -> None:
         self._master = master
         self._is_closing = is_closing
         self._pending_ids = pending_ids
         self._logger = logger
+        self._on_interrupt = on_interrupt
 
     def schedule(
         self,
@@ -39,7 +47,11 @@ class TimerDelivery:
             if identifier is not None:
                 self._pending_ids.discard(identifier)
             if not self._is_closing():
-                callback(*args)
+                try:
+                    callback(*args)
+                except KeyboardInterrupt:
+                    if self._on_interrupt is not None and not self._is_closing():
+                        self._on_interrupt()
 
         try:
             identifier = self._master.after(delay, run_callback)
