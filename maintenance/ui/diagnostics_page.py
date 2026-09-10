@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from tkinter import ttk
 from typing import Any
 
-from maintenance.diagnostics import DiagnosticsSnapshot, serialize_diagnostics
+from maintenance.diagnostics import (
+    DiagnosticsSnapshot,
+    format_timestamp,
+    serialize_diagnostics,
+)
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
@@ -119,7 +123,7 @@ class DiagnosticsPage:
                     item.key,
                     (
                         f"{item.state} · {item.capability} · "
-                        f"{item.last_error or ('Last success: ' + str(item.last_success) if item.last_success else 'No data yet')}"
+                        f"{item.last_error or ('Last success: ' + format_timestamp(item.last_success) if item.last_success else 'No data yet')}"
                     ),
                 )
                 for item in snapshot.components

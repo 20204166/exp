@@ -7,12 +7,17 @@ from types import SimpleNamespace
 from maintenance.diagnostics import (
     MAX_DETAIL_LENGTH,
     build_diagnostics_snapshot,
+    format_timestamp,
     serialize_diagnostics,
     truncate_detail,
 )
 
 
 class DiagnosticsSnapshotTests(unittest.TestCase):
+    def test_format_timestamp_is_human_readable(self) -> None:
+        self.assertRegex(format_timestamp(1789056712.440), r"^\d{2}:\d{2}:\d{2}$")
+        self.assertEqual(format_timestamp(None), "No data yet")
+
     def test_snapshot_projects_current_state_without_secrets(self) -> None:
         scheduler = SimpleNamespace(
             intervals={"cpu": 1000},

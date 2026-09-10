@@ -25,7 +25,7 @@ from maintenance.remote import (
     PairingRequest,
     PeerGrant,
     RemoteAuthError,
-    TLSRemoteTransport,
+    build_trusted_transport,
 )
 from maintenance.remote_security import ensure_tls_material, server_context
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
@@ -257,9 +257,7 @@ def connect_peer(
         node_id=context.node_id,
         secret=record.secret,
         caller_node_id=NodeId(controller._cluster_state.local_node_id),
-        transport=TLSRemoteTransport(
-            record.host, record.port, expected_fingerprint=record.transport_fingerprint
-        ),
+        transport=build_trusted_transport(record),
     )
     hello = provider.hello(cancel_event=cancel_event)
     if hello.get("node_id") != context.node_id.value:
@@ -456,6 +454,19 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
             f"Identity mismatch for {descriptor.display_name}; re-pair required"
         )
         return False
+    if (
+        record.transport_fingerprint is not None
+        and candidate.transport_fingerprint != record.transport_fingerprint
+    ):
+        context.descriptor = replace(
+            descriptor,
+            identity_status=NodeIdentityStatus.MISMATCH,
+            identity_fingerprint=record.identity_fingerprint,
+        )
+        controller._nodes_error(
+            f"TLS fingerprint mismatch for {descriptor.display_name}; re-pair required"
+        )
+        return False
     needs_identity_hydration = (
         record.identity_fingerprint is None
         and candidate.identity_fingerprint is not None
@@ -469,10 +480,7 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
     )
     address = candidate.addresses[0] if candidate.addresses else record.host
     port = candidate.port if candidate.port is not None else record.port
-    transport_changed = candidate.transport_fingerprint != record.transport_fingerprint
-    endpoint_changed = (
-        address != record.host or port != record.port or transport_changed
-    )
+    endpoint_changed = address != record.host or port != record.port
     if not endpoint_changed and not (
         needs_identity_hydration or needs_identity_recovery
     ):
@@ -486,12 +494,8 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
             secret=record.secret,
             caller_node_id=NodeId(controller._cluster_state.local_node_id),
             transport=(
-                window.TLSRemoteTransport(
-                    address,
-                    port,
-                    expected_fingerprint=candidate.transport_fingerprint,
-                )
-                if candidate.transport_fingerprint
+                build_trusted_transport(replace(record, host=address, port=port))
+                if record.transport_fingerprint
                 else window.SocketRemoteTransport(address, port)
             ),
         )
@@ -531,9 +535,7 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
             if needs_identity_hydration
             else record.identity_fingerprint
         ),
-        transport_fingerprint=(
-            candidate.transport_fingerprint or record.transport_fingerprint
-        ),
+        transport_fingerprint=record.transport_fingerprint,
     )
     if updated_record == record:
         if needs_identity_recovery:

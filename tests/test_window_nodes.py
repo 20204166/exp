@@ -358,6 +358,7 @@ class WindowNodeConnectionTests(unittest.TestCase):
                     host="192.0.2.10",
                     port=5000,
                     secret="secret",
+                    transport_fingerprint="tls-pin",
                 ),
             ),
         )
@@ -388,6 +389,32 @@ class WindowNodeConnectionTests(unittest.TestCase):
         key = "node:peer-a:test_connection"
         self.assertEqual(runner.pending, 1)
         self.assertTrue(window._coordinator.in_flight(key))
+
+    def test_test_connection_passes_persisted_tls_fingerprint(self) -> None:
+        runner = DeferredRunner()
+        window = self._window(runner)
+        record = replace(
+            window._cluster_state.trusted_nodes[0],
+            transport_fingerprint="tls-pin",
+        )
+        window._cluster_state = replace(
+            window._cluster_state,
+            trusted_nodes=(record,),
+        )
+        transport_cls = Mock()
+        provider_cls = Mock(return_value=self._provider({"node_id": "peer-a"}))
+
+        window_node_actions.test_connection(
+            window,
+            "peer-a",
+            provider_cls=provider_cls,
+            transport_cls=transport_cls,
+        )
+        runner.run_next()
+
+        transport_cls.assert_called_once_with(
+            "192.0.2.10", 5000, expected_fingerprint="tls-pin"
+        )
 
     def test_test_connection_delivers_success(self) -> None:
         runner = DeferredRunner()
@@ -488,6 +515,50 @@ class WindowNodeConnectionTests(unittest.TestCase):
 
 
 class WindowNodeSwitchingTests(unittest.TestCase):
+    def test_revoke_selected_node_returns_to_local_without_render_crash(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
+            start_discovery=False,
+        )
+        window._cluster_state = ClusterState(
+            trusted_nodes=(
+                trusted_node_record(
+                    node_id="peer-a",
+                    display_name="Peer A",
+                    hostname="peer-a",
+                    host="192.0.2.10",
+                    port=5000,
+                    secret="secret",
+                    transport_fingerprint="tls-pin",
+                ),
+            )
+        )
+
+        def save_state(state: ClusterState) -> bool:
+            window._cluster_state = state
+            return True
+
+        window._save_cluster_state = Mock(side_effect=save_state)
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._rebuild_node_selector = Mock()
+        window._nodes_status = Mock()
+        window._switch_selected_node(NodeId("peer-a"))
+        provider = window._node_registry.context(NodeId("peer-a")).provider
+
+        window._revoke_trusted_node("peer-a")
+
+        self.assertEqual(window._node_registry.selected_id(), NodeId(LOCAL_NODE_ID))
+        self.assertEqual(window._selected_node_id, NodeId(LOCAL_NODE_ID))
+        self.assertIsNone(window._cluster_state.record("peer-a"))
+        provider.invalidate.assert_called_once_with()
+        with self.assertRaises(KeyError):
+            window._node_registry.context(NodeId("peer-a"))
+
+        window._revoke_trusted_node("peer-a")
+
+        window._nodes_status.assert_called_with("Node is already revoked")
+
     def test_switching_swaps_analyzer_and_scheduler_mirrors(self) -> None:
         window = _make_window(
             _trusted_context(
@@ -875,6 +946,47 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         self.assertEqual(record.host, "192.168.1.20")
         self.assertEqual(record.port, 6000)
         self.assertEqual(record.hostname, "new-host")
+
+    def test_rediscovery_never_replaces_persisted_tls_pin(self) -> None:
+        fingerprint = node_identity_fingerprint("peer-a")
+        context = _trusted_context(
+            "peer-a", "Peer A", cpu_value="peer", host_label="peer"
+        )
+        context.descriptor = replace(
+            context.descriptor,
+            identity_fingerprint=fingerprint,
+            identity_status=NodeIdentityStatus.VERIFIED,
+        )
+        window = _make_window(context, start_discovery=False)
+        window._cluster_state = ClusterState(
+            trusted_nodes=(
+                trusted_node_record(
+                    node_id="peer-a",
+                    display_name="Peer A",
+                    hostname="peer-a",
+                    host="192.168.1.10",
+                    port=5000,
+                    identity_fingerprint=fingerprint,
+                    transport_fingerprint="tls-x",
+                ),
+            )
+        )
+        window._nodes_error = Mock()
+        candidate = replace(
+            _candidate("peer-a", fingerprint), transport_fingerprint="tls-y"
+        )
+
+        with patch("maintenance.ui.window_discovery.build_trusted_transport") as build:
+            window._on_discovered_candidate(candidate)
+
+        record = window._cluster_state.record("peer-a")
+        assert record is not None
+        self.assertEqual(record.transport_fingerprint, "tls-x")
+        self.assertEqual(
+            window._node_registry.context(NodeId("peer-a")).descriptor.identity_status,
+            NodeIdentityStatus.MISMATCH,
+        )
+        build.assert_not_called()
 
     def test_legacy_trusted_rediscovery_hydrates_live_fingerprint(self) -> None:
         window = _make_window(

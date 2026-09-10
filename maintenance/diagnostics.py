@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -18,6 +19,16 @@ def truncate_detail(value: str | None) -> str | None:
 
 def display_value(value: Any) -> str:
     return value.value if isinstance(value, Enum) else str(value)
+
+
+def format_timestamp(value: float | None) -> str:
+    """Format an internal epoch timestamp for the visible diagnostics page."""
+
+    if value is None:
+        return "No data yet"
+    return (
+        datetime.fromtimestamp(value, tz=timezone.utc).astimezone().strftime("%H:%M:%S")
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,9 +5,11 @@ import socket
 import threading
 import time
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import Mock
 
 from maintenance.cluster import (
     ClusterDataError,
@@ -15,6 +17,7 @@ from maintenance.cluster import (
     process_action_result_from_dict,
     process_action_result_to_dict,
     resource_summary_to_dict,
+    trusted_node_record,
 )
 from maintenance.models import (
     CapabilityState,
@@ -53,6 +56,7 @@ from maintenance.remote import (
     SocketRemoteTransport,
     _recv_frame,
     _send_frame,
+    build_trusted_transport,
     sign_request,
     sign_response,
     verify_request,
@@ -60,6 +64,57 @@ from maintenance.remote import (
 from tests.support.temperature import make_temperature_sample
 
 SECRET = "a" * 64
+
+
+class TrustedTransportTests(unittest.TestCase):
+    def test_build_trusted_transport_requires_persisted_tls_pin(self) -> None:
+        record = trusted_node_record(
+            node_id="peer-a",
+            display_name="Peer A",
+            hostname="peer-a",
+            host="192.0.2.10",
+            port=5000,
+            transport_fingerprint="aa",
+        )
+        transport_cls = Mock()
+
+        build_trusted_transport(record, transport_cls=transport_cls)
+
+        transport_cls.assert_called_once_with(
+            "192.0.2.10", 5000, expected_fingerprint="aa"
+        )
+
+    def test_invalidated_provider_rejects_requests_idempotently(self) -> None:
+        transport = Mock()
+        provider = AuthenticatedNodeProvider(
+            node_id=NodeId("peer-a"),
+            secret=SECRET,
+            transport=transport,
+        )
+
+        provider.invalidate()
+        provider.invalidate()
+
+        with self.assertRaises(RemoteAuthError):
+            provider.hello()
+        transport.request.assert_not_called()
+
+    def test_build_trusted_transport_rejects_incomplete_trust_record(self) -> None:
+        record = trusted_node_record(
+            node_id="peer-a",
+            display_name="Peer A",
+            hostname="peer-a",
+            host="192.0.2.10",
+            port=5000,
+            transport_fingerprint="aa",
+        )
+        for invalid in (
+            replace(record, host=""),
+            replace(record, port=None),
+            replace(record, transport_fingerprint=None),
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(RemoteAuthError):
+                build_trusted_transport(invalid, transport_cls=Mock)
 
 
 def _now() -> datetime:

@@ -32,6 +32,7 @@ from maintenance.remote import (
     RemoteProcessActionBackend,
     SocketRemoteTransport,
     TLSRemoteTransport,
+    build_trusted_transport,
 )
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui.node_presentation import fingerprint_lines
@@ -384,9 +385,13 @@ def revoke_trusted_node(controller: Any, node_id: str) -> None:
     node = NodeId(node_id)
     try:
         previous_context = registry.context(node)
-        previous_selected = registry.selected_id() == node
-        registry.revoke_trusted(node)
-    except (KeyError, ValueError) as error:
+    except KeyError:
+        if controller._cluster_state.record(node_id) is None:
+            controller._nodes_status("Node is already revoked")
+            return
+        controller._nodes_error(f"Unknown node: {node}")
+        return
+    except ValueError as error:
         controller._nodes_error(str(error))
         return
     state = ClusterState(
@@ -405,11 +410,23 @@ def revoke_trusted_node(controller: Any, node_id: str) -> None:
         ),
     )
     if not controller._save_cluster_state(state):
-        registry.register_context(previous_context)
-        if previous_selected:
-            registry.select(node)
         controller._nodes_error("Cluster settings could not be saved")
         return
+    generations = controller.__dict__.setdefault("_activation_generations", {})
+    generations[node] = int(generations.get(node, 0)) + 1
+    controller._cancel_node_operations(previous_context)
+    controller._cancel_peer_connection(previous_context)
+    controller._coordinator.cancel(node_operation_key(node, "test_connection"))
+    controller._coordinator.cancel(node_operation_key(node, "connect"))
+    controller._invalidate_node_render_targets(node)
+    invalidate = getattr(previous_context.provider, "invalidate", None)
+    if callable(invalidate):
+        invalidate()
+    previous_context.provider = None
+    previous_context.process_manager = None
+    previous_context.scheduler = None
+    previous_context.coordinator = None
+    registry.revoke_trusted(node)
     getattr(controller, "_manual_host_ids", set()).discard(node_id)
     controller._refresh_nodes_page()
     controller._refresh_cluster_page()
@@ -527,7 +544,7 @@ def test_connection(
             node_id=node,
             secret=record.secret,
             caller_node_id=NodeId(controller._cluster_state.local_node_id),
-            transport=transport_cls(record.host, port),
+            transport=build_trusted_transport(record, transport_cls=transport_cls),
         )
         return provider.hello()
 
@@ -650,7 +667,7 @@ def activate_remote_node(
             node_id=node_id,
             secret=record.secret,
             caller_node_id=NodeId(state.local_node_id),
-            transport=transport_cls(record.host, record.port),
+            transport=build_trusted_transport(record, transport_cls=transport_cls),
         )
         result = provider.hello(cancel_event=_cancel_event)
         if result.get("node_id") != node_id.value:

@@ -33,6 +33,7 @@ from typing import Any
 
 from maintenance.cluster import (
     ClusterDataError,
+    TrustedNodeRecord,
     file_candidate_from_dict,
     file_candidate_to_dict,
     node_snapshot_from_dict,
@@ -988,6 +989,24 @@ class TLSRemoteTransport(SocketRemoteTransport):
         )
 
 
+def build_trusted_transport(
+    record: TrustedNodeRecord,
+    *,
+    transport_cls: Callable[..., Any] = TLSRemoteTransport,
+) -> Any:
+    """Build a pinned transport from persisted trusted-node data."""
+
+    if not record.host or record.port is None:
+        raise RemoteAuthError("trusted peer has no complete endpoint")
+    if not record.transport_fingerprint:
+        raise RemoteAuthError("trusted peer has no pinned TLS fingerprint")
+    return transport_cls(
+        record.host,
+        record.port,
+        expected_fingerprint=record.transport_fingerprint,
+    )
+
+
 class RemoteSocketServer:
     """One optional loopback/listening TCP server fronting a ``RemoteService``.
 
@@ -1182,6 +1201,12 @@ class AuthenticatedNodeProvider:
         self._transport = transport
         self._clock = clock
         self._freshness_seconds = freshness_seconds
+        self._invalidated = False
+
+    def invalidate(self) -> None:
+        """Disable this provider after its local trust record is revoked."""
+
+        self._invalidated = True
 
     def hello(self, cancel_event: Any | None = None) -> dict[str, Any]:
         payload = self._request("hello", {}, cancel_event)
@@ -1347,6 +1372,8 @@ class AuthenticatedNodeProvider:
         params: dict[str, Any],
         cancel_event: Any | None = None,
     ) -> dict[str, Any]:
+        if self._invalidated:
+            raise RemoteAuthError("remote provider has been revoked")
         self._check_cancel(cancel_event)
         request_id = secrets.token_hex(16)
         nonce = secrets.token_hex(16)
