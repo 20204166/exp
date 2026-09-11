@@ -19,7 +19,7 @@ from maintenance.ui.thermal_graph import (  # noqa: F401
     build_telemetry_graph_layout,
 )
 
-SCROLLBAR_GUTTER = 6
+SCROLLBAR_GUTTER = ui_styles.SPACING["scrollbar_gutter"]
 FOOTER_GUTTER = ui_styles.SPACING["footer_gap"]
 
 
@@ -348,7 +348,7 @@ def dialog_footer(
     label_cls: Callable[..., Any],
     colors: dict[str, str],
     status_text: str,
-    pady: tuple[int, int] = (14, 0),
+    pady: tuple[int, int] = (ui_styles.SPACING["section_gap"], 0),
 ) -> tuple[Any, Any]:
     """Build one left-status / right-actions footer bar.
 
