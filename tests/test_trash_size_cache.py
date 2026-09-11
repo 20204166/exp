@@ -3,9 +3,10 @@
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from maintenance.scanner import SystemScanner
+from tests.support.scanner import scanner_environment
 
 
 class TrashSizeCacheTests(unittest.TestCase):
@@ -15,20 +16,16 @@ class TrashSizeCacheTests(unittest.TestCase):
         return scanner
 
     def _storage_scan(self, scanner: SystemScanner) -> None:
-        with (
-            patch("maintenance.scanner.psutil", None),
-            patch.object(scanner, "gpu_details", return_value=("Test GPU",)),
-            patch.object(SystemScanner, "trash_size", self._walk),
-            patch.object(SystemScanner, "_swap_devices", return_value=[]),
+        with scanner_environment(
+            scanner,
+            None,
+            trash_size=self._walk,
+            swap_devices=[],
         ):
             scanner.scan_component("storage")
 
     def _dashboard_scan(self, scanner: SystemScanner) -> None:
-        with (
-            patch("maintenance.scanner.psutil", None),
-            patch.object(scanner, "gpu_details", return_value=("Test GPU",)),
-            patch.object(SystemScanner, "trash_size", self._walk),
-        ):
+        with scanner_environment(scanner, None, trash_size=self._walk):
             scanner.scan_dashboard()
 
     def test_trash_walk_runs_once_within_ttl(self) -> None:

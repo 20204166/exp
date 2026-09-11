@@ -44,23 +44,12 @@ class StaticHardwareCacheTests(unittest.TestCase):
 
             return wrapped
 
-        with (
-            patch("maintenance.scanner.psutil", make_baseline_psutil()),
-            patch.object(scanner, "gpu_details", return_value=("Test GPU",)),
-            patch.object(SystemScanner, "trash_size", return_value=2048),
-            patch.object(SystemScanner, "_swap_devices", return_value=[]),
-            patch(
-                "maintenance.scanner.platform.system",
-                side_effect=counting("system"),
-            ),
-            patch(
-                "maintenance.scanner.platform.release",
-                side_effect=counting("release"),
-            ),
-            patch(
-                "maintenance.scanner.platform.machine",
-                side_effect=counting("machine"),
-            ),
+        with scanner_environment(
+            scanner,
+            make_baseline_psutil(),
+            system=counting("system"),
+            release=counting("release"),
+            machine=counting("machine"),
         ):
             scanner.scan_dashboard()
             scanner.scan_dashboard()

@@ -3,16 +3,10 @@
 import threading
 import tkinter as tk
 import unittest
-from queue import Queue
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock, patch
 
-from maintenance.components import ResourceFeatureCatalog, ScanCoordinator
-from maintenance.components.coordinator import (
-    AppCoordinator,
-    ComponentRefreshScheduler,
-)
 from maintenance.dialogs import ResourceCard, action_label_text, metric_label_pairs
 from maintenance.models import (
     CapabilityState,
@@ -24,48 +18,22 @@ from maintenance.ui import dashboard_page
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
 from tests.support.models import make_snapshot, make_summary
-from tests.support.scheduling import TimerMaster
-from tests.support.widget_recording import WidgetRecorder
-from window import AppWindow
-
-
-class FakeControl:
-    def __init__(self) -> None:
-        self.options: dict[str, object] = {}
-
-    def config(self, **options: object) -> None:
-        self.options.update(options)
+from tests.support.widget_recording import RecordingControl, WidgetRecorder
+from tests.support.window import make_window as make_bare_window
 
 
 def make_window() -> Any:
-    window: Any = object.__new__(AppWindow)
-    window.master = TimerMaster()
-    window._is_closing = False
-    window._pending_after_ids = set()
-    window._background_poll_id = None
-    window._background_tasks = 0
-    window._scan_coordinator = ScanCoordinator()
-    window._analysis_cancel_event = None
-    window._scan_timeout_id = None
-    window._resolved_scan_generation = 0
-    window._background_queue = Queue()
-    window._component_scheduler = ComponentRefreshScheduler()
-    window._feature_catalog = ResourceFeatureCatalog()
-    window._component_poll_id = None
-    window._component_queue = Queue()
-    window._coordinator = AppCoordinator()
-    window._timed_out_generation = None
-    window._lease_grace_id = None
-    window.analyze_button = FakeControl()
-    window.cancel_button = FakeControl()
-    window.status_label = FakeControl()
-    window.refreshed_label = FakeControl()
-    window.scan_time_label = FakeControl()
-    window.progress_bar = Mock()
-    window.health_label = FakeControl()
-    window._set_busy = Mock()
-    window.cards = {}
-    return window
+    return make_bare_window(
+        analyze_button=RecordingControl(),
+        cancel_button=RecordingControl(),
+        status_label=RecordingControl(),
+        refreshed_label=RecordingControl(),
+        scan_time_label=RecordingControl(),
+        progress_bar=Mock(),
+        health_label=RecordingControl(),
+        _set_busy=Mock(),
+        cards={},
+    )
 
 
 def summary(
@@ -135,12 +103,19 @@ class ResourceCardContractTests(unittest.TestCase):
             (("", "AMD Vega GPU"), ("Temperature", "56°C")),
         )
 
+    def test_metric_label_pairs_empty_details_yields_no_rows(self) -> None:
+        self.assertEqual(metric_label_pairs((), "10%"), ())
+
+    def test_metric_label_pairs_keeps_prefixed_line_matching_headline_value(self) -> None:
+        pairs = metric_label_pairs(("Download rate: 1.20 MiB/s",), "1.20 MiB/s")
+        self.assertEqual(pairs, (("Download rate", "1.20 MiB/s"),))
+
     def test_update_summary_sets_labels_and_action_text(self) -> None:
         card: Any = object.__new__(ResourceCard)
-        card.value_label = FakeControl()
-        card.subtitle_label = FakeControl()
-        card.progress = FakeControl()
-        card.details_label = FakeControl()
+        card.value_label = RecordingControl()
+        card.subtitle_label = RecordingControl()
+        card.progress = RecordingControl()
+        card.details_label = RecordingControl()
         card.metric_rows = []
         card.metrics_frame = Mock()
         card.colors = {"card": "#fff", "secondary": "#666", "text": "#000"}
@@ -167,10 +142,10 @@ class ResourceCardContractTests(unittest.TestCase):
             (CapabilityState.PERMISSION_LIMITED, "Permission required"),
         ):
             card: Any = object.__new__(ResourceCard)
-            card.value_label = FakeControl()
-            card.subtitle_label = FakeControl()
+            card.value_label = RecordingControl()
+            card.subtitle_label = RecordingControl()
             card.progress = None
-            card.details_label = FakeControl()
+            card.details_label = RecordingControl()
             card.metric_rows = []
             card.metrics_frame = Mock()
             card.colors = {"card": "#fff", "secondary": "#666", "text": "#000"}
@@ -184,10 +159,10 @@ class ResourceCardContractTests(unittest.TestCase):
 
     def test_update_summary_shrinks_metric_rows(self) -> None:
         card: Any = object.__new__(ResourceCard)
-        card.value_label = FakeControl()
-        card.subtitle_label = FakeControl()
-        card.progress = FakeControl()
-        card.details_label = FakeControl()
+        card.value_label = RecordingControl()
+        card.subtitle_label = RecordingControl()
+        card.progress = RecordingControl()
+        card.details_label = RecordingControl()
         card.metric_rows = []
         card.metrics_frame = Mock()
         card.colors = {"card": "#fff", "secondary": "#666", "text": "#000"}
@@ -202,10 +177,10 @@ class ResourceCardContractTests(unittest.TestCase):
 
     def test_reset_summary_restores_unscanned_card_state(self) -> None:
         card: Any = object.__new__(ResourceCard)
-        card.value_label = FakeControl()
-        card.subtitle_label = FakeControl()
-        card.progress = FakeControl()
-        card.details_label = FakeControl()
+        card.value_label = RecordingControl()
+        card.subtitle_label = RecordingControl()
+        card.progress = RecordingControl()
+        card.details_label = RecordingControl()
         row = Mock()
         card.metric_rows = [(row, Mock(), Mock())]
 

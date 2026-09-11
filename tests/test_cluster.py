@@ -48,30 +48,30 @@ from maintenance.nodes import (
     NodeSnapshot,
     NodeStatus,
 )
+from tests.support.models import make_snapshot, make_summary
 from tests.support.temperature import make_temperature_sample
 
 NOW = datetime.now(timezone.utc).astimezone()
 
 
 def _summary(key: str = "cpu") -> ResourceSummary:
-    return ResourceSummary(
-        key=key,
-        title=key.upper(),
+    return make_summary(
+        key,
+        key.upper(),
         value="10%",
         subtitle="running",
         percent=10.0,
         details=(f"{key.upper()}: 10%",),
-        actionable=False,
-        failed=False,
         capability=CapabilityState.SUPPORTED,
     )
 
 
 def _dashboard() -> DashboardSnapshot:
-    return DashboardSnapshot(
+    return make_snapshot(
+        _summary("cpu"),
+        _summary("memory"),
         system_label="peer-host",
         scanned_at=NOW,
-        resources=(_summary("cpu"), _summary("memory")),
     )
 
 

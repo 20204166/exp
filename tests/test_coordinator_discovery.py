@@ -10,6 +10,7 @@ from typing import Any
 
 from maintenance.components.coordinator import AppCoordinator
 from maintenance.nodes import DiscoveredNodeCandidate
+from tests.support.nodes import make_candidate
 
 
 class FakeDiscovery:
@@ -58,19 +59,7 @@ class RetryDiscovery(FakeDiscovery):
 
 
 def _candidate() -> DiscoveredNodeCandidate:
-    return DiscoveredNodeCandidate(
-        stable_id="peer-a",
-        hostname="peer-a-host",
-        addresses=("192.168.1.10",),
-        port=5000,
-        service_name="peer-a._system-analyzer._tcp.local.",
-        app_version="1.2.2.0",
-        protocol_version="1",
-        platform="Linux",
-        connectable=False,
-        compatible=True,
-        last_seen=1.0,
-    )
+    return make_candidate(last_seen=1.0)
 
 
 class AppCoordinatorDiscoveryTests(unittest.TestCase):

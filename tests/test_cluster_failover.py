@@ -14,14 +14,11 @@ from maintenance.components.cluster_storage import (
 )
 from maintenance.nodes import (
     ConnectionState,
-    NodeContext,
-    NodeDescriptor,
     NodeId,
     NodeRegistry,
     NodeStatus,
-    NodeTrustState,
-    local_node_descriptor,
 )
+from tests.support.nodes import make_local_context, make_remote_context
 
 
 class ClusterFailoverTests(unittest.TestCase):
@@ -31,8 +28,7 @@ class ClusterFailoverTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.clock = 100.0
         self.registry = NodeRegistry(
-            NodeContext(
-                descriptor=local_node_descriptor(),
+            make_local_context(
                 provider=Mock(),
                 process_manager=Mock(),
                 file_manager=Mock(),
@@ -40,21 +36,11 @@ class ClusterFailoverTests(unittest.TestCase):
                 coordinator=Mock(),
             )
         )
-        self.peer = NodeContext(
-            descriptor=NodeDescriptor(
-                id=NodeId("coord"),
-                display_name="Coordinator",
-                hostname="coord",
-                is_local=False,
-                trust=NodeTrustState.TRUSTED,
-                status=NodeStatus.ONLINE,
-                capabilities=frozenset(),
-            ),
-            provider=None,
-            process_manager=None,
-            file_manager=None,
-            scheduler=None,
-            coordinator=None,
+        self.peer = make_remote_context(
+            "coord",
+            status=NodeStatus.ONLINE,
+            display_name="Coordinator",
+            hostname="coord",
         )
         self.peer.connection = ConnectionState.online(now=100.0)
         self.registry.register_context(self.peer)

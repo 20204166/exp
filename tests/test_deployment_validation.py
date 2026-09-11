@@ -8,7 +8,7 @@ from email.parser import Parser
 from pathlib import Path
 from zipfile import ZipFile
 
-from tests.support.toml import load as toml_load
+from tests.support.toml import load_project
 
 REPO = Path(__file__).parents[1]
 
@@ -66,11 +66,6 @@ def wheel_metadata(path: Path) -> tuple[str, list[str], str]:
     )
 
 
-def _project() -> dict:
-    with (REPO / "pyproject.toml").open("rb") as file:
-        return toml_load(file)
-
-
 class BuiltWheelTests(unittest.TestCase):
     def test_wheel_contains_required_modules_and_package_content(self) -> None:
         wheel = latest_wheel()
@@ -90,7 +85,7 @@ class BuiltWheelTests(unittest.TestCase):
             with self.subTest(member=member):
                 self.assertIn(member, members)
 
-        project = _project()
+        project = load_project()
         package_names = project["tool"]["setuptools"]["packages"]
         expected_package_files = {
             path.relative_to(REPO).as_posix()
@@ -117,7 +112,7 @@ class BuiltWheelTests(unittest.TestCase):
         )
 
     def test_wheel_dependencies_match_pyproject_and_requirements(self) -> None:
-        project_dependencies = _project()["project"]["dependencies"]
+        project_dependencies = load_project()["project"]["dependencies"]
         requirements = [
             line.strip()
             for line in (REPO / "requirements.txt").read_text().splitlines()
@@ -133,7 +128,7 @@ class BuiltWheelTests(unittest.TestCase):
         from maintenance._version import __version__
 
         self.assertEqual(version, __version__)
-        self.assertEqual(requires_python, _project()["project"]["requires-python"])
+        self.assertEqual(requires_python, load_project()["project"]["requires-python"])
 
 
 if __name__ == "__main__":

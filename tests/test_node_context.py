@@ -11,13 +11,13 @@ from maintenance.components.node_context import (
 from maintenance.nodes import (
     LOCAL_NODE_ID,
     LocalNodeProvider,
-    NodeContext,
     NodeId,
     NodeRegistry,
     NodeTrustState,
     local_node_descriptor,
     node_identity_fingerprint,
 )
+from tests.support.nodes import make_local_context
 
 
 class NodeContextTests(unittest.TestCase):
@@ -78,8 +78,7 @@ class NodeContextTests(unittest.TestCase):
         self,
     ) -> None:
         registry = NodeRegistry(
-            NodeContext(
-                descriptor=local_node_descriptor(),
+            make_local_context(
                 provider=Mock(),
                 process_manager=Mock(),
                 file_manager=Mock(),

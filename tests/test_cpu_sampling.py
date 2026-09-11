@@ -4,23 +4,21 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock, patch
 
 from maintenance.components import ScanCancelled
 from maintenance.scanner import SystemScanner
+from tests.support.scanner import make_baseline_psutil
 
 
 def _fake_psutil(
     cpu_percent: Any,
     *,
     boot_time: float = 1000.0,
-) -> SimpleNamespace:
-    return SimpleNamespace(
+) -> Any:
+    return make_baseline_psutil(
         cpu_percent=cpu_percent,
-        cpu_count=lambda logical: 8 if logical else 4,
-        cpu_freq=lambda: SimpleNamespace(current=2400.0, min=800.0, max=4000.0),
         sensors_temperatures=dict,
         boot_time=Mock(return_value=boot_time),
     )

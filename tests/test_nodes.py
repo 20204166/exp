@@ -19,6 +19,7 @@ from maintenance.nodes import (
     node_identity_fingerprint,
     node_operation_key,
 )
+from tests.support.nodes import make_candidate, make_local_context, make_remote_context
 
 
 def _candidate(
@@ -32,15 +33,11 @@ def _candidate(
     last_seen: float = 100.0,
     identity_fingerprint: str | None = None,
 ) -> DiscoveredNodeCandidate:
-    return DiscoveredNodeCandidate(
-        stable_id=stable_id,
+    return make_candidate(
+        stable_id,
         hostname=hostname,
-        addresses=("192.168.1.10",),
-        port=port,
-        service_name=f"{stable_id}._system-analyzer._tcp.local.",
-        app_version="1.2.2.0",
         protocol_version=protocol_version,
-        platform="Linux",
+        port=port,
         connectable=connectable,
         compatible=compatible,
         last_seen=last_seen,
@@ -50,29 +47,18 @@ def _candidate(
 
 
 def _local_context() -> NodeContext:
-    return NodeContext(
-        descriptor=local_node_descriptor(),
-        provider=object(),
-        process_manager=object(),
-        file_manager=object(),
-        scheduler=object(),
-        coordinator=object(),
-    )
+    return make_local_context()
 
 
 def _peer_context(
     node_id: str, display_name: str, trust: NodeTrustState
 ) -> NodeContext:
-    return NodeContext(
-        descriptor=NodeDescriptor(
-            id=NodeId(node_id),
-            display_name=display_name,
-            hostname=display_name,
-            is_local=False,
-            trust=trust,
-            status=NodeStatus.ONLINE,
-            capabilities=frozenset(),
-        ),
+    return make_remote_context(
+        node_id,
+        trust=trust,
+        status=NodeStatus.ONLINE,
+        display_name=display_name,
+        hostname=display_name,
         provider=object(),
         process_manager=object(),
         file_manager=object(),

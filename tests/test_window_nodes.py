@@ -4,7 +4,6 @@ import threading
 import time
 import unittest
 from dataclasses import replace
-from queue import Queue
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock, call, patch
@@ -14,7 +13,6 @@ from maintenance.cluster import (
     PeerGrantRecord,
     trusted_node_record,
 )
-from maintenance.components import ScanCoordinator
 from maintenance.components.cluster_roles import ClusterRole, RoleAssignment
 from maintenance.components.coordinator import (
     AppCoordinator,
@@ -29,14 +27,12 @@ from maintenance.nodes import (
     DiscoveredNodeCandidate,
     NodeCapability,
     NodeContext,
-    NodeDescriptor,
     NodeId,
     NodeIdentityStatus,
     NodePermission,
     NodeRegistry,
     NodeStatus,
     NodeTrustState,
-    local_node_descriptor,
     node_identity_fingerprint,
     node_operation_key,
 )
@@ -44,7 +40,13 @@ from maintenance.ui import window_node_actions
 from maintenance.ui.render_coordinator import UICoordinator
 from maintenance.ui.window_supports import node_specs
 from tests.support.models import make_snapshot, make_summary
-from tests.support.scheduling import DeferredRunner, TimerMaster
+from tests.support.nodes import (
+    make_candidate,
+    make_local_context,
+    make_remote_context,
+)
+from tests.support.scheduling import DeferredRunner
+from tests.support.window import make_window as make_bare_window
 from window import AppWindow
 
 
@@ -53,8 +55,7 @@ def _summary(key: str, value: str = "10%") -> Any:
 
 
 def _local_context(analyzer: Any = None) -> NodeContext:
-    return NodeContext(
-        descriptor=local_node_descriptor(),
+    return make_local_context(
         provider=analyzer,
         process_manager=Mock(),
         file_manager=Mock(),
@@ -73,58 +74,43 @@ def _trusted_context(
     host_label: str,
     capabilities: frozenset[NodeCapability] = frozenset(),
 ) -> NodeContext:
-    return NodeContext(
-        descriptor=NodeDescriptor(
-            id=NodeId(node_id),
-            display_name=display_name,
-            hostname=node_id,
-            is_local=False,
-            trust=NodeTrustState.TRUSTED,
-            status=NodeStatus.ONLINE,
-            capabilities=capabilities,
-            platform="Linux",
-            permissions=frozenset(NodePermission),
-        ),
+    context = make_remote_context(
+        node_id,
+        trust=NodeTrustState.TRUSTED,
+        status=NodeStatus.ONLINE,
+        display_name=display_name,
+        hostname=node_id,
+        capabilities=capabilities,
+        platform="Linux",
+        permissions=frozenset(NodePermission),
         provider=Mock(),
         process_manager=Mock(),
         file_manager=Mock(),
         scheduler=ComponentRefreshScheduler(),
         coordinator=AppCoordinator(),
         snapshot=make_snapshot(_summary("cpu", cpu_value), system_label=host_label),
-        capabilities={"cpu": CapabilityState.SUPPORTED},
     )
+    context.capabilities = {"cpu": CapabilityState.SUPPORTED}
+    return context
 
 
 def _make_window(
     *contexts: NodeContext,
     start_discovery: bool = True,
 ) -> Any:
-    window: Any = object.__new__(AppWindow)
-    window.master = TimerMaster()
-    window._is_closing = False
-    window._pending_after_ids = set()
-    window._background_poll_id = None
-    window._background_tasks = 0
-    window._scan_coordinator = ScanCoordinator()
-    window._analysis_cancel_event = None
-    window._scan_timeout_id = None
-    window._lease_grace_id = None
-    window._timed_out_generation = None
-    window._resolved_scan_generation = 0
-    window._background_queue = Queue()
-    window._feature_catalog = Mock()
+    window = make_bare_window(
+        _feature_catalog=Mock(),
+        _coordinator=AppCoordinator(deliver=lambda callback: callback()),
+        _cluster_state=ClusterState(),
+        _manual_host_ids=set(),
+        _capabilities={},
+        _preferences=Mock(),
+        _discovery_tick_id=None,
+    )
     window._feature_catalog.all = list
-    window._component_poll_id = None
-    window._component_queue = Queue()
-    window._coordinator = AppCoordinator(deliver=lambda callback: callback())
-    window._cluster_state = ClusterState()
-    window._manual_host_ids = set()
-    window._capabilities = {}
-    window._preferences = Mock()
     window._preferences.refresh_intervals.as_dict = dict
     window._preferences.visible_cards = frozenset()
     window._preferences.hide_unavailable_cards = False
-    window._discovery_tick_id = None
 
     registry = NodeRegistry()
     local_ctx = _local_context()
@@ -1416,19 +1402,9 @@ class WindowOpenResourceNodeTests(unittest.TestCase):
 
 
 def _candidate(stable_id: str, fingerprint: str | None = None) -> Any:
-    from maintenance.nodes import DiscoveredNodeCandidate
-
-    return DiscoveredNodeCandidate(
-        stable_id=stable_id,
+    return make_candidate(
+        stable_id,
         hostname=f"{stable_id}-host",
-        addresses=("192.168.1.10",),
-        port=5000,
-        service_name=f"{stable_id}._system-analyzer._tcp.local.",
-        app_version="1.2.2.0",
-        protocol_version="1",
-        platform="Linux",
-        connectable=False,
-        compatible=True,
         last_seen=1.0,
         identity_fingerprint=fingerprint,
     )

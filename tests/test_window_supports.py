@@ -11,13 +11,7 @@ from maintenance.ui.window_supports.timer_delivery import (
     deadline_delay_ms,
 )
 from tests.support.models import make_snapshot, make_summary
-from tests.support.scheduling import TimerMaster
-
-
-class FailingCancelMaster(TimerMaster):
-    def after_cancel(self, identifier: str) -> None:
-        del identifier
-        raise RuntimeError("event loop is not running")
+from tests.support.scheduling import FailingCancelMaster, TimerMaster
 
 
 class SnapshotStateTests(unittest.TestCase):
@@ -65,6 +59,72 @@ class SnapshotStateTests(unittest.TestCase):
 
         self.assertIs(merged, resource)
         self.assertEqual(counts["cpu"], 0)
+
+    def test_merge_snapshot_limit_zero_shows_failure_immediately(self) -> None:
+        previous = make_snapshot(make_summary("cpu", "CPU", value="25%"))
+        failed = make_summary("cpu", "CPU", value="Unavailable", failed=True)
+        counts: dict[str, int] = {}
+
+        merged = snapshot_state.merge_snapshot(
+            previous_snapshot=previous,
+            failed_counts=counts,
+            snapshot=make_snapshot(failed),
+            failed_card_keep_limit=0,
+        )
+
+        self.assertEqual(merged.get("cpu").value, "Unavailable")
+
+    def test_merge_snapshot_limit_one_shows_failure_on_first_refresh(self) -> None:
+        previous = make_snapshot(make_summary("cpu", "CPU", value="25%"))
+        failed = make_summary("cpu", "CPU", value="Unavailable", failed=True)
+        counts: dict[str, int] = {}
+
+        merged = snapshot_state.merge_snapshot(
+            previous_snapshot=previous,
+            failed_counts=counts,
+            snapshot=make_snapshot(failed),
+            failed_card_keep_limit=1,
+        )
+
+        self.assertEqual(merged.get("cpu").value, "Unavailable")
+
+    def test_merge_snapshot_empty_incoming_preserves_label_and_time(self) -> None:
+        incoming = make_snapshot(system_label="Peer")
+
+        merged = snapshot_state.merge_snapshot(
+            previous_snapshot=make_snapshot(make_summary("cpu", "CPU")),
+            failed_counts={},
+            snapshot=incoming,
+            failed_card_keep_limit=3,
+        )
+
+        self.assertEqual(merged.resources, ())
+        self.assertEqual(merged.system_label, "Peer")
+        self.assertEqual(merged.scanned_at, incoming.scanned_at)
+
+    def test_merge_snapshot_success_does_not_reset_unrelated_card_failure(
+        self,
+    ) -> None:
+        previous = make_snapshot(
+            make_summary("cpu", "CPU", value="25%"),
+            make_summary("memory", "Memory", value="50%"),
+        )
+        counts = {"memory": 2}
+
+        merged = snapshot_state.merge_snapshot(
+            previous_snapshot=previous,
+            failed_counts=counts,
+            snapshot=make_snapshot(
+                make_summary("cpu", "CPU", value="30%"),
+                make_summary("memory", "Memory", value="Unavailable", failed=True),
+            ),
+            failed_card_keep_limit=3,
+        )
+
+        self.assertEqual(merged.get("cpu").value, "30%")
+        self.assertEqual(counts["cpu"], 0)
+        self.assertEqual(merged.get("memory").value, "Unavailable")
+        self.assertEqual(counts["memory"], 3)
 
     def test_replace_snapshot_resource_preserves_other_resources(self) -> None:
         memory = make_summary("memory", "Memory", value="50%")

@@ -6,7 +6,8 @@ from unittest.mock import Mock
 
 from maintenance.cluster import ClusterState
 from maintenance.components.discovery_session import DiscoverySession
-from maintenance.nodes import NodeContext, NodeRegistry, local_node_descriptor
+from maintenance.nodes import NodeRegistry
+from tests.support.nodes import make_local_context
 
 
 class FakeDiscovery:
@@ -28,14 +29,7 @@ class FakeDiscovery:
 class DiscoverySessionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.events: list[str] = []
-        context = NodeContext(
-            descriptor=local_node_descriptor(),
-            provider=object(),
-            process_manager=object(),
-            file_manager=object(),
-            scheduler=object(),
-            coordinator=object(),
-        )
+        context = make_local_context()
         self.registry = NodeRegistry(context)
         self.state = ClusterState(local_identity_persisted=False)
         self.coordinator = Mock()

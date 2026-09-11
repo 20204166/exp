@@ -5,20 +5,13 @@ import unittest
 from typing import Any, ClassVar
 from unittest.mock import Mock, patch
 
-from maintenance.models import ResourceSummary
 from maintenance.ui import PendingTransition, scan_status
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.styles import configure_app_styles
+from tests.support.models import make_summary
+from tests.support.widget_recording import RecordingControl
 from window import AppWindow
-
-
-class FakeControl:
-    def __init__(self) -> None:
-        self.options: dict[str, Any] = {}
-
-    def config(self, **options: Any) -> None:
-        self.options.update(options)
 
 
 class DesignTokenParityTests(unittest.TestCase):
@@ -690,8 +683,8 @@ class CardRewrapPresentationTests(unittest.TestCase):
         from maintenance.dialogs import ResourceCard
 
         card: Any = object.__new__(ResourceCard)
-        card.value_label = FakeControl()
-        card.subtitle_label = FakeControl()
+        card.value_label = RecordingControl()
+        card.subtitle_label = RecordingControl()
         card.metric_rows = []
         card.winfo_width = Mock(return_value=width)
         return card
@@ -706,7 +699,7 @@ class CardRewrapPresentationTests(unittest.TestCase):
 
     def test_card_rewrap_wraps_metric_values_with_label_space(self) -> None:
         card = self._card(300)
-        metric_value = FakeControl()
+        metric_value = RecordingControl()
         card.metric_rows = [("row", "name", metric_value)]
 
         card._rewrap()
@@ -742,9 +735,9 @@ class CardRewrapPresentationTests(unittest.TestCase):
             return_value=(Mock(), Mock(), value),
         ):
             card._render_metrics(
-                ResourceSummary(
-                    key="cpu",
-                    title="CPU",
+                make_summary(
+                    "cpu",
+                    "CPU",
                     value="x",
                     subtitle="s",
                     percent=5.0,

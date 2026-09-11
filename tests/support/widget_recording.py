@@ -6,6 +6,7 @@ options, config changes, bindings and pack calls. One fresh recorder is used
 per test so its mutable registry never leaks between tests.
 """
 
+from collections.abc import Callable
 from typing import Any
 
 
@@ -112,6 +113,81 @@ class RecordingWidget:
 
     def cget(self, name: str) -> Any:
         return self.kwargs.get(name, self.config_options.get(name))
+
+
+class RecordingControl:
+    """Fake Tk control that records ``config(**options)`` calls.
+
+    Two read surfaces are supported so both dialog tests (``.state``/``.text``)
+    and card tests (``.options["..."]``) share one implementation: every call
+    lands in ``options``, and ``state``/``text`` project the string values from
+    it, mirroring the historical dialog-fake behaviour of ignoring non-string
+    values.
+    """
+
+    def __init__(self) -> None:
+        self.options: dict[str, object] = {}
+
+    def config(self, **options: object) -> None:
+        self.options.update(options)
+
+    @property
+    def state(self) -> str | None:
+        value = self.options.get("state")
+        return value if isinstance(value, str) else None
+
+    @property
+    def text(self) -> str | None:
+        value = self.options.get("text")
+        return value if isinstance(value, str) else None
+
+
+class RecordingTree:
+    """Fake ``ttk.Treeview`` for dialog row rebuild and column resize tests."""
+
+    def __init__(self, selected: tuple[str, ...] = ()) -> None:
+        self.selected = selected
+        self.width = 755
+        self.widths: dict[str, int] = {}
+        self.rows: list[Any] = []
+
+    def selection(self) -> tuple[str, ...]:
+        return self.selected
+
+    def winfo_width(self) -> int:
+        return self.width
+
+    def column(self, name: str, **options: int) -> None:
+        self.widths[name] = options["width"]
+
+    def delete(self, *items: object) -> None:
+        self.rows.clear()
+
+    def get_children(self) -> tuple[()]:
+        return ()
+
+    def insert(self, *args: object, **kwargs: object) -> None:
+        self.rows.append(args)
+
+
+class FailingAfterWidget:
+    """Tk root that dies between worker completion and ``after()`` delivery."""
+
+    def winfo_exists(self) -> bool:
+        return True
+
+    def after(self, _delay: int, _callback: object, *_args: object) -> None:
+        raise RuntimeError("event loop is stopping")
+
+
+class ImmediateAfterWidget:
+    """Tk root that runs ``after()`` callbacks synchronously."""
+
+    def winfo_exists(self) -> bool:
+        return True
+
+    def after(self, _delay: int, callback: Callable[..., Any], *args: object) -> None:
+        callback(*args)
 
 
 class WidgetRecorder:

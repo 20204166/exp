@@ -4,17 +4,13 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from maintenance.components.gpu import GpuProbe
-from maintenance.models import CapabilityState, DashboardSnapshot, ResourceSummary
+from maintenance.models import DashboardSnapshot, ResourceSummary
 from maintenance.scanner import SystemScanner
+from tests.support.scanner import gpu_environment, make_gpu_probe
 
 TIMEOUT = SystemScanner.GPU_QUERY_TIMEOUT_MESSAGE
-
-
-def probe(*details: str) -> GpuProbe:
-    return GpuProbe(tuple(details), CapabilityState.SUPPORTED)
 
 
 class GpuConcurrencyTests(unittest.TestCase):
@@ -42,13 +38,9 @@ class GpuConcurrencyTests(unittest.TestCase):
             with call_lock:
                 call_count += 1
             gate.wait(5)
-            return probe("Slow GPU")
+            return make_gpu_probe("Slow GPU")
 
-        with (
-            patch.object(scanner, "_nvidia_gpu_details", return_value=None),
-            patch("maintenance.scanner.platform.system", return_value="Linux"),
-            patch.object(SystemScanner, "_linux_gpu_probe", side_effect=slow_detect),
-        ):
+        with gpu_environment(scanner, linux_gpu_probe=slow_detect):
             results: list[tuple[str, ...]] = []
             errors: list[Exception] = []
 
@@ -84,15 +76,9 @@ class GpuConcurrencyTests(unittest.TestCase):
 
         def slow_but_finite() -> GpuProbe:
             release.wait(5)
-            return probe("Late GPU")
+            return make_gpu_probe("Late GPU")
 
-        with (
-            patch.object(scanner, "_nvidia_gpu_details", return_value=None),
-            patch("maintenance.scanner.platform.system", return_value="Linux"),
-            patch.object(
-                SystemScanner, "_linux_gpu_probe", side_effect=slow_but_finite
-            ),
-        ):
+        with gpu_environment(scanner, linux_gpu_probe=slow_but_finite):
             self.assertEqual(scanner.gpu_details(), (TIMEOUT,))
             self.assertTrue(scanner._gpu_query_in_flight)
 
@@ -111,15 +97,9 @@ class GpuConcurrencyTests(unittest.TestCase):
 
         def slow_but_finite() -> GpuProbe:
             release.wait(5)
-            return probe("Late GPU")
+            return make_gpu_probe("Late GPU")
 
-        with (
-            patch.object(scanner, "_nvidia_gpu_details", return_value=None),
-            patch("maintenance.scanner.platform.system", return_value="Linux"),
-            patch.object(
-                SystemScanner, "_linux_gpu_probe", side_effect=slow_but_finite
-            ),
-        ):
+        with gpu_environment(scanner, linux_gpu_probe=slow_but_finite):
             self.assertEqual(scanner.gpu_details(), (TIMEOUT,))
             release.set()
             deadline = time.monotonic() + 2
@@ -139,18 +119,10 @@ class GpuConcurrencyTests(unittest.TestCase):
                 event = threading.Event()
                 calls.append(event)
                 event.wait(5)
-                return probe("Hung GPU")
-            return probe("Recovered GPU")
+                return make_gpu_probe("Hung GPU")
+            return make_gpu_probe("Recovered GPU")
 
-        with (
-            patch.object(scanner, "_nvidia_gpu_details", return_value=None),
-            patch("maintenance.scanner.platform.system", return_value="Linux"),
-            patch.object(
-                SystemScanner,
-                "_linux_gpu_probe",
-                side_effect=first_hung_then_fresh,
-            ),
-        ):
+        with gpu_environment(scanner, linux_gpu_probe=first_hung_then_fresh):
             self.assertEqual(scanner.gpu_details(), (TIMEOUT,))
             self.assertTrue(scanner._gpu_query_in_flight)
 
@@ -177,15 +149,11 @@ class GpuConcurrencyTests(unittest.TestCase):
             if call == 1:
                 first_release.wait(5)
                 worker_one_done.set()
-                return probe("Old GPU")
+                return make_gpu_probe("Old GPU")
             second_release.wait(5)
-            return probe("New GPU")
+            return make_gpu_probe("New GPU")
 
-        with (
-            patch.object(scanner, "_nvidia_gpu_details", return_value=None),
-            patch("maintenance.scanner.platform.system", return_value="Linux"),
-            patch.object(SystemScanner, "_linux_gpu_probe", side_effect=staged_detect),
-        ):
+        with gpu_environment(scanner, linux_gpu_probe=staged_detect):
             self.assertEqual(scanner.gpu_details(), (TIMEOUT,))
 
             time.sleep(0.1)
@@ -228,17 +196,13 @@ class GpuConcurrencyTests(unittest.TestCase):
                 call = call_counter["n"]
             if call == 1:
                 first_release.wait(5)
-                return probe("Old GPU")
+                return make_gpu_probe("Old GPU")
             second_release.wait(5)
-            return probe("New GPU")
+            return make_gpu_probe("New GPU")
 
         results: list[tuple[str, ...]] = []
 
-        with (
-            patch.object(scanner, "_nvidia_gpu_details", return_value=None),
-            patch("maintenance.scanner.platform.system", return_value="Linux"),
-            patch.object(SystemScanner, "_linux_gpu_probe", side_effect=staged_detect),
-        ):
+        with gpu_environment(scanner, linux_gpu_probe=staged_detect):
             self.assertEqual(scanner.gpu_details(), (TIMEOUT,))
             time.sleep(0.1)
             thread = threading.Thread(
@@ -269,13 +233,9 @@ class GpuConcurrencyTests(unittest.TestCase):
 
         def gated_detect() -> GpuProbe:
             gate.wait(5)
-            return probe("Gated GPU")
+            return make_gpu_probe("Gated GPU")
 
-        with (
-            patch.object(scanner, "_nvidia_gpu_details", return_value=None),
-            patch("maintenance.scanner.platform.system", return_value="Linux"),
-            patch.object(SystemScanner, "_linux_gpu_probe", side_effect=gated_detect),
-        ):
+        with gpu_environment(scanner, linux_gpu_probe=gated_detect):
             thread = threading.Thread(
                 target=lambda: results.append(scanner.gpu_details())
             )
@@ -306,18 +266,14 @@ class GpuConcurrencyTests(unittest.TestCase):
             with call_lock:
                 call_counter["n"] += 1
             gate.wait(5)
-            return probe("Collision GPU")
+            return make_gpu_probe("Collision GPU")
 
         started = threading.Barrier(2)
         errors: list[Exception] = []
         snapshot_result: list[DashboardSnapshot] = []
         component_result: list[ResourceSummary] = []
 
-        with (
-            patch.object(scanner, "_nvidia_gpu_details", return_value=None),
-            patch("maintenance.scanner.platform.system", return_value="Linux"),
-            patch.object(SystemScanner, "_linux_gpu_probe", side_effect=gated_detect),
-        ):
+        with gpu_environment(scanner, linux_gpu_probe=gated_detect):
 
             def full_scan() -> None:
                 started.wait(5)

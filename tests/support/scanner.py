@@ -19,6 +19,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+from maintenance.components.gpu import GpuProbe
+from maintenance.models import CapabilityState
 from maintenance.scanner import SystemScanner
 
 
@@ -64,11 +66,11 @@ def scanner_environment(
     psutil_fake: Any,
     *,
     gpu_details: tuple[str, ...] = ("Test GPU",),
-    trash_size: int = 2048,
+    trash_size: Any = 2048,
     swap_devices: Any = (),
-    system: str = "Linux",
-    release: str = "6.1",
-    machine: str = "x86_64",
+    system: Any = "Linux",
+    release: Any = "6.1",
+    machine: Any = "x86_64",
     monotonic: float | None = None,
 ) -> Iterator[None]:
     """Patch the dashboard scan path around ``scanner`` for one body of work.
@@ -76,17 +78,29 @@ def scanner_environment(
     The scanner instance must be created before entering so its CPU/GPU worker
     lifecycle is not left behind; callers own stopping it. ``monotonic`` pins
     the scanner's clock when a deterministic rate/elapsed-time assertion needs
-    it.
+    it. Platform values and the trash walk accept either a constant (patched
+    with ``return_value``) or a callable (patched with ``side_effect``/direct
+    replacement) so caching and walk-counting tests share the same seam.
     """
 
+    def _value_patch(target: Any, value: Any) -> Any:
+        if callable(value):
+            return patch(target, side_effect=value)
+        return patch(target, return_value=value)
+
+    trash_patch = (
+        patch.object(SystemScanner, "trash_size", trash_size)
+        if callable(trash_size)
+        else patch.object(SystemScanner, "trash_size", return_value=trash_size)
+    )
     patches = [
         patch("maintenance.scanner.psutil", psutil_fake),
         patch.object(scanner, "gpu_details", return_value=gpu_details),
-        patch.object(SystemScanner, "trash_size", return_value=trash_size),
+        trash_patch,
         patch.object(SystemScanner, "_swap_devices", return_value=swap_devices),
-        patch("maintenance.scanner.platform.system", return_value=system),
-        patch("maintenance.scanner.platform.release", return_value=release),
-        patch("maintenance.scanner.platform.machine", return_value=machine),
+        _value_patch("maintenance.scanner.platform.system", system),
+        _value_patch("maintenance.scanner.platform.release", release),
+        _value_patch("maintenance.scanner.platform.machine", machine),
     ]
     if monotonic is not None:
         patches.append(
@@ -95,4 +109,30 @@ def scanner_environment(
     with contextlib.ExitStack() as stack:
         for patcher in patches:
             stack.enter_context(patcher)
+        yield
+
+
+def make_gpu_probe(*details: str) -> GpuProbe:
+    """Build a supported GPU probe from detail lines."""
+
+    return GpuProbe(tuple(details), CapabilityState.SUPPORTED)
+
+
+@contextmanager
+def gpu_environment(
+    scanner: SystemScanner,
+    *,
+    linux_gpu_probe: Any,
+) -> Iterator[None]:
+    """Patch the Linux GPU query seam around ``scanner`` for concurrency tests.
+
+    ``linux_gpu_probe`` is injected as the ``_linux_gpu_probe`` side effect so
+    tests can stage slow, hung, or failing probes deterministically.
+    """
+
+    with (
+        patch.object(scanner, "_nvidia_gpu_details", return_value=None),
+        patch("maintenance.scanner.platform.system", return_value="Linux"),
+        patch.object(SystemScanner, "_linux_gpu_probe", side_effect=linux_gpu_probe),
+    ):
         yield

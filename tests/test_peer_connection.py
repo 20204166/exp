@@ -9,41 +9,22 @@ from maintenance.nodes import (
     ConnectionState,
     NodeConnectionStatus,
     NodeContext,
-    NodeDescriptor,
-    NodeId,
     NodeRegistry,
-    NodeStatus,
     NodeTrustState,
     PeerFailure,
     RetryState,
-    local_node_descriptor,
 )
+from tests.support.nodes import make_local_context, make_remote_context
 
 
 def remote_context(node_id: str = "peer") -> NodeContext:
-    return NodeContext(
-        descriptor=NodeDescriptor(
-            id=NodeId(node_id),
-            display_name=node_id,
-            hostname=f"{node_id}.example",
-            is_local=False,
-            trust=NodeTrustState.TRUSTED,
-            status=NodeStatus.UNKNOWN,
-            capabilities=frozenset(),
-        ),
-        provider=None,
-        process_manager=None,
-        file_manager=None,
-        scheduler=None,
-        coordinator=None,
-    )
+    return make_remote_context(node_id)
 
 
 class PeerConnectionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.registry = NodeRegistry(
-            NodeContext(
-                descriptor=local_node_descriptor(),
+            make_local_context(
                 provider=Mock(),
                 process_manager=Mock(),
                 file_manager=Mock(),

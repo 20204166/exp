@@ -17,20 +17,16 @@ import maintenance.components.scan_support as scan_support_module
 from maintenance.actions import FileManager, ProcessManager
 from maintenance.components import DownloadScanner
 from maintenance.components.gpu import GpuProbe
-from maintenance.models import (
-    CapabilityState,
-    DashboardSnapshot,
-    ResourceSummary,
-    unavailable_summary,
-)
+from maintenance.models import CapabilityState, unavailable_summary
 from maintenance.scanner import ScanCancelled, SystemScanner
+from tests.support.models import make_snapshot, make_summary
 from tests.support.process_actions import ActionProcess as FakeProcess
 from tests.support.process_actions import ActionPsutil as FakePsutil
-from tests.support.scanner import make_baseline_psutil, scanner_environment
-
-
-def gpu_probe(*details: str) -> GpuProbe:
-    return GpuProbe(tuple(details), CapabilityState.SUPPORTED)
+from tests.support.scanner import (
+    make_baseline_psutil,
+    make_gpu_probe,
+    scanner_environment,
+)
 
 
 class ScannerTests(unittest.TestCase):
@@ -242,18 +238,18 @@ class ScannerTests(unittest.TestCase):
             SystemScanner(Path("Downloads")).scan_processes(cancel_event=cancel_event)
 
     def test_snapshot_get_returns_resource_and_rejects_unknown_key(self) -> None:
-        resource = ResourceSummary(
-            key="cpu",
-            title="CPU",
+        resource = make_summary(
+            "cpu",
+            "CPU",
             value="10%",
             subtitle="Current usage",
             percent=10,
             details=("Two cores",),
         )
-        snapshot = DashboardSnapshot(
+        snapshot = make_snapshot(
+            resource,
             system_label="Test System",
             scanned_at=datetime(2026, 9, 5, 3, 42, 52, tzinfo=timezone.utc),
-            resources=(resource,),
         )
 
         self.assertEqual(snapshot.get("cpu"), resource)
@@ -392,7 +388,7 @@ class ScannerTests(unittest.TestCase):
             patch.object(
                 scanner,
                 "_windows_gpu_probe",
-                return_value=gpu_probe("AMD Radeon"),
+                return_value=make_gpu_probe("AMD Radeon"),
             ) as loader,
         ):
             self.assertEqual(scanner.gpu_details(), ("AMD Radeon",))
@@ -411,7 +407,7 @@ class ScannerTests(unittest.TestCase):
                     ("GPU information unavailable: first failure",),
                     CapabilityState.UNKNOWN,
                 ),
-                gpu_probe("Intel Iris"),
+                make_gpu_probe("Intel Iris"),
             ]
 
             self.assertIn("unavailable", scanner.gpu_details()[0])
@@ -424,7 +420,7 @@ class ScannerTests(unittest.TestCase):
 
         with patch(
             "maintenance.scanner.GpuDetector.detect_with_capability",
-            return_value=gpu_probe("AMD Radeon"),
+            return_value=make_gpu_probe("AMD Radeon"),
         ) as detect:
             self.assertEqual(scanner.gpu_details(), ("AMD Radeon",))
 
@@ -494,7 +490,7 @@ class ScannerTests(unittest.TestCase):
 
         def hang() -> GpuProbe:
             threading.Event().wait(5)
-            return gpu_probe("Late GPU")
+            return make_gpu_probe("Late GPU")
 
         started = time.monotonic()
         with (
@@ -545,7 +541,7 @@ class ScannerTests(unittest.TestCase):
 
         def hang() -> GpuProbe:
             threading.Event().wait(5)
-            return gpu_probe("Late GPU")
+            return make_gpu_probe("Late GPU")
 
         with (
             patch.object(scanner, "_nvidia_gpu_details", return_value=None),
@@ -575,7 +571,7 @@ class ScannerTests(unittest.TestCase):
 
         def slow_but_finite() -> GpuProbe:
             release.wait(5)
-            return gpu_probe("Late GPU")
+            return make_gpu_probe("Late GPU")
 
         with (
             patch.object(scanner, "_nvidia_gpu_details", return_value=None),
@@ -629,7 +625,7 @@ class ScannerTests(unittest.TestCase):
 
     def test_scan_dashboard_output_matches_expected_cards(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
-        fake_psutil = self._make_fake_psutil()
+        fake_psutil = make_baseline_psutil()
 
         with scanner_environment(scanner, fake_psutil):
             snapshot = scanner.scan_dashboard()
@@ -669,7 +665,7 @@ class ScannerTests(unittest.TestCase):
 
     def test_scan_dashboard_degrades_failing_battery_sensor(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
-        fake_psutil = self._make_fake_psutil()
+        fake_psutil = make_baseline_psutil()
 
         def deny_battery() -> None:
             raise PermissionError("access denied")
@@ -694,7 +690,7 @@ class ScannerTests(unittest.TestCase):
         self,
     ) -> None:
         scanner = SystemScanner(Path("Downloads"))
-        fake_psutil = self._make_fake_psutil()
+        fake_psutil = make_baseline_psutil()
 
         def broken_cpu_count(logical: bool) -> int:
             raise RuntimeError("cpu count unavailable")
@@ -749,7 +745,7 @@ class ScannerTests(unittest.TestCase):
 
     def test_scan_dashboard_gpu_card_shows_unavailable_when_probe_fails(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
-        fake_psutil = self._make_fake_psutil()
+        fake_psutil = make_baseline_psutil()
 
         with scanner_environment(
             scanner,
@@ -765,7 +761,7 @@ class ScannerTests(unittest.TestCase):
 
     def test_scan_dashboard_gpu_card_lists_multiple_gpus(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
-        fake_psutil = self._make_fake_psutil()
+        fake_psutil = make_baseline_psutil()
 
         with scanner_environment(
             scanner,
@@ -781,7 +777,7 @@ class ScannerTests(unittest.TestCase):
 
     def test_scan_component_is_independent_of_other_components(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
-        fake_psutil = self._make_fake_psutil()
+        fake_psutil = make_baseline_psutil()
 
         def deny_battery() -> Any:
             raise PermissionError("denied")
@@ -821,7 +817,7 @@ class ScannerTests(unittest.TestCase):
 
     def test_scan_component_matches_dashboard_card(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
-        fake_psutil = self._make_fake_psutil()
+        fake_psutil = make_baseline_psutil()
 
         with scanner_environment(scanner, fake_psutil):
             snapshot = scanner.scan_dashboard()
@@ -860,7 +856,7 @@ class ScannerTests(unittest.TestCase):
 
     def test_scan_dashboard_reports_component_progress(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
-        fake_psutil = self._make_fake_psutil()
+        fake_psutil = make_baseline_psutil()
         messages: list[str] = []
 
         with scanner_environment(scanner, fake_psutil):
@@ -1008,7 +1004,7 @@ class ScannerTests(unittest.TestCase):
 
     def test_memory_card_shows_zram_breakdown(self) -> None:
         scanner = SystemScanner(Path("Downloads"))
-        fake_psutil = self._make_fake_psutil()
+        fake_psutil = make_baseline_psutil()
 
         with scanner_environment(
             scanner,
@@ -1023,10 +1019,6 @@ class ScannerTests(unittest.TestCase):
         self.assertIn("Physical RAM: 16.00 GiB", memory.details)
         self.assertIn("zram: 1.00 GiB of 2.00 GiB", memory.details)
         self.assertNotIn("Disk-backed swap", memory.details)
-
-    @staticmethod
-    def _make_fake_psutil() -> SimpleNamespace:
-        return make_baseline_psutil()
 
     def test_default_downloads_path_uses_downloads_path_resolver(self) -> None:
         sentinel = Path("/tmp/downloads")

@@ -21,6 +21,7 @@ from maintenance.models import ProcessActionResult, ProcessCandidate
 from maintenance.nodes import NodeId
 from maintenance.scanner import SystemScanner
 from tests.support.scheduling import DeferredRunner
+from tests.support.widget_recording import RecordingControl, RecordingTree
 
 
 def _process(
@@ -88,6 +89,13 @@ class ProcessSortKeyTests(unittest.TestCase):
             [active, protected],
         )
 
+    def test_unknown_sort_column_returns_uniform_key(self) -> None:
+        first = _process(1, "alpha")
+        second = _process(2, "beta")
+
+        self.assertEqual(process_sort_key("bogus", first), 0)
+        self.assertEqual(process_sort_key("bogus", second), 0)
+
 
 class ProcessTableHelperTests(unittest.TestCase):
     def test_row_tags_mark_protected_and_low_activity(self) -> None:
@@ -108,6 +116,7 @@ class ProcessTableHelperTests(unittest.TestCase):
         self.assertTrue(process_matches_query(process, "HELPER"))
         self.assertTrue(process_matches_query(process, ""))
         self.assertTrue(process_matches_query(process, "   "))
+        self.assertTrue(process_matches_query(process, "  firefox  "))
         self.assertFalse(process_matches_query(process, "chrome"))
 
     def test_rebuild_tree_rows_replaces_all_rows(self) -> None:
@@ -157,6 +166,13 @@ class ProcessTableHelperTests(unittest.TestCase):
             selected_items(FakeTree(), lookup, key_transform=int),
             ["alpha", "beta"],
         )
+
+    def test_selected_items_empty_selection_returns_empty_list(self) -> None:
+        class EmptyTree:
+            def selection(self) -> tuple[str, ...]:
+                return ()
+
+        self.assertEqual(selected_items(EmptyTree(), {1: "alpha"}), [])
 
     def test_finish_refresh_clears_active_state(self) -> None:
         dialog = object.__new__(ProcessDialog)
@@ -269,6 +285,11 @@ class ActivityClassificationTests(unittest.TestCase):
         self.assertEqual(SystemScanner._activity_label(1.0), "Active")
         self.assertEqual(SystemScanner._activity_label(12.5), "Active")
 
+    def test_activity_label_handles_negative_and_below_threshold_deltas(self) -> None:
+        threshold = SystemScanner.PROCESS_ACTIVITY_MIN_CPU_PERCENT
+        self.assertEqual(SystemScanner._activity_label(threshold - 0.001), "Low activity")
+        self.assertEqual(SystemScanner._activity_label(-1.0), "Low activity")
+
 
 class FakeProcess:
     def __init__(
@@ -378,42 +399,16 @@ class ProcessScanBehaviourTests(unittest.TestCase):
         self.assertTrue(by_pid[50001].action_allowed)
 
 
-class FakeTree:
-    def __init__(self) -> None:
-        self.rows: list[Any] = []
-
-    def delete(self, *items: object) -> None:
-        self.rows.clear()
-
-    def get_children(self) -> tuple[()]:
-        return ()
-
-    def insert(self, *args: object, **kwargs: object) -> None:
-        self.rows.append(args)
-
-
-class FakeControl:
-    def __init__(self) -> None:
-        self.state: str | None = None
-        self.text: str | None = None
-
-    def config(self, **options: object) -> None:
-        state = options.get("state")
-        text = options.get("text")
-        self.state = state if isinstance(state, str) else None
-        self.text = text if isinstance(text, str) else None
-
-
 def _dialog_with(processes: dict[int, ProcessCandidate]) -> Any:
     dialog: Any = object.__new__(ProcessDialog)
     dialog.processes = processes
     dialog._displayed = list(processes.values())
     dialog._sort_column = "name"
     dialog._sort_reverse = False
-    dialog.tree = FakeTree()
-    dialog.status_label = FakeControl()
-    dialog.quit_button = FakeControl()
-    dialog.refresh_button = FakeControl()
+    dialog.tree = RecordingTree()
+    dialog.status_label = RecordingControl()
+    dialog.quit_button = RecordingControl()
+    dialog.refresh_button = RecordingControl()
     return dialog
 
 
@@ -538,8 +533,8 @@ class ProcessDialogNodeTests(unittest.TestCase):
         dialog: Any = object.__new__(ProcessDialog)
         dialog._closed = False
         dialog._action_generation = 1
-        dialog.quit_button = FakeControl()
-        dialog.status_label = FakeControl()
+        dialog.quit_button = RecordingControl()
+        dialog.status_label = RecordingControl()
         dialog._action_in_flight = True
         dialog._process_action_error(1, "remote transport failed: connection closed")
         self.assertTrue(dialog._action_in_flight)
@@ -558,9 +553,9 @@ class ProcessDialogNodeTests(unittest.TestCase):
         dialog._read_only = False
         dialog._waiting_for_shared = False
         dialog._refresh_active = False
-        dialog.status_label = FakeControl()
-        dialog.refresh_button = FakeControl()
-        dialog.quit_button = FakeControl()
+        dialog.status_label = RecordingControl()
+        dialog.refresh_button = RecordingControl()
+        dialog.quit_button = RecordingControl()
         dialog._show_processes = Mock()
         dialog._on_refresh_result = Mock()
 
@@ -595,9 +590,9 @@ class ProcessDialogNodeTests(unittest.TestCase):
             deliver=lambda callback: None,
         )
         dialog._operation_key = "node:node-a:process_candidates"
-        dialog.status_label = FakeControl()
-        dialog.refresh_button = FakeControl()
-        dialog.quit_button = FakeControl()
+        dialog.status_label = RecordingControl()
+        dialog.refresh_button = RecordingControl()
+        dialog.quit_button = RecordingControl()
         dialog._show_processes = Mock()
         dialog.refresh()
         self.assertIs(dialog.provider, provider_a)

@@ -3,7 +3,7 @@
 import unittest
 from datetime import datetime, timezone
 
-from maintenance.models import CapabilityState, DashboardSnapshot, ResourceSummary
+from maintenance.models import CapabilityState
 from maintenance.nodes import (
     NodeCapability,
     NodeDescriptor,
@@ -13,6 +13,7 @@ from maintenance.nodes import (
     NodeTrustState,
 )
 from maintenance.ui.target_state import TargetState, render_target_state
+from tests.support.models import make_snapshot, make_summary
 
 
 def descriptor(
@@ -34,21 +35,18 @@ def descriptor(
     )
 
 
-def snapshot() -> DashboardSnapshot:
-    return DashboardSnapshot(
+def snapshot():
+    return make_snapshot(
+        make_summary(
+            "cpu",
+            "CPU",
+            value="42%",
+            subtitle="valid",
+            percent=42,
+            capability=CapabilityState.SUPPORTED,
+        ),
         system_label="Peer",
         scanned_at=datetime.now(timezone.utc),
-        resources=(
-            ResourceSummary(
-                key="cpu",
-                title="CPU",
-                value="42%",
-                subtitle="valid",
-                percent=42,
-                details=(),
-                capability=CapabilityState.SUPPORTED,
-            ),
-        ),
     )
 
 

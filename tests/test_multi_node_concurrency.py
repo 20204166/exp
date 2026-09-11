@@ -7,45 +7,17 @@ from maintenance.components.coordinator import AppCoordinator
 from maintenance.components.peer_connection import PeerConnectionManager
 from maintenance.nodes import (
     NodeContext,
-    NodeDescriptor,
     NodeId,
     NodeRegistry,
-    NodeStatus,
-    NodeTrustState,
-    local_node_descriptor,
     node_operation_key,
 )
-
-
-class RecordingRunner:
-    """A deterministic worker queue that exposes capacity without real threads."""
-
-    def __init__(self) -> None:
-        self.workers: list[tuple[str, object]] = []
-
-    def __call__(self, worker: object) -> None:
-        self.workers.append((str(len(self.workers)), worker))
-
-    @property
-    def pending(self) -> int:
-        return len(self.workers)
-
-    def run(self, index: int = 0) -> None:
-        _label, worker = self.workers.pop(index)
-        worker()  # type: ignore[operator]
+from tests.support.nodes import make_local_context, make_remote_context
+from tests.support.scheduling import DeferredRunner
 
 
 def _remote_context(node_id: str) -> NodeContext:
-    return NodeContext(
-        descriptor=NodeDescriptor(
-            id=NodeId(node_id),
-            display_name=node_id,
-            hostname=f"{node_id}.example",
-            is_local=False,
-            trust=NodeTrustState.TRUSTED,
-            status=NodeStatus.UNKNOWN,
-            capabilities=frozenset(),
-        ),
+    return make_remote_context(
+        node_id,
         provider=Mock(),
         process_manager=Mock(),
         file_manager=Mock(),
@@ -56,7 +28,7 @@ def _remote_context(node_id: str) -> NodeContext:
 
 class MultiNodeConcurrencyTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.runner = RecordingRunner()
+        self.runner = DeferredRunner()
         self.deliveries: list[object] = []
         self.coordinator = AppCoordinator(
             runner=self.runner,
@@ -165,16 +137,15 @@ class MultiNodeConcurrencyTests(unittest.TestCase):
     def test_peer_reconciliation_uses_shared_keys_without_per_node_workers_or_timers(
         self,
     ) -> None:
-        registry = NodeRegistry()
-        local = NodeContext(
-            descriptor=local_node_descriptor(),
-            provider=Mock(),
-            process_manager=Mock(),
-            file_manager=Mock(),
-            scheduler=Mock(),
-            coordinator=Mock(),
+        registry = NodeRegistry(
+            make_local_context(
+                provider=Mock(),
+                process_manager=Mock(),
+                file_manager=Mock(),
+                scheduler=Mock(),
+                coordinator=Mock(),
+            )
         )
-        registry.register_context(local)
         peers = [_remote_context(f"peer-{i}") for i in range(4)]
         for peer in peers:
             registry.register_context(peer)

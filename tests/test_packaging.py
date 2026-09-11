@@ -3,19 +3,15 @@
 import unittest
 from pathlib import Path
 
-from tests.support.toml import load as toml_load
+from tests.support.models import make_snapshot, make_summary
+from tests.support.toml import load_project
 
 REPO = Path(__file__).parents[1]
 
 
-def _pyproject() -> dict:
-    with (REPO / "pyproject.toml").open("rb") as file:
-        return toml_load(file)
-
-
 class PyprojectConfigurationTests(unittest.TestCase):
     def test_pyproject_parses_with_project_and_scripts(self) -> None:
-        project = _pyproject()
+        project = load_project()
         self.assertIn("project", project)
         self.assertEqual(project["project"]["name"], "system-analyzer")
         self.assertIn("version", project["project"]["dynamic"])
@@ -30,7 +26,7 @@ class PyprojectConfigurationTests(unittest.TestCase):
         for segment in segments:
             self.assertTrue(segment.isdigit())
 
-        dynamic = _pyproject()["tool"]["setuptools"]["dynamic"]
+        dynamic = load_project()["tool"]["setuptools"]["dynamic"]
         self.assertEqual(
             dynamic["version"]["attr"],
             "maintenance._version.__version__",
@@ -38,15 +34,15 @@ class PyprojectConfigurationTests(unittest.TestCase):
 
     def test_py_typed_marker_is_shipped(self) -> None:
         self.assertTrue((REPO / "maintenance" / "py.typed").is_file())
-        package_data = _pyproject()["tool"]["setuptools"]["package-data"]
+        package_data = load_project()["tool"]["setuptools"]["package-data"]
         self.assertIn("py.typed", package_data["maintenance"])
 
     def test_window_supports_subpackage_is_shipped(self) -> None:
-        packages = _pyproject()["tool"]["setuptools"]["packages"]
+        packages = load_project()["tool"]["setuptools"]["packages"]
         self.assertIn("maintenance.ui.window_supports", packages)
 
     def test_console_scripts_are_declared(self) -> None:
-        scripts = _pyproject()["project"]["scripts"]
+        scripts = load_project()["project"]["scripts"]
         self.assertEqual(
             set(scripts),
             {
@@ -56,10 +52,10 @@ class PyprojectConfigurationTests(unittest.TestCase):
         )
 
     def test_requires_python_is_310_or_newer(self) -> None:
-        self.assertTrue(_pyproject()["project"]["requires-python"].startswith(">="))
+        self.assertTrue(load_project()["project"]["requires-python"].startswith(">="))
 
     def test_dependencies_are_declared(self) -> None:
-        dependencies = "\n".join(_pyproject()["project"]["dependencies"])
+        dependencies = "\n".join(load_project()["project"]["dependencies"])
         for requirement in ("psutil", "send2trash", "nvidia-ml-py", "zeroconf"):
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, dependencies)
@@ -92,27 +88,21 @@ class SnapshotCliTests(unittest.TestCase):
     def test_snapshot_payload_shape_is_json_safe(self) -> None:
         from datetime import datetime, timezone
 
-        from maintenance.models import (
-            CapabilityState,
-            DashboardSnapshot,
-            ResourceSummary,
-        )
+        from maintenance.models import CapabilityState
         from maintenance.snapshot import _snapshot_payload
 
-        snapshot = DashboardSnapshot(
+        snapshot = make_snapshot(
+            make_summary(
+                "cpu",
+                "CPU",
+                value="10.0%",
+                subtitle="Current processor usage",
+                percent=10.0,
+                details=("Physical cores: 8",),
+                capability=CapabilityState.SUPPORTED,
+            ),
             system_label="TestOS 1.0 • x86_64",
             scanned_at=datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
-            resources=(
-                ResourceSummary(
-                    key="cpu",
-                    title="CPU",
-                    value="10.0%",
-                    subtitle="Current processor usage",
-                    percent=10.0,
-                    details=("Physical cores: 8",),
-                    capability=CapabilityState.SUPPORTED,
-                ),
-            ),
         )
         payload = _snapshot_payload(snapshot)
 
@@ -126,7 +116,7 @@ class SnapshotCliTests(unittest.TestCase):
 
 class BuildScriptReliabilityTests(unittest.TestCase):
     def test_pyproject_declares_setuptools_build_backend(self) -> None:
-        build_system = _pyproject()["build-system"]
+        build_system = load_project()["build-system"]
         self.assertEqual(build_system["build-backend"], "setuptools.build_meta")
         self.assertIn("setuptools", build_system["requires"][0])
 

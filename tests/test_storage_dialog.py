@@ -18,52 +18,11 @@ from maintenance.dialogs import (
 )
 from maintenance.models import FileActionResult, FileCandidate
 from tests.support.scheduling import DeferredRunner
-
-
-class FakeTree:
-    def __init__(self, selected: tuple[str, ...] = ()) -> None:
-        self.selected = selected
-        self.width = 755
-        self.widths: dict[str, int] = {}
-        self.rows: list[Any] = []
-
-    def selection(self) -> tuple[str, ...]:
-        return self.selected
-
-    def winfo_width(self) -> int:
-        return self.width
-
-    def column(self, name: str, **options: int) -> None:
-        self.widths[name] = options["width"]
-
-    def delete(self, *items: object) -> None:
-        self.rows.clear()
-
-    def get_children(self) -> tuple[()]:
-        return ()
-
-    def insert(self, *args: object, **kwargs: object) -> None:
-        self.rows.append(args)
-
-
-class FakeControl:
-    def __init__(self) -> None:
-        self.state: str | None = None
-        self.text: str | None = None
-
-    def config(self, **options: object) -> None:
-        state = options.get("state")
-        text = options.get("text")
-        self.state = state if isinstance(state, str) else None
-        self.text = text if isinstance(text, str) else None
-
-
-class FailingAfterWidget:
-    def winfo_exists(self) -> bool:
-        return True
-
-    def after(self, _delay: int, _callback: object, *_args: object) -> None:
-        raise RuntimeError("event loop is stopping")
+from tests.support.widget_recording import (
+    FailingAfterWidget,
+    RecordingControl,
+    RecordingTree,
+)
 
 
 class _FakeCoordinatedDialog:
@@ -159,7 +118,7 @@ class StorageDialogTests(unittest.TestCase):
 
     def test_resize_columns_gives_remaining_width_to_file_path(self) -> None:
         dialog: Any = object.__new__(StorageDialog)
-        dialog.tree = FakeTree()
+        dialog.tree = RecordingTree()
 
         dialog._resize_columns()
         self.assertEqual(
@@ -190,7 +149,7 @@ class StorageDialogTests(unittest.TestCase):
         }
         manager = FakeManager()
         dialog: Any = object.__new__(StorageDialog)
-        dialog.tree = FakeTree(("0", "1"))
+        dialog.tree = RecordingTree(("0", "1"))
         dialog.candidates = candidates
         dialog.manager = manager
         runner = DeferredRunner()
@@ -206,9 +165,9 @@ class StorageDialogTests(unittest.TestCase):
         dialog._read_only = False
         dialog.on_changed = Mock()
         dialog.scan = Mock()
-        dialog.scan_button = FakeControl()
-        dialog.trash_button = FakeControl()
-        dialog.status_label = FakeControl()
+        dialog.scan_button = RecordingControl()
+        dialog.trash_button = RecordingControl()
+        dialog.status_label = RecordingControl()
 
         with (
             patch("maintenance.dialogs.messagebox.askyesno", return_value=True),
@@ -226,11 +185,11 @@ class StorageDialogTests(unittest.TestCase):
 
     def test_show_candidates_empty_state_is_intentional(self) -> None:
         dialog: Any = object.__new__(StorageDialog)
-        dialog.tree = FakeTree()
+        dialog.tree = RecordingTree()
         dialog.candidates = {}
-        dialog.status_label = FakeControl()
-        dialog.scan_button = FakeControl()
-        dialog.trash_button = FakeControl()
+        dialog.status_label = RecordingControl()
+        dialog.scan_button = RecordingControl()
+        dialog.trash_button = RecordingControl()
 
         dialog._show_candidates([])
 
@@ -246,11 +205,11 @@ class StorageDialogTests(unittest.TestCase):
             "Large file",
         )
         dialog: Any = object.__new__(StorageDialog)
-        dialog.tree = FakeTree()
+        dialog.tree = RecordingTree()
         dialog.candidates = {}
-        dialog.status_label = FakeControl()
-        dialog.scan_button = FakeControl()
-        dialog.trash_button = FakeControl()
+        dialog.status_label = RecordingControl()
+        dialog.scan_button = RecordingControl()
+        dialog.trash_button = RecordingControl()
 
         dialog._show_candidates([candidate])
 
@@ -273,9 +232,9 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         dialog._closed = False
         dialog._trash_active = False
         dialog._on_close = dialog._default_close
-        dialog.status_label = FakeControl()
-        dialog.scan_button = FakeControl()
-        dialog.trash_button = FakeControl()
+        dialog.status_label = RecordingControl()
+        dialog.scan_button = RecordingControl()
+        dialog.trash_button = RecordingControl()
         dialog._show_candidates = Mock()
         dialog._set_scan_idle = Mock()
         return dialog
@@ -303,11 +262,11 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
             "Large file",
         )
         dialog: Any = object.__new__(StorageDialog)
-        dialog.tree = FakeTree()
+        dialog.tree = RecordingTree()
         dialog.candidates = {}
-        dialog.status_label = FakeControl()
-        dialog.scan_button = FakeControl()
-        dialog.trash_button = FakeControl()
+        dialog.status_label = RecordingControl()
+        dialog.scan_button = RecordingControl()
+        dialog.trash_button = RecordingControl()
         dialog._read_only = True
 
         dialog._show_candidates([candidate])
@@ -318,9 +277,9 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
     def test_read_only_dialog_keeps_trash_disabled_after_error(self) -> None:
         dialog: Any = object.__new__(StorageDialog)
         dialog._read_only = True
-        dialog.scan_button = FakeControl()
-        dialog.trash_button = FakeControl()
-        dialog.status_label = FakeControl()
+        dialog.scan_button = RecordingControl()
+        dialog.trash_button = RecordingControl()
+        dialog.status_label = RecordingControl()
 
         with patch("maintenance.dialogs.messagebox.showerror"):
             dialog._show_error("scan failed")
@@ -420,9 +379,9 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         dialog.analyzer.storage_candidates.side_effect = RuntimeError("boom")
         dialog._waiting_for_shared = False
         dialog._scan_active = False
-        dialog.status_label = FakeControl()
-        dialog.scan_button = FakeControl()
-        dialog.trash_button = FakeControl()
+        dialog.status_label = RecordingControl()
+        dialog.scan_button = RecordingControl()
+        dialog.trash_button = RecordingControl()
         dialog._show_candidates = Mock()
         dialog._show_error = Mock()
 
@@ -446,7 +405,7 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         dialog._closed = False
         dialog._show_error = Mock()
         dialog.manager = Mock(move_to_trash=Mock(side_effect=RuntimeError("denied")))
-        dialog.tree = FakeTree(("0",))
+        dialog.tree = RecordingTree(("0",))
         dialog.candidates = {
             "0": FileCandidate(
                 Path("x"),
@@ -474,7 +433,7 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         dialog._show_error = Mock()
         dialog.on_changed = Mock()
         dialog.destroy = Mock()
-        dialog.tree = FakeTree(("0",))
+        dialog.tree = RecordingTree(("0",))
         dialog.candidates = {
             "0": FileCandidate(
                 Path("x"),
@@ -516,7 +475,7 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
 
         dialog = self._dialog()
         dialog.coordinator = AppCoordinator(runner=runner, deliver=deliver)
-        dialog.tree = FakeTree(("0",))
+        dialog.tree = RecordingTree(("0",))
         dialog.candidates = {
             "0": FileCandidate(
                 Path("x"),

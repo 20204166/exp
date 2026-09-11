@@ -48,22 +48,10 @@ from maintenance.components.scan_support import (
 )
 from maintenance.nodes import NodeCapability, NodeId
 from tests.support.scheduling import DeferredRunner
-
-
-class FailingAfterWidget:
-    def winfo_exists(self) -> bool:
-        return True
-
-    def after(self, _delay: int, _callback: object, *_args: object) -> None:
-        raise RuntimeError("event loop is stopping")
-
-
-class ImmediateAfterWidget:
-    def winfo_exists(self) -> bool:
-        return True
-
-    def after(self, _delay: int, callback: Callable[..., Any], *args: object) -> None:
-        callback(*args)
+from tests.support.widget_recording import (
+    FailingAfterWidget,
+    ImmediateAfterWidget,
+)
 
 
 class PolicyProcess:

@@ -4,10 +4,10 @@ from maintenance.components import ResourceFeatureCatalog
 from maintenance.cluster import resource_summary_from_dict, resource_summary_to_dict
 from maintenance.models import (
     CapabilityState,
-    ResourceSummary,
     capability_label,
     resource_status,
 )
+from tests.support.models import make_summary
 
 
 class CapabilityTransparencyTests(unittest.TestCase):
@@ -45,49 +45,45 @@ class CapabilityTransparencyTests(unittest.TestCase):
                 "Not verified on this platform",
             ),
         ):
-            summary = ResourceSummary(
-                key="gpu",
-                title="GPU",
+            summary = make_summary(
+                "gpu",
+                "GPU",
                 value="Unavailable",
                 subtitle="Information unavailable",
                 percent=None,
-                details=(),
                 capability=state,
             )
             self.assertEqual(resource_status(summary), expected)
             self.assertEqual(capability_label(state), expected)
 
-        failed = ResourceSummary(
-            key="gpu",
-            title="GPU",
+        failed = make_summary(
+            "gpu",
+            "GPU",
             value="Unavailable",
             subtitle="Information unavailable",
             percent=None,
-            details=(),
             failed=True,
             capability=CapabilityState.PERMISSION_LIMITED,
         )
         self.assertEqual(resource_status(failed), "Permission required")
 
-        worker_failure = ResourceSummary(
-            key="gpu",
-            title="GPU",
+        worker_failure = make_summary(
+            "gpu",
+            "GPU",
             value="Unavailable",
             subtitle="Information unavailable",
             percent=None,
-            details=(),
             failed=True,
         )
         self.assertEqual(resource_status(worker_failure), "Failed")
 
     def test_new_states_are_additive_for_v1_remote_decoders(self) -> None:
-        summary = ResourceSummary(
-            key="gpu",
-            title="GPU",
+        summary = make_summary(
+            "gpu",
+            "GPU",
             value="Unavailable",
             subtitle="Information unavailable",
             percent=None,
-            details=(),
             capability=CapabilityState.TEMPORARILY_UNAVAILABLE,
         )
 

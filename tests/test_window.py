@@ -2,20 +2,11 @@ import threading
 import time
 import tkinter as tk
 import unittest
-from queue import Queue
 from typing import Any
 from unittest.mock import Mock, patch
 
-from maintenance.components import (
-    DOWNLOADS_SCAN_CANCELLED,
-    ResourceFeatureCatalog,
-    ScanCancelled,
-    ScanCoordinator,
-)
-from maintenance.components.coordinator import (
-    AppCoordinator,
-    ComponentRefreshScheduler,
-)
+from maintenance.components import DOWNLOADS_SCAN_CANCELLED, ScanCancelled
+from maintenance.components.coordinator import ComponentRefreshScheduler
 from maintenance.models import (
     CapabilityState,
     DashboardSnapshot,
@@ -24,58 +15,31 @@ from maintenance.models import (
 from maintenance.nodes import NodeId
 from maintenance.preferences import AppPreferences, PreferencesSaveError
 from tests.support.models import FIXED_SCANNED_AT, make_snapshot, make_summary
-from tests.support.scheduling import TimerMaster
+from tests.support.scheduling import FailingMaster, TimerMaster
+from tests.support.window import make_window as make_bare_window
 from window import AppWindow
-
-
-class FailingMaster(TimerMaster):
-    def after(self, delay: int, callback: object, *args: object) -> str:
-        del delay, callback, args
-        raise RuntimeError("event loop is not running")
-
-
-class FailingCancelMaster(TimerMaster):
-    def after_cancel(self, identifier: str) -> None:
-        del identifier
-        raise RuntimeError("event loop is not running")
 
 
 class AppWindowTests(unittest.TestCase):
     @staticmethod
     def make_window(master: TimerMaster | None = None) -> Any:
-        window: Any = object.__new__(AppWindow)
-        window.master = master or TimerMaster()
-        window._is_closing = False
-        window._pending_after_ids = set()
-        window._background_poll_id = None
-        window._background_tasks = 0
-        window._scan_coordinator = ScanCoordinator()
-        window._analysis_cancel_event = None
-        window._scan_timeout_id = None
-        window._resolved_scan_generation = 0
-        window._background_queue = Queue()
-        window._component_scheduler = ComponentRefreshScheduler()
-        window._feature_catalog = ResourceFeatureCatalog()
-        window._component_poll_id = None
-        window._component_queue = Queue()
-        window._preferences = AppPreferences.defaults()
-        window._preferences_store = Mock()
-        window._capabilities = {}
-        window._coordinator = AppCoordinator()
-        window._timed_out_generation = None
-        window._lease_grace_id = None
-        window._refresh_cards_scrollbar = Mock()
-        window.cards_frame = Mock()
-        window.settings_home = Mock()
-        window.preferences_page = Mock()
-        window.analyze_button = Mock()
-        window.cancel_button = Mock()
-        window.status_label = Mock()
-        window.refreshed_label = Mock()
-        window.scan_time_label = Mock()
-        window.progress_bar = None
-        window.health_label = Mock()
-        return window
+        return make_bare_window(
+            master=master,
+            _preferences=AppPreferences.defaults(),
+            _preferences_store=Mock(),
+            _capabilities={},
+            _refresh_cards_scrollbar=Mock(),
+            cards_frame=Mock(),
+            settings_home=Mock(),
+            preferences_page=Mock(),
+            analyze_button=Mock(),
+            cancel_button=Mock(),
+            status_label=Mock(),
+            refreshed_label=Mock(),
+            scan_time_label=Mock(),
+            progress_bar=None,
+            health_label=Mock(),
+        )
 
     def test_show_snapshot_updates_last_refreshed_label(self) -> None:
         window = self.make_window()

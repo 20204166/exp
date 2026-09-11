@@ -11,14 +11,13 @@ from maintenance.components.network_discovery import (
     NetworkDiscovery,
 )
 from maintenance.nodes import (
-    NodeContext,
     NodeId,
     NodeRegistry,
     NodeTrustState,
-    local_node_descriptor,
 )
 from maintenance.ui.discovery_refresh import refresh_discovery_views
 from maintenance.ui.render_coordinator import RenderIntent, UICoordinator
+from tests.support.nodes import make_local_context
 
 SERVICE_TYPE = "_system-analyzer._tcp.local."
 
@@ -63,14 +62,7 @@ class FakeNodesPage:
 
 class DiscoveryEndToEndTests(unittest.TestCase):
     def setUp(self) -> None:
-        local = NodeContext(
-            descriptor=local_node_descriptor(),
-            provider=object(),
-            process_manager=object(),
-            file_manager=object(),
-            scheduler=object(),
-            coordinator=object(),
-        )
+        local = make_local_context()
         self.registry = NodeRegistry(local)
         self.page = FakeNodesPage()
         self.ui = UICoordinator()

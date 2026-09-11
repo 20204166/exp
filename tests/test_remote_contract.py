@@ -62,7 +62,7 @@ from maintenance.remote import (
     sign_response,
     verify_request,
 )
-from tests.support.models import make_summary
+from tests.support.models import make_snapshot, make_summary
 from tests.support.temperature import make_temperature_sample
 
 SECRET = "a" * 64
@@ -129,37 +129,31 @@ class FakeProvider:
         cancel_event=None,
         progress_callback=None,
     ) -> DashboardSnapshot:
-        return DashboardSnapshot(
+        return make_snapshot(
+            make_summary(
+                "cpu",
+                "CPU",
+                value="10%",
+                subtitle="running",
+                percent=10.0,
+                details=("CPU: 10%",),
+                capability=CapabilityState.SUPPORTED,
+                temperatures=(make_temperature_sample("cpu", 45.0),),
+            ),
             system_label="peer-host",
             scanned_at=_now(),
-            resources=(
-                ResourceSummary(
-                    "cpu",
-                    "CPU",
-                    "10%",
-                    "running",
-                    10.0,
-                    ("CPU: 10%",),
-                    False,
-                    False,
-                    CapabilityState.SUPPORTED,
-                    (make_temperature_sample("cpu", 45.0),),
-                ),
-            ),
         )
 
     def component_summary(self, key, cancel_event=None) -> ResourceSummary:
-        return ResourceSummary(
+        return make_summary(
             key,
             key.upper(),
-            "5%",
-            "ok",
-            5.0,
-            (f"{key.upper()}: 5%",),
-            False,
-            False,
-            CapabilityState.SUPPORTED,
-            (make_temperature_sample(key, 45.0),),
+            value="5%",
+            subtitle="ok",
+            percent=5.0,
+            details=(f"{key.upper()}: 5%",),
+            capability=CapabilityState.SUPPORTED,
+            temperatures=(make_temperature_sample(key, 45.0),),
         )
 
     def process_candidates(self, cancel_event=None) -> list[ProcessCandidate]:
