@@ -565,6 +565,30 @@ class WindowNodeConnectionTests(unittest.TestCase):
         self.assertGreater(after, before)
         manager.renew_cluster_lease.assert_called_once()
 
+    def test_can_connect_peer_requires_identity_fingerprint(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
+            start_discovery=False,
+        )
+        context = window._node_registry.context(NodeId("peer-a"))
+        context.descriptor = replace(context.descriptor, identity_fingerprint=None)
+        state = ClusterState(
+            trusted_nodes=(
+                trusted_node_record(
+                    node_id="peer-a",
+                    display_name="Peer A",
+                    hostname="peer-a",
+                    host="192.0.2.10",
+                    port=5000,
+                    secret="secret",
+                    transport_fingerprint="tls-pin",
+                ),
+            )
+        )
+        window._cluster_state = state
+
+        self.assertFalse(ui_window_discovery.can_connect_peer(window, context))
+
 
 class WindowNodeSwitchingTests(unittest.TestCase):
     def test_role_revoke_removes_role_trust_grant_and_provider(self) -> None:

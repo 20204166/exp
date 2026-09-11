@@ -447,6 +447,7 @@ def can_connect_peer(controller: Any, context: NodeContext) -> bool:
         record is not None
         and record.port is not None
         and record.transport_fingerprint
+        and record.identity_fingerprint
         and context.descriptor.identity_status is not NodeIdentityStatus.MISMATCH
     )
 
