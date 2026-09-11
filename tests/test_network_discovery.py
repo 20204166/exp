@@ -558,6 +558,59 @@ class NetworkDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(discovery.peers()), 1)
         self.assertEqual(sum(1 for kind, _p in events if kind == "candidate"), 2)
 
+    def test_expiry_boundary_keeps_peer_at_exact_ttl(self) -> None:
+        discovery, backend, _events, clock = _discovery(ttl=30.0)
+        discovery.start()
+        backend.add(f"a.{SERVICE_TYPE}", _info("a"))
+        clock.now = 130.0
+        discovery.expire_stale()
+        self.assertEqual(len(discovery.peers()), 1)
+
+        clock.now = 130.1
+        discovery.expire_stale()
+        self.assertEqual(discovery.peers(), ())
+
+    def test_update_refreshes_last_seen_before_expiry(self) -> None:
+        discovery, backend, events, clock = _discovery(ttl=30.0)
+        discovery.start()
+        backend.add(f"a.{SERVICE_TYPE}", _info("a"))
+        clock.now = 120.0
+        backend.add(f"a.{SERVICE_TYPE}", _info("a"))
+
+        self.assertEqual(len(discovery.peers()), 1)
+        self.assertEqual(
+            sum(1 for kind, _payload in events if kind == "candidate"),
+            1,
+            "an identical update must not re-emit a candidate",
+        )
+
+        clock.now = 149.0
+        discovery.expire_stale()
+        self.assertEqual(len(discovery.peers()), 1)
+
+        clock.now = 150.1
+        discovery.expire_stale()
+        self.assertEqual(discovery.peers(), ())
+
+    def test_malformed_service_name_is_ignored(self) -> None:
+        discovery, backend, events, _clock = _discovery()
+        discovery.start()
+        backend.add(object(), _info("peer"))  # type: ignore[arg-type]
+
+        self.assertEqual(events, [])
+        self.assertEqual(discovery.peers(), ())
+
+    def test_transport_fingerprint_is_carried_without_trust(self) -> None:
+        discovery, backend, _events, _clock = _discovery()
+        discovery.start()
+        info = _info("a")
+        info["properties"]["tls_fingerprint"] = "tls:aaaa:bbbb"
+        backend.add(f"a.{SERVICE_TYPE}", info)
+
+        self.assertEqual(
+            discovery.peers()[0].transport_fingerprint, "tls:aaaa:bbbb"
+        )
+
     def test_same_hostname_different_ids_stay_separate(self) -> None:
         discovery, backend, _events, _clock = _discovery()
         discovery.start()

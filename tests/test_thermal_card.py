@@ -85,6 +85,87 @@ class TemperatureLinesTests(unittest.TestCase):
             ["NVMe: 38°C"],
         )
 
+    def test_temperature_scan_degrades_gracefully_on_macos_style_psutil(self) -> None:
+        fake = SimpleNamespace()  # macOS psutil exposes no sensors_temperatures.
+        scan = SystemScanner._temperature_scan(fake)
+
+        self.assertEqual(scan.lines, ())
+        self.assertEqual(scan.samples_by_component, ())
+
+    def test_temperature_sensor_support_matches_platform(self) -> None:
+        self.assertTrue(SystemScanner._temperature_sensors_supported("Linux"))
+        self.assertFalse(SystemScanner._temperature_sensors_supported("Darwin"))
+        self.assertFalse(SystemScanner._temperature_sensors_supported("Windows"))
+        self.assertFalse(SystemScanner._temperature_sensors_supported("FreeBSD"))
+
+    def test_temperature_scan_skips_sensors_on_macos_and_windows(self) -> None:
+        for system in ("Darwin", "Windows"):
+            with self.subTest(system=system):
+                probed: list[int] = []
+                fake = _thermal_psutil(
+                    lambda: (probed.append(1), {"coretemp": [_temp(45.0)]})[1]
+                )
+
+                with patch(
+                    "maintenance.scanner.platform.system", return_value=system
+                ):
+                    scan = SystemScanner._temperature_scan(fake)
+
+                self.assertEqual(scan.lines, ())
+                self.assertEqual(scan.samples_by_component, ())
+                self.assertEqual(
+                    probed, [], "sensors must never be probed off Linux"
+                )
+
+    def test_temperature_scan_reads_sensors_on_linux(self) -> None:
+        fake = _thermal_psutil(lambda: {"coretemp": [_temp(45.0)]})
+
+        with patch("maintenance.scanner.platform.system", return_value="Linux"):
+            scan = SystemScanner._temperature_scan(fake)
+
+        self.assertEqual(scan.lines, ("CPU: 45°C",))
+        self.assertEqual(dict(scan.samples_by_component)["cpu"][0].value_celsius, 45.0)
+
+    def test_temperature_scan_degrades_when_sensors_return_none(self) -> None:
+        scan = SystemScanner._temperature_scan(_thermal_psutil(lambda: None))
+
+        self.assertEqual(scan.lines, ())
+        self.assertEqual(scan.samples_by_component, ())
+
+    def test_temperature_scan_degrades_when_sensors_return_non_dict(self) -> None:
+        scan = SystemScanner._temperature_scan(_thermal_psutil(lambda: [1, 2]))
+
+        self.assertEqual(scan.lines, ())
+        self.assertEqual(scan.samples_by_component, ())
+
+    def test_temperature_scan_skips_entry_without_current(self) -> None:
+        fake = _thermal_psutil(
+            lambda: {"coretemp": [SimpleNamespace(high=80.0, label="x")]}
+        )
+
+        scan = SystemScanner._temperature_scan(fake)
+
+        self.assertEqual(scan.lines, ())
+        self.assertEqual(scan.samples_by_component, ())
+
+    def test_temperature_scan_groups_samples_by_component(self) -> None:
+        fake = _thermal_psutil(
+            lambda: {
+                "coretemp": [_temp(45.0, "Core 0"), _temp(47.0, "Core 1")],
+                "nvme": [_temp(38.0, "Composite")],
+            }
+        )
+
+        scan = SystemScanner._temperature_scan(fake)
+
+        self.assertEqual(scan.lines, ("CPU: 47°C", "NVMe: 38°C"))
+        by_component = dict(scan.samples_by_component)
+        self.assertEqual(tuple(by_component), ("cpu", "storage"))
+        cpu = by_component["cpu"]
+        self.assertEqual([sample.value_celsius for sample in cpu], [45.0, 47.0])
+        self.assertEqual(cpu[0].sensor_id, "coretemp:0:Core 0")
+        self.assertEqual(cpu[0].sensor_name, "Core 0")
+
     def test_sensible_temperature_bounds(self) -> None:
         for value, expected in (
             (None, False),

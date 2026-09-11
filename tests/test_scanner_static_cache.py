@@ -53,7 +53,10 @@ class StaticHardwareCacheTests(unittest.TestCase):
             scanner.scan_dashboard()
             scanner.scan_dashboard()
 
-        self.assertEqual(counters, {"system": 1, "release": 1, "machine": 1})
+        # ``platform.system()`` is read once for the boot-session label and once
+        # for the temperature platform gate (both cached across refreshes);
+        # release/machine are read once each for the label only.
+        self.assertEqual(counters, {"system": 2, "release": 1, "machine": 1})
 
     def test_static_cache_invalidates_after_boot_session_change(self) -> None:
         scanner = make_scanner()

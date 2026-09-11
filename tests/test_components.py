@@ -35,6 +35,7 @@ from maintenance.components import (
     windows_windll,
 )
 from maintenance.components.coordinator import (
+    _make_monotonic_clock,
     AppCoordinator,
     ComponentRefreshScheduler,
     RefreshIntervals,
@@ -729,6 +730,17 @@ class ComponentRefreshSchedulerTests(unittest.TestCase):
             ComponentRefreshScheduler({"cpu": 0})
         with self.assertRaises(ValueError):
             ComponentRefreshScheduler({"cpu": -1})
+
+    def test_set_interval_rejects_bool_and_non_positive(self) -> None:
+        scheduler = ComponentRefreshScheduler({"cpu": 1000})
+
+        with self.assertRaises(TypeError):
+            scheduler.set_interval("cpu", True, now=1.0)
+        with self.assertRaises(ValueError):
+            scheduler.set_interval("cpu", 0, now=1.0)
+
+        scheduler.set_interval("cpu", 2000, now=1.0)
+        self.assertEqual(scheduler.intervals["cpu"], 2000)
 
     def test_begin_claims_due_component_and_blocks_overlap(self) -> None:
         scheduler = ComponentRefreshScheduler({"cpu": 1000})
@@ -1526,6 +1538,55 @@ class AppCoordinatorRunTests(unittest.TestCase):
 
         self.assertEqual(received, [["shared"]])
 
+    def test_progress_after_cancel_is_dropped(self) -> None:
+        coordinator, runner = self._make()
+        progress: list[str] = []
+
+        def task(_event: object, emit: Callable[[str], None]) -> str:
+            emit("late")
+            return "done"
+
+        coordinator.run(
+            "storage",
+            task,
+            on_progress=lambda _key, message: progress.append(message),
+        )
+        coordinator.cancel("storage")
+        runner.run_next()
+
+        self.assertEqual(progress, [])
+        self.assertIsNone(coordinator.last_result("storage"))
+
+    def test_finish_with_none_result_records_error_without_caching(self) -> None:
+        coordinator = AppCoordinator()
+        generation, started = coordinator.begin("storage")
+        self.assertTrue(started)
+
+        finished, rerun_requested = coordinator.finish("storage", generation, None)
+
+        self.assertTrue(finished)
+        self.assertFalse(rerun_requested)
+        self.assertIsNone(coordinator.last_result("storage"))
+        self.assertEqual(
+            coordinator.state("storage").last_error,
+            "operation did not produce a result",
+        )
+
+    def test_run_after_default_shutdown_delivers_error(self) -> None:
+        coordinator = AppCoordinator()
+        coordinator.shutdown()
+        errors: list[str] = []
+
+        generation = coordinator.run(
+            "storage",
+            lambda _event, _progress: "never",
+            on_error=lambda _key, message: errors.append(message),
+        )
+
+        self.assertEqual(generation, 1)
+        self.assertEqual(errors, ["default worker executor is unavailable"])
+        self.assertFalse(coordinator.in_flight("storage"))
+
     def test_uncaught_ui_callback_never_breaks_delivery(self) -> None:
         coordinator, runner = self._make()
         completed: list[object] = []
@@ -1538,6 +1599,16 @@ class AppCoordinatorRunTests(unittest.TestCase):
         runner.run_next()
 
         self.assertEqual(completed, [["ok"]])
+
+
+class MonotonicClockTests(unittest.TestCase):
+    def test_backwards_injected_clock_is_clamped(self) -> None:
+        values = iter([5.0, 4.0, 6.0])
+        clock = _make_monotonic_clock(lambda: next(values))
+
+        self.assertEqual(clock(), 5.0)
+        self.assertEqual(clock(), 5.0)
+        self.assertEqual(clock(), 6.0)
 
 
 if __name__ == "__main__":
