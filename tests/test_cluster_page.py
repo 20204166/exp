@@ -86,10 +86,9 @@ def make_page(
     return page, parent, recorder
 
 
-
 class ClusterPageTests(unittest.TestCase):
     @unittest.skipUnless(DISPLAY_AVAILABLE, "Tk display unavailable")
-    def test_real_tk_rebuilds_release_destroyed_buttons(self) -> None:
+    def test_retained_buttons_stay_registered_exactly_once(self) -> None:
         root = tk.Tk()
         coordinator = ButtonCoordinator()
         page = ClusterPage(
@@ -99,18 +98,49 @@ class ClusterPageTests(unittest.TestCase):
             button_coordinator=coordinator,
         )
         try:
+            prior = coordinator._actions["cluster:node:local:open"].widgets[0]
             for _ in range(30):
-                prior = coordinator._actions["cluster:node:local:open"].widgets[0]
                 page.refresh_nodes([_spec("local", selectable=True)])
-                self.assertFalse(prior.winfo_exists())
+                self.assertTrue(prior.winfo_exists())
                 widgets = coordinator._actions["cluster:node:local:open"].widgets
                 self.assertEqual(len(widgets), 1)
-                self.assertTrue(widgets[0].winfo_exists())
+                self.assertIs(widgets[0], prior)
             page.refresh_nodes([])
             self.assertEqual(coordinator.registered_ids(), ())
         finally:
             root.destroy()
             page.dispose()
+
+    @unittest.skipUnless(DISPLAY_AVAILABLE, "Tk display unavailable")
+    def test_unchanged_rows_are_retained_across_refresh(self) -> None:
+        root = tk.Tk()
+        coordinator = ButtonCoordinator()
+        page = ClusterPage(
+            root,
+            callbacks=make_callbacks(),
+            nodes=[_spec("dev", selectable=True)],
+            button_coordinator=coordinator,
+        )
+        try:
+            prior = coordinator._actions["cluster:node:dev:open"].widgets[0]
+            page.refresh_nodes([_spec("dev", selectable=True)])
+            self.assertTrue(prior.winfo_exists())
+        finally:
+            root.destroy()
+            page.dispose()
+
+    @unittest.skipUnless(DISPLAY_AVAILABLE, "Tk display unavailable")
+    def test_text_only_change_updates_in_place(self) -> None:
+        root = tk.Tk()
+        page = ClusterPage(
+            root, callbacks=make_callbacks(), nodes=[_spec("dev", selectable=True)]
+        )
+        try:
+            row = page._rows["dev"]
+            page.refresh_nodes([_spec("dev", selectable=True)])
+            self.assertIs(page._rows["dev"], row)
+        finally:
+            root.destroy()
             page.dispose()
 
     def test_page_root_is_not_packed(self) -> None:
@@ -171,7 +201,7 @@ class ClusterPageTests(unittest.TestCase):
 
     def test_remove_connection_button_emits_node_id(self) -> None:
         callbacks = make_remove_callbacks()
-        page, _parent, recorder = make_page(
+        _page, _parent, recorder = make_page(
             callbacks, nodes=[_coordinator_spec("peer-a")]
         )
         recorder.button_with_text("Remove connection").kwargs["command"]()
@@ -179,7 +209,7 @@ class ClusterPageTests(unittest.TestCase):
 
     def test_remove_job_button_emits_node_id(self) -> None:
         callbacks = make_remove_callbacks()
-        page, _parent, recorder = make_page(
+        _page, _parent, recorder = make_page(
             callbacks, nodes=[_coordinator_spec("peer-a")]
         )
         recorder.button_with_text("Remove job").kwargs["command"]()
@@ -188,7 +218,7 @@ class ClusterPageTests(unittest.TestCase):
     def test_share_dashboard_button_on_local_row(self) -> None:
         callbacks = make_remove_callbacks()
         local = _spec("local", selectable=True, is_local=True)
-        page, _parent, recorder = make_page(callbacks, nodes=[local])
+        _page, _parent, recorder = make_page(callbacks, nodes=[local])
         recorder.button_with_text("Share dashboard").kwargs["command"]()
         callbacks.on_share_dashboard.assert_called_once_with()
 
