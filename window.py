@@ -530,6 +530,15 @@ class AppWindow:
     def _revoke_node(self, node_id: str) -> None:
         ui_node_actions.revoke_node(self, node_id)
 
+    def _remove_connection_node(self, node_id: str) -> None:
+        ui_node_actions.remove_connection_node(self, node_id)
+
+    def _remove_job_node(self, node_id: str) -> None:
+        ui_node_actions.remove_job_node(self, node_id)
+
+    def _share_dashboard(self) -> None:
+        self._show_dashboard_page()
+
     def _set_node_color(self, node_id: str, color: str) -> None:
         ui_node_actions.set_node_color(self, node_id, color)
 

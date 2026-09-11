@@ -113,6 +113,7 @@ def cluster_specs(controller: Any) -> list[ui_cluster.ClusterNodeSpec]:
         if registry is None
         else node_specs.cluster_node_specs(
             registry,
+            cluster_state=controller._cluster_state,
             role_editable=any(
                 role.value == "coordinator"
                 for role in controller._cluster_state.local_assignment.roles

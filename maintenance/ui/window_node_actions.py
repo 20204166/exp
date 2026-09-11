@@ -156,7 +156,68 @@ def resume_node(controller: Any, node_id: str) -> None:
         controller._nodes_error(str(error))
 
 
-def revoke_node(controller: Any, node_id: str) -> None:
+def remove_connection_node(
+    controller: Any, node_id: str, *, messagebox_module: Any = messagebox
+) -> None:
+    if not messagebox_module.askyesno(
+        "Remove connection",
+        "The connection will close, but trusted reconnect remains available.",
+        parent=controller.master,
+    ):
+        return
+    node = NodeId(node_id)
+    manager = controller._peer_connections()
+    if manager is not None:
+        manager.disconnect_manual(node)
+    registry = controller.__dict__.get("_node_registry")
+    if registry is not None:
+        try:
+            context = registry.context(node)
+        except KeyError:
+            context = None
+        if context is not None:
+            controller._cancel_node_operations(context)
+            controller._cancel_peer_connection(context)
+            context.provider = None
+            context.process_manager = None
+            context.scheduler = None
+            context.coordinator = None
+    controller._refresh_nodes_page()
+    controller._refresh_cluster_page()
+    controller._nodes_status(f"Removed connection to {node_id}")
+
+
+def remove_job_node(
+    controller: Any, node_id: str, *, messagebox_module: Any = messagebox
+) -> None:
+    if not messagebox_module.askyesno(
+        "Remove job",
+        "This removes the active assignment and reduces normal collection to 20%.",
+        parent=controller.master,
+    ):
+        return
+    try:
+        _save_role_state(
+            controller,
+            _role_state(controller).remove_job(
+                actor=controller._cluster_state.local_assignment,
+                target=NodeId(node_id),
+            ),
+        )
+        controller._nodes_status(f"Removed job for {node_id}")
+    except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
+        controller._nodes_error(str(error))
+
+
+def revoke_node(
+    controller: Any, node_id: str, *, messagebox_module: Any = messagebox
+) -> None:
+    if not messagebox_module.askyesno(
+        "Revoke",
+        "This invalidates trust and permissions. A new invite is required to reconnect.",
+        parent=controller.master,
+    ):
+        return
     try:
         role_state = _role_state(controller)
         if role_state.assignment_for(NodeId(node_id)) is None:

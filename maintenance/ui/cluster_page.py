@@ -38,6 +38,9 @@ class ClusterPageCallbacks:
     on_pause: Callable[[str], None] | None = None
     on_resume: Callable[[str], None] | None = None
     on_revoke: Callable[[str], None] | None = None
+    on_remove_connection: Callable[[str], None] | None = None
+    on_remove_job: Callable[[str], None] | None = None
+    on_share_dashboard: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +62,7 @@ class ClusterNodeSpec:
     role: str = "worker"
     paused: bool = False
     role_editable: bool = False
+    has_active_job: bool = True
 
 
 class ClusterPage:
@@ -209,6 +213,8 @@ class ClusterPage:
         if spec.target_state != "Unknown":
             meta += f" · {spec.target_state}"
         meta += f" · {pairing_text}"
+        if spec.role == "worker" and not spec.is_local and not spec.has_active_job:
+            meta += " · 20% participation"
         if spec.capabilities:
             meta += f" · {', '.join(node_presentation.capability_labels(spec.capabilities))}"
         if spec.last_refresh:
@@ -250,6 +256,41 @@ class ClusterPage:
                 style=ui_styles.STYLE_DANGER_BUTTON,
             )
             revoke.pack(side="right", padx=(0, 8))
+        if (
+            spec.role_editable
+            and not spec.is_local
+            and self.callbacks.on_remove_connection is not None
+        ):
+            remove_connection = self.button_cls(
+                row,
+                text="Remove connection",
+                command=lambda: self.callbacks.on_remove_connection(spec.node_id),
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+            remove_connection.pack(side="right", padx=(0, 8))
+        if (
+            spec.role_editable
+            and not spec.is_local
+            and self.callbacks.on_remove_job is not None
+        ):
+            remove_job = self.button_cls(
+                row,
+                text="Remove job",
+                command=lambda: self.callbacks.on_remove_job(spec.node_id),
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+            remove_job.pack(side="right", padx=(0, 8))
+        if (
+            spec.is_local
+            and self.callbacks.on_share_dashboard is not None
+        ):
+            share = self.button_cls(
+                row,
+                text="Share dashboard",
+                command=self.callbacks.on_share_dashboard,
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+            share.pack(side="right", padx=(0, 8))
         if (
             spec.role_editable
             and not spec.is_local

@@ -44,6 +44,8 @@ class NodesConnectionsCallbacks:
     on_role_change: Callable[[str, frozenset[str]], None] | None = None
     on_pause: Callable[[str], None] | None = None
     on_resume: Callable[[str], None] | None = None
+    on_remove_connection: Callable[[str], None] | None = None
+    on_remove_job: Callable[[str], None] | None = None
     on_start_discovery: Callable[[], None] = lambda: None
 
 
@@ -84,6 +86,7 @@ class TrustedNodeSpec:
     roles: tuple[str, ...] = ()
     role_editable: bool = False
     paused: bool = False
+    has_active_job: bool = True
 
 
 class NodesConnectionsPage:
@@ -608,6 +611,26 @@ class NodesConnectionsPage:
                 style=ui_styles.STYLE_NEUTRAL_BUTTON,
             )
             pause_button.pack(side="left", padx=(0, 8))
+        if not spec.is_manual and self.callbacks.on_remove_connection is not None:
+            remove_connection = self.button_cls(
+                secondary_actions,
+                text="Remove connection",
+                command=lambda: self.callbacks.on_remove_connection(spec.node_id),
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+            remove_connection.pack(side="left", padx=(0, 8))
+        if (
+            spec.role_editable
+            and not spec.is_manual
+            and self.callbacks.on_remove_job is not None
+        ):
+            remove_job = self.button_cls(
+                secondary_actions,
+                text="Remove job",
+                command=lambda: self.callbacks.on_remove_job(spec.node_id),
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+            remove_job.pack(side="left", padx=(0, 8))
         return row
 
     def _build_manual_hosts_section(self) -> None:

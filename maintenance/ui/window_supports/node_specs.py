@@ -98,6 +98,9 @@ def trusted_node_specs(
                     item.value == "coordinator" for item in actor.roles
                 ),
                 paused=assignment.paused if assignment is not None else False,
+                has_active_job=(
+                    assignment.has_active_job if assignment is not None else True
+                ),
             )
         )
     return specs
@@ -142,7 +145,12 @@ def manual_node_specs(
     return specs
 
 
-def cluster_node_specs(registry: Any, *, role_editable: bool = False) -> list[ui_cluster.ClusterNodeSpec]:
+def cluster_node_specs(
+    registry: Any,
+    *,
+    cluster_state: Any = None,
+    role_editable: bool = False,
+) -> list[ui_cluster.ClusterNodeSpec]:
     """Project registered contexts and untrusted observations for All Systems."""
 
     selectable = {descriptor.id for descriptor in registry.selectable_descriptors()}
@@ -151,6 +159,19 @@ def cluster_node_specs(registry: Any, *, role_editable: bool = False) -> list[ui
         descriptor = context.descriptor
         snapshot = context.snapshot
         presentation = render_target_state(descriptor, snapshot)
+        assignment = (
+            next(
+                (
+                    item
+                    for item in cluster_state.role_assignments
+                    if item.node_id is not None
+                    and item.node_id.value == descriptor.id.value
+                ),
+                None,
+            )
+            if cluster_state is not None
+            else None
+        )
         specs.append(
             ui_cluster.ClusterNodeSpec(
                 node_id=descriptor.id.value,
@@ -172,6 +193,9 @@ def cluster_node_specs(registry: Any, *, role_editable: bool = False) -> list[ui
                 target_state=presentation.label,
                 role=descriptor.role,
                 role_editable=role_editable,
+                has_active_job=(
+                    assignment.has_active_job if assignment is not None else True
+                ),
             )
         )
     for candidate in registry.discovered_candidates():
