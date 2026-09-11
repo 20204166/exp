@@ -532,8 +532,18 @@ def section_card(
             wraplength=ui_styles.LAYOUT["section_description_wrap"],
             justify="left",
         )
-        description_label.pack(anchor="w", pady=(ui_styles.SPACING["heading_desc_gap"], 0))
-        resize_aware(card, fit_wrap_to_width(description_label, ui_styles.LAYOUT["fit_wrap_max"], margin=ui_styles.LAYOUT["fit_wrap_margin"]))
+        description_label.pack(
+            anchor="w",
+            pady=(ui_styles.SPACING["heading_desc_gap"], 0),
+        )
+        resize_aware(
+            card,
+            fit_wrap_to_width(
+                description_label,
+                ui_styles.LAYOUT["fit_wrap_max"],
+                margin=ui_styles.LAYOUT["fit_wrap_margin"],
+            ),
+        )
     body = frame_cls(card, bg=colors["card"])
     body.pack(fill="x", pady=(ui_styles.SPACING["section_body_top"], 0))
     return card, body
@@ -592,7 +602,11 @@ def navigation_card(
         style=ui_styles.STYLE_NEUTRAL_BUTTON,
         cursor="hand2",
     )
-    button.pack(side="right", padx=(ui_styles.SPACING["nav_button_gap"], 0), anchor="center")
+    button.pack(
+        side="right",
+        padx=(ui_styles.SPACING["nav_button_gap"], 0),
+        anchor="center",
+    )
     if button_coordinator is not None and action_id is not None:
         button_coordinator.register(action_id, command, replace=True)
         button_coordinator.bind(button, action_id)
