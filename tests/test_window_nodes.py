@@ -698,6 +698,48 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         with self.assertRaises(RemoteAuthError):
             ui_window_discovery.handle_role_request(window, request)
 
+    def test_upload_gate_idle_worker_uploads_one_in_five(self) -> None:
+        from maintenance.ui.window_discovery import should_upload_job
+
+        self.assertTrue(should_upload_job(1, True))
+        self.assertTrue(should_upload_job(3, True))
+        self.assertTrue(should_upload_job(5, True))
+        self.assertFalse(should_upload_job(1, False))
+        self.assertFalse(should_upload_job(2, False))
+        self.assertFalse(should_upload_job(3, False))
+        self.assertFalse(should_upload_job(4, False))
+        self.assertTrue(should_upload_job(5, False))
+        self.assertTrue(should_upload_job(10, False))
+
+    def test_open_remote_node_does_not_enroll_into_cluster(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
+            start_discovery=False,
+        )
+        state = ClusterState.create_local(local_node_id="local")
+        state.trusted_nodes = (
+            trusted_node_record(
+                node_id="peer-a",
+                display_name="Peer A",
+                hostname="peer-a",
+                host="192.0.2.10",
+                port=5000,
+                secret="secret",
+                transport_fingerprint="tls-pin",
+            ),
+        )
+        window._cluster_state = state
+        window._activate_remote_node = Mock()
+        window._show_dashboard_page = Mock()
+        before_assignments = state.role_assignments
+        before_grants = state.peer_grants
+
+        window_node_actions.open_cluster_node(window, "peer-a")
+
+        self.assertEqual(window._cluster_state.role_assignments, before_assignments)
+        self.assertEqual(window._cluster_state.peer_grants, before_grants)
+        window._show_dashboard_page.assert_called()
+
     def test_remove_connection_confirms_and_detaches(self) -> None:
         window = _make_window(
             _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),

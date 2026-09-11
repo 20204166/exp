@@ -38,6 +38,15 @@ from maintenance.remote import (
 from maintenance.remote_security import ensure_tls_material, server_context
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui import render_coordinator as ui_render
+
+JOB_UPLOAD_DIVISOR = 5
+
+
+def should_upload_job(sequence: int, has_active_job: bool) -> bool:
+    """Deterministic 20% participation: idle workers upload 1 in 5 ticks."""
+    if has_active_job:
+        return True
+    return sequence % JOB_UPLOAD_DIVISOR == 0
 from maintenance.ui.window_supports.timer_delivery import deadline_delay_ms
 
 LOGGER = logging.getLogger(__name__)
@@ -567,9 +576,12 @@ def queue_cluster_uploads(controller: Any, manager: PeerConnectionManager) -> No
         ),
     )
     local_roles = state.local_assignment.roles
+    has_active_job = state.local_assignment.has_active_job
     if coordinator_context is not None and coordinator_context.provider is not None and "worker" in {
         role.value for role in local_roles
-    } and "coordinator" not in {role.value for role in local_roles}:
+    } and "coordinator" not in {role.value for role in local_roles} and should_upload_job(
+        sequence, has_active_job
+    ):
         key = f"cluster:worker-snapshot:{coordinator_context.node_id.value}"
         if not manager._coordinator.in_flight(key):
             manager._coordinator.run(
