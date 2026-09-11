@@ -517,11 +517,51 @@ def cancel_peer_connection(controller: Any, context: NodeContext) -> None:
         manager.cancel(context.node_id)
 
 
+def _is_local_subcoordinator(controller: Any) -> bool:
+    from maintenance.components.cluster_roles import ClusterRole
+
+    return ClusterRole.SUBCOORDINATOR in (
+        controller._cluster_state.local_assignment.roles
+    )
+
+
+def _renew_local_coordinator_lease(
+    controller: Any, manager: PeerConnectionManager
+) -> None:
+    from maintenance.components.cluster_roles import ClusterRole, FencingError
+
+    state = controller._cluster_state
+    epoch = state.coordinator_epoch
+    if epoch is None:
+        return
+    assignment = state.local_assignment
+    if (
+        ClusterRole.COORDINATOR not in assignment.roles
+        or assignment.revoked
+        or assignment.paused
+    ):
+        return
+    now = time.time()
+    if now >= epoch.lease_expires_at or now < epoch.lease_expires_at - 40.0:
+        return
+    try:
+        manager.renew_cluster_lease(
+            state,
+            coordinator_id=NodeId(state.local_node_id),
+            fencing_token=epoch.fencing_token,
+            now=now,
+        )
+    except FencingError:
+        return
+
+
 def reconcile_peer_connections(controller: Any) -> None:
     manager = controller._peer_connections()
     if manager is None or controller._is_closing:
         return
-    manager.promote_if_due(controller._cluster_state)
+    if _is_local_subcoordinator(controller):
+        manager.promote_if_due(controller._cluster_state)
+    _renew_local_coordinator_lease(controller, manager)
     queue_cluster_uploads(controller, manager)
     deadline = manager.reconcile()
     controller._schedule_peer_reconciliation(deadline)

@@ -506,6 +506,65 @@ class WindowNodeConnectionTests(unittest.TestCase):
         messages.showinfo.assert_called_once()
         self.assertIn("replacement", messages.showinfo.call_args.args[1])
 
+    def test_reconcile_does_not_promote_when_local_is_coordinator(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
+            start_discovery=False,
+        )
+        state = ClusterState.create_local(local_node_id="local")
+        state.role_assignments = state.role_assignments + (
+            RoleAssignment(
+                frozenset({ClusterRole.SUBCOORDINATOR}),
+                node_id=NodeId("peer-a"),
+            ),
+        )
+        epoch = state.coordinator_epoch
+        state.coordinator_epoch = replace(
+            epoch,
+            issued_at=time.time() - 130.0,
+            lease_expires_at=time.time() - 10.0,
+        )
+        window._cluster_state = state
+        manager = Mock()
+        manager.promote_if_due.return_value = None
+        window._peer_connection_manager = manager
+        window._cluster_store = Mock()
+        window._schedule_peer_reconciliation = Mock()
+        window.snapshot = None
+
+        window._reconcile_peer_connections()
+
+        manager.promote_if_due.assert_not_called()
+
+    def test_reconcile_renews_local_coordinator_lease(self) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        epoch = state.coordinator_epoch
+        state.coordinator_epoch = replace(epoch, lease_expires_at=time.time() + 15.0)
+        window._cluster_state = state
+        manager = Mock()
+        manager.renew_cluster_lease = Mock(
+            side_effect=lambda state_, **kwargs: setattr(
+                state_,
+                "coordinator_epoch",
+                replace(
+                    state_.coordinator_epoch,
+                    lease_expires_at=time.time() + 120.0,
+                ),
+            )
+        )
+        window._peer_connection_manager = manager
+        window._cluster_store = Mock()
+        window._schedule_peer_reconciliation = Mock()
+        window.snapshot = None
+
+        before = state.coordinator_epoch.lease_expires_at
+        window._reconcile_peer_connections()
+        after = state.coordinator_epoch.lease_expires_at
+
+        self.assertGreater(after, before)
+        manager.renew_cluster_lease.assert_called_once()
+
 
 class WindowNodeSwitchingTests(unittest.TestCase):
     def test_role_revoke_removes_role_trust_grant_and_provider(self) -> None:
