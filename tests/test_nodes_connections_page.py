@@ -80,13 +80,7 @@ def make_page(
                 True,
             )
         ],
-        frame_cls=recorder.frame_cls(),
-        label_cls=recorder.label_cls(),
-        style_frame_cls=recorder.style_frame_cls(),
-        style_label_cls=recorder.style_label_cls(),
-        button_cls=recorder.button_cls(),
-        canvas_cls=recorder.canvas_cls(),
-        scrollbar_cls=recorder.scrollbar_cls(),
+        **recorder.page_kwargs(),
         checkbutton_cls=recorder.checkbutton_cls(),
         combobox_cls=recorder.combobox_cls(),
         entry_cls=recorder.entry_cls(),
@@ -96,13 +90,6 @@ def make_page(
     )
     return page, parent, recorder
 
-
-def button_with_text(recorder: WidgetRecorder, text: str) -> RecordingWidget:
-    return next(
-        widget
-        for widget in recorder.widgets("button")
-        if widget.kwargs.get("text") == text
-    )
 
 
 class NodesConnectionsPageTests(unittest.TestCase):
@@ -159,7 +146,7 @@ class NodesConnectionsPageTests(unittest.TestCase):
         callbacks = make_callbacks()
         _page, _parent, recorder = make_page(callbacks)
 
-        button_with_text(recorder, "Start Discovery").kwargs["command"]()
+        recorder.button_with_text("Start Discovery").kwargs["command"]()
 
         callbacks.on_start_discovery.assert_called_once_with()
 
@@ -179,13 +166,13 @@ class NodesConnectionsPageTests(unittest.TestCase):
     def test_pair_button_emits_peer_id(self) -> None:
         callbacks = make_callbacks()
         _page, _parent, recorder = make_page(callbacks)
-        button_with_text(recorder, "Pair").kwargs["command"]()
+        recorder.button_with_text("Pair").kwargs["command"]()
         callbacks.on_pair.assert_called_once_with("peer-a")
 
     def test_reject_button_emits_peer_id(self) -> None:
         callbacks = make_callbacks()
         _page, _parent, recorder = make_page(callbacks)
-        button_with_text(recorder, "Reject").kwargs["command"]()
+        recorder.button_with_text("Reject").kwargs["command"]()
         callbacks.on_reject.assert_called_once_with("peer-a")
 
     def test_discovered_rows_show_stable_id(self) -> None:
@@ -231,30 +218,30 @@ class NodesConnectionsPageTests(unittest.TestCase):
         _page, _parent, recorder = make_page(
             discovered=[DiscoveredPeerSpec("bad", "bad-host", "9", False, False, None)]
         )
-        button = button_with_text(recorder, "Pair")
+        button = recorder.button_with_text("Pair")
         self.assertEqual(button.kwargs["state"], "disabled")
 
     def test_trusted_actions_emit(self) -> None:
         callbacks = make_callbacks()
         _page, _parent, recorder = make_page(callbacks)
-        button_with_text(recorder, "Rename").kwargs["command"]()
+        recorder.button_with_text("Rename").kwargs["command"]()
         callbacks.on_rename.assert_called_once_with("peer-a")
-        button_with_text(recorder, "Revoke").kwargs["command"]()
+        recorder.button_with_text("Revoke").kwargs["command"]()
         callbacks.on_revoke.assert_called_once_with("peer-a")
-        button_with_text(recorder, "Test").kwargs["command"]()
+        recorder.button_with_text("Test").kwargs["command"]()
         callbacks.on_test_connection.assert_called_once_with("peer-a")
-        button_with_text(recorder, "Open").kwargs["command"]()
+        recorder.button_with_text("Open").kwargs["command"]()
         callbacks.on_open_node.assert_called_once_with("peer-a")
 
     def test_trusted_actions_use_primary_and_danger_styles(self) -> None:
         _page, _parent, recorder = make_page()
 
         self.assertEqual(
-            button_with_text(recorder, "Open").kwargs["style"],
+            recorder.button_with_text("Open").kwargs["style"],
             "Primary.TButton",
         )
         self.assertEqual(
-            button_with_text(recorder, "Revoke").kwargs["style"],
+            recorder.button_with_text("Revoke").kwargs["style"],
             "Danger.TButton",
         )
 
@@ -283,7 +270,7 @@ class NodesConnectionsPageTests(unittest.TestCase):
                 )
             ]
         )
-        self.assertEqual(button_with_text(recorder, "Open").kwargs["state"], "disabled")
+        self.assertEqual(recorder.button_with_text("Open").kwargs["state"], "disabled")
 
     def test_color_change_emits(self) -> None:
         callbacks = make_callbacks()
@@ -318,7 +305,7 @@ class NodesConnectionsPageTests(unittest.TestCase):
     def test_manual_host_remove_emits(self) -> None:
         callbacks = make_callbacks()
         _page, _parent, recorder = make_page(callbacks)
-        button_with_text(recorder, "Remove").kwargs["command"]()
+        recorder.button_with_text("Remove").kwargs["command"]()
         callbacks.on_remove_manual.assert_called_once_with("manual-x:9")
 
     def test_refresh_updates_lists(self) -> None:

@@ -49,24 +49,11 @@ def make_page(
         parent,
         callbacks=callbacks or make_callbacks(),
         nodes=nodes or [_spec("local", selectable=True, is_local=True)],
-        frame_cls=recorder.frame_cls(),
-        label_cls=recorder.label_cls(),
-        style_frame_cls=recorder.style_frame_cls(),
-        style_label_cls=recorder.style_label_cls(),
-        button_cls=recorder.button_cls(),
-        canvas_cls=recorder.canvas_cls(),
-        scrollbar_cls=recorder.scrollbar_cls(),
+        **recorder.page_kwargs(),
         button_coordinator=button_coordinator,
     )
     return page, parent, recorder
 
-
-def open_button(recorder: WidgetRecorder) -> RecordingWidget:
-    return next(
-        widget
-        for widget in recorder.widgets("button")
-        if widget.kwargs.get("text") == "Open"
-    )
 
 
 class ClusterPageTests(unittest.TestCase):
@@ -107,19 +94,19 @@ class ClusterPageTests(unittest.TestCase):
 
     def test_selectable_node_gets_an_open_button(self) -> None:
         _page, _parent, recorder = make_page(nodes=[_spec("dev", selectable=True)])
-        self.assertTrue(open_button(recorder))
+        self.assertTrue(recorder.button_with_text("Open"))
 
     def test_non_selectable_node_has_no_open_button(self) -> None:
         _page, _parent, recorder = make_page(nodes=[_spec("peer", selectable=False)])
         with self.assertRaises(StopIteration):
-            open_button(recorder)
+            recorder.button_with_text("Open")
 
     def test_open_emits_node_id(self) -> None:
         callbacks = make_callbacks()
         _page, _parent, recorder = make_page(
             callbacks, nodes=[_spec("dev", selectable=True)]
         )
-        open_button(recorder).kwargs["command"]()
+        recorder.button_with_text("Open").kwargs["command"]()
         callbacks.on_open_node.assert_called_once_with("dev")
 
     def test_selectable_node_registers_stable_open_action(self) -> None:

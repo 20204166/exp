@@ -266,3 +266,25 @@ class WidgetRecorder:
             for widget in self.widgets("label")
             if widget.kwargs.get("text") == text
         )
+
+    def page_kwargs(self) -> dict[str, Any]:
+        """Return the shared recorder widget classes used by headless page tests."""
+
+        return {
+            "frame_cls": self.frame_cls(),
+            "label_cls": self.label_cls(),
+            "style_frame_cls": self.style_frame_cls(),
+            "style_label_cls": self.style_label_cls(),
+            "button_cls": self.button_cls(),
+            "canvas_cls": self.canvas_cls(),
+            "scrollbar_cls": self.scrollbar_cls(),
+        }
+
+    def button_with_text(self, text: str) -> RecordingWidget:
+        """Return the first recorded button whose ``text`` equals ``text``."""
+
+        return next(
+            widget
+            for widget in self.widgets("button")
+            if widget.kwargs.get("text") == text
+        )

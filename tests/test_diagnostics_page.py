@@ -34,13 +34,7 @@ class DiagnosticsPageTests(unittest.TestCase):
             recorder.parent(),
             callbacks=callbacks,
             snapshot=empty_snapshot(),
-            frame_cls=recorder.frame_cls(),
-            label_cls=recorder.label_cls(),
-            style_frame_cls=recorder.style_frame_cls(),
-            style_label_cls=recorder.style_label_cls(),
-            button_cls=recorder.button_cls(),
-            canvas_cls=recorder.canvas_cls(),
-            scrollbar_cls=recorder.scrollbar_cls(),
+            **recorder.page_kwargs(),
         )
         return page, callbacks, copy_callback, recorder
 
