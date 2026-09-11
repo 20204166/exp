@@ -1,10 +1,16 @@
-"""Authenticated read contract for secure cluster management.
+"""Authenticated remote transport and remote-operation surface.
 
-Owns the versioned, HMAC-authenticated request/response envelope, the
-freshness window, the bounded replay cache, idempotent request IDs, read-only
-authorization, the server-side ``RemoteService`` (validates and solves via an
-injected provider), and the client-side ``AuthenticatedNodeProvider`` that
-implements ``NodeProvider`` over an injectable ``RemoteTransport``.
+``maintenance.remote`` is the high-level remote API. It keeps the client-side
+``AuthenticatedNodeProvider`` (a ``NodeProvider`` over an injected
+``RemoteTransport``) and ``RemoteProcessActionBackend``, plus the server-side
+``RemoteService`` (validates and solves via an injected provider). The
+lower-level remote-specific mechanics live in ``maintenance.remote_support``:
+
+- ``protocol`` — the versioned HMAC request/response envelope, freshness
+  window, bounded replay cache, and read-only operation/role metadata;
+- ``transport`` — the loopback ``MemoryRemoteTransport`` and the concrete
+  ``SocketRemoteTransport``/``TLSRemoteTransport`` pair;
+- ``server`` — the listening ``RemoteSocketServer`` and pairing handshake.
 
 The transport is injected so tests and the GUI never depend on sockets; a
 concrete loopback ``RemoteSocketServer``/``SocketRemoteTransport`` pair is
@@ -14,26 +20,18 @@ this module provides the secure contract and provider infrastructure, not the
 feature wiring.
 """
 
-import hashlib
 import hmac
 import inspect
 import json
 import logging
-import math
 import secrets
-import socket as socket_module
-import socketserver
-import ssl
-import struct
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
 from maintenance.cluster import (
     ClusterDataError,
-    TrustedNodeRecord,
     file_candidate_from_dict,
     file_candidate_to_dict,
     node_snapshot_from_dict,
@@ -47,7 +45,6 @@ from maintenance.cluster import (
 )
 from maintenance.models import ProcessActionResult, ProcessCandidate, ResourceSummary
 from maintenance.nodes import (
-    READ_PERMISSIONS,
     NodeCapability,
     NodeId,
     NodePermission,
@@ -58,573 +55,93 @@ from maintenance.nodes import (
     ProcessTerminationRequest,
     node_identity_fingerprint,
 )
-from maintenance.remote_security import certificate_fingerprint
+
+from maintenance.remote_support.protocol import (  # noqa: F401 - public re-export surface
+    DEFAULT_FRESHNESS_SECONDS,
+    DEFAULT_MAX_ACTIVE_HANDLERS,
+    DEFAULT_REPLAY_MAX_ENTRIES,
+    DEFAULT_REPLAY_TTL_SECONDS,
+    MAX_ENVELOPE_BYTES,
+    OP_REQUIRED_CAPABILITY,
+    OP_REQUIRED_PERMISSION,
+    READ_CAPABILITIES,
+    REMOTE_PROTOCOL_VERSION,
+    ROLE_OPERATIONS,
+    PairingRequest,
+    PeerGrant,
+    RemoteAuthError,
+    RemoteAuthorizationError,
+    RemoteExecutionError,
+    RemoteProtocolError,
+    RemoteRequest,
+    RemoteResponse,
+    RemoteTransportError,
+    RemoteUnavailableError,
+    ReplayCache,
+    parse_hello_capabilities,
+    sign_request,
+    sign_response,
+    validate_hello_payload,
+    validate_operation_params,
+    verify_request,
+    verify_response,
+)
+from maintenance.remote_support.server import (  # noqa: F401 - public re-export surface
+    RemoteSocketServer,
+)
+from maintenance.remote_support.transport import (  # noqa: F401 - public re-export surface
+    MemoryRemoteTransport,
+    SocketRemoteTransport,
+    TLSRemoteTransport,
+    build_trusted_transport,
+)
 
 LOGGER = logging.getLogger(__name__)
 
-REMOTE_PROTOCOL_VERSION = "1"
-MAX_ENVELOPE_BYTES = 8 * 1024 * 1024
-DEFAULT_FRESHNESS_SECONDS = 60.0
-DEFAULT_REPLAY_TTL_SECONDS = 300.0
-DEFAULT_REPLAY_MAX_ENTRIES = 4096
-DEFAULT_MAX_ACTIVE_HANDLERS = 8
-
-READ_CAPABILITIES = frozenset(
-    {
-        NodeCapability.DASHBOARD_READ,
-        NodeCapability.COMPONENT_READ,
-        NodeCapability.PROCESS_REVIEW,
-        NodeCapability.STORAGE_REVIEW,
-    }
-)
-
-OP_REQUIRED_CAPABILITY: dict[str, NodeCapability] = {
-    "hello": NodeCapability.DASHBOARD_READ,
-    "dashboard_snapshot": NodeCapability.DASHBOARD_READ,
-    "component_summary": NodeCapability.COMPONENT_READ,
-    "process_candidates": NodeCapability.PROCESS_REVIEW,
-    "storage_candidates": NodeCapability.STORAGE_REVIEW,
-    "process_request_quit": NodeCapability.PROCESS_TERMINATION,
-    "process_force_quit": NodeCapability.PROCESS_FORCE_TERMINATION,
-    "consume_invite": NodeCapability.REMOTE_MANAGEMENT,
-    "assign_role": NodeCapability.REMOTE_MANAGEMENT,
-    "renew_coordinator_lease": NodeCapability.REMOTE_MANAGEMENT,
-    "worker_snapshot": NodeCapability.REMOTE_MANAGEMENT,
-    "standby_batch": NodeCapability.REMOTE_MANAGEMENT,
-    "pause_worker": NodeCapability.REMOTE_MANAGEMENT,
-    "revoke_worker": NodeCapability.REMOTE_MANAGEMENT,
-    "resume_worker": NodeCapability.REMOTE_MANAGEMENT,
-}
-
-OP_REQUIRED_PERMISSION: dict[str, NodePermission] = {
-    operation: NodePermission(capability.value)
-    for operation, capability in OP_REQUIRED_CAPABILITY.items()
-}
-OP_REQUIRED_PERMISSION.update(
-    {
-        "process_request_quit": NodePermission.PROCESS_TERMINATION,
-        "process_force_quit": NodePermission.PROCESS_FORCE_TERMINATION,
-        "consume_invite": NodePermission.REMOTE_MANAGEMENT,
-        "assign_role": NodePermission.REMOTE_MANAGEMENT,
-        "renew_coordinator_lease": NodePermission.REMOTE_MANAGEMENT,
-        "worker_snapshot": NodePermission.REMOTE_MANAGEMENT,
-        "standby_batch": NodePermission.REMOTE_MANAGEMENT,
-        "pause_worker": NodePermission.REMOTE_MANAGEMENT,
-        "revoke_worker": NodePermission.REMOTE_MANAGEMENT,
-        "resume_worker": NodePermission.REMOTE_MANAGEMENT,
-    }
-)
-
-ROLE_OPERATIONS = frozenset(
-    {
-        "consume_invite",
-        "assign_role",
-        "renew_coordinator_lease",
-        "worker_snapshot",
-        "standby_batch",
-        "pause_worker",
-        "revoke_worker",
-        "resume_worker",
-    }
-)
-
-
-class RemoteProtocolError(ValueError):
-    """Raised for malformed or unsupported envelopes."""
-
-
-class RemoteAuthError(RemoteProtocolError):
-    """Raised when an envelope fails authentication or replay checks."""
-
-
-class RemoteAuthorizationError(RemoteProtocolError):
-    """Raised when a node is not authorised for the requested operation."""
-
-
-class RemoteExecutionError(RuntimeError):
-    """Raised when the authenticated peer reports an execution failure."""
-
-
-class RemoteTransportError(RuntimeError):
-    """Raised when the transport cannot complete an authenticated exchange."""
-
-
-class RemoteUnavailableError(RemoteExecutionError):
-    """Raised when the authenticated target cannot currently perform an action."""
-
-
-def parse_hello_capabilities(payload: Any) -> frozenset[NodeCapability]:
-    """Decode advertised capabilities without granting unknown values."""
-
-    if not isinstance(payload, dict):
-        raise RemoteProtocolError("hello payload must be an object")
-    raw_capabilities = payload.get("capabilities", [])
-    if not isinstance(raw_capabilities, list):
-        raise RemoteProtocolError("hello capabilities must be a list")
-    capabilities: set[NodeCapability] = set()
-    for raw in raw_capabilities:
-        if not isinstance(raw, str):
-            raise RemoteProtocolError("hello capability must be a string")
-        try:
-            capabilities.add(NodeCapability(raw))
-        except ValueError:
-            # Unknown values are forward metadata, never permissions.
-            continue
-    return frozenset(capabilities)
-
-
-def validate_hello_payload(
-    payload: Any, *, expected_node_id: NodeId | None = None
-) -> frozenset[NodeCapability]:
-    """Validate the security-bearing portion of a hello response."""
-
-    if not isinstance(payload, dict) or payload.get("ok") is not True:
-        raise RemoteProtocolError("hello response is invalid")
-    if (
-        payload.get("protocol_version", REMOTE_PROTOCOL_VERSION)
-        != REMOTE_PROTOCOL_VERSION
-    ):
-        raise RemoteProtocolError("unsupported remote protocol version")
-    node_id = payload.get("node_id")
-    if not isinstance(node_id, str) or not node_id:
-        raise RemoteAuthError("hello node identity is invalid")
-    if expected_node_id is not None and node_id != expected_node_id.value:
-        raise RemoteAuthError("hello came from the wrong node")
-    fingerprint = payload.get("identity_fingerprint")
-    if not isinstance(fingerprint, str) or not fingerprint:
-        raise RemoteAuthError("hello identity fingerprint is missing")
-    return parse_hello_capabilities(payload)
-
-
-@dataclass(frozen=True, slots=True)
-class PeerGrant:
-    """Target-owned authorization grant for one authenticated caller."""
-
-    caller_node_id: NodeId
-    secret: str
-    permissions: frozenset[NodePermission]
-
-
-@dataclass(frozen=True, slots=True)
-class PairingRequest:
-    """Unauthenticated, TLS-protected request awaiting target approval."""
-
-    caller_node_id: NodeId
-    identity_fingerprint: str
-    transport_fingerprint: str
-    proposed_secret: str
-    permissions: frozenset[NodePermission]
-
-    def __post_init__(self) -> None:
-        if not self.caller_node_id.value or not self.identity_fingerprint:
-            raise RemoteAuthError("pairing identity is missing")
-        if not self.transport_fingerprint:
-            raise RemoteAuthError("pairing transport fingerprint is missing")
-        _validate_secret(self.proposed_secret)
-        if not self.permissions <= frozenset(READ_PERMISSIONS):
-            raise RemoteAuthorizationError("pairing is read-only")
-
-
-def _validate_secret(secret: str) -> None:
-    if not isinstance(secret, str) or len(secret) != 64:
-        raise ValueError("peer credentials must be 256-bit hex text")
-    try:
-        bytes.fromhex(secret)
-    except ValueError as error:
-        raise ValueError("peer credentials must be hexadecimal") from error
-
-
-@dataclass(frozen=True, slots=True)
-class RemoteRequest:
-    """One verified authenticated request from a peer node."""
-
-    node_id: NodeId
-    caller_node_id: NodeId | None
-    op: str
-    params: dict[str, Any]
-    request_id: str
-    nonce: str
-    timestamp: float
-
-
-@dataclass(frozen=True, slots=True)
-class RemoteResponse:
-    """One verified authenticated response to a request."""
-
-    node_id: NodeId
-    request_id: str
-    status: str
-    payload: dict[str, Any] | None
-    error: str | None
-    timestamp: float
-
-
-def _canonical(fields: dict[str, Any]) -> str:
-    return json.dumps(fields, sort_keys=True, separators=(",", ":"))
-
-
-def _signature(secret: str, fields: dict[str, Any]) -> str:
-    return hmac.new(
-        secret.encode("utf-8"),
-        _canonical(fields).encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-
-
-def sign_request(
-    *,
-    node_id: str,
-    op: str,
-    params: dict[str, Any],
-    request_id: str,
-    nonce: str,
-    timestamp: float,
-    secret: str,
-    caller_node_id: str | None = None,
-) -> dict[str, Any]:
-    fields: dict[str, Any] = {
-        "v": REMOTE_PROTOCOL_VERSION,
-        "node_id": node_id,
-        "op": op,
-        "params": params,
-        "request_id": request_id,
-        "nonce": nonce,
-        "ts": timestamp,
-    }
-    if caller_node_id is not None:
-        fields["caller_node_id"] = caller_node_id
-    envelope = dict(fields)
-    envelope["sig"] = _signature(secret, fields)
-    return envelope
-
-
-def sign_response(
-    *,
-    node_id: str,
-    request_id: str,
-    status: str,
-    secret: str,
-    timestamp: float,
-    payload: dict[str, Any] | None = None,
-    error: str | None = None,
-) -> dict[str, Any]:
-    fields: dict[str, Any] = {
-        "v": REMOTE_PROTOCOL_VERSION,
-        "node_id": node_id,
-        "request_id": request_id,
-        "status": status,
-        "payload": payload,
-        "error": error,
-        "ts": timestamp,
-    }
-    envelope = dict(fields)
-    envelope["sig"] = _signature(secret, fields)
-    return envelope
-
-
-class ReplayCache:
-    """Bounded, expiry-pruned record of seen ``(node_id, request_id, nonce)``.
-
-    One entry is kept per authenticated request and evicted after ``ttl`` or
-    when the cache grows past ``max_entries``, so memory stays bounded while
-    replayed requests are rejected for at least the freshness window.
-    """
-
-    def __init__(
-        self,
-        *,
-        clock: Callable[[], float] = time.monotonic,
-        ttl_seconds: float = DEFAULT_REPLAY_TTL_SECONDS,
-        max_entries: int = DEFAULT_REPLAY_MAX_ENTRIES,
-    ) -> None:
-        self._clock = clock
-        self._ttl = ttl_seconds
-        self._max_entries = max_entries
-        self._seen: dict[tuple[str, str, str], float] = {}
-        self._request_ids: dict[tuple[str, str], float] = {}
-        self._lock = threading.Lock()
-
-    def check_and_record(
-        self,
-        node_id: str,
-        request_id: str,
-        nonce: str,
-        seen_at: float,
-    ) -> bool:
-        key = (node_id, request_id, nonce)
-        with self._lock:
-            self._prune(seen_at)
-            if key in self._seen:
-                return False
-            if len(self._seen) >= self._max_entries:
-                return False
-            self._seen[key] = seen_at
-            return True
-
-    def _prune(self, now: float) -> None:
-        expired = [
-            key
-            for key, recorded_at in self._seen.items()
-            if now - recorded_at > self._ttl
-        ]
-        for replay_key in expired:
-            del self._seen[replay_key]
-        expired_ids = [
-            request_key
-            for request_key, recorded_at in self._request_ids.items()
-            if now - recorded_at > self._ttl
-        ]
-        for request_key in expired_ids:
-            del self._request_ids[request_key]
-
-    def check_and_record_request_id(
-        self, node_id: str, request_id: str, seen_at: float
-    ) -> bool:
-        """Reject destructive request-ID reuse even when its nonce is fresh."""
-
-        with self._lock:
-            self._prune(seen_at)
-            key = (node_id, request_id)
-            if key in self._request_ids:
-                return False
-            if len(self._request_ids) >= self._max_entries:
-                return False
-            self._request_ids[key] = seen_at
-            return True
-
-    def __len__(self) -> int:
-        return len(self._seen)
-
-
-def verify_request(
-    envelope: Any,
-    *,
-    secret: str,
-    clock: Callable[[], float],
-    freshness_seconds: float,
-    replay_cache: ReplayCache,
-) -> RemoteRequest:
-    if not isinstance(envelope, dict):
-        raise RemoteProtocolError("request envelope must be an object")
-    if envelope.get("v") != REMOTE_PROTOCOL_VERSION:
-        raise RemoteProtocolError("unsupported remote protocol version")
-    allowed_fields = {
-        "v",
-        "node_id",
-        "caller_node_id",
-        "op",
-        "params",
-        "request_id",
-        "nonce",
-        "ts",
-        "sig",
-    }
-    if not set(envelope) <= allowed_fields or "sig" not in envelope:
-        raise RemoteProtocolError("request envelope fields are invalid")
-    signature = envelope.get("sig")
-    if not isinstance(signature, str):
-        raise RemoteAuthError("request is missing its signature")
-    fields = {key: value for key, value in envelope.items() if key != "sig"}
-    if not hmac.compare_digest(signature, _signature(secret, fields)):
-        raise RemoteAuthError("request signature is invalid")
-    node_id = envelope.get("node_id")
-    caller_node_id = envelope.get("caller_node_id")
-    op = envelope.get("op")
-    params = envelope.get("params")
-    request_id = envelope.get("request_id")
-    nonce = envelope.get("nonce")
-    timestamp = envelope.get("ts")
-    if not isinstance(node_id, str) or not node_id:
-        raise RemoteAuthError("request node_id is invalid")
-    if caller_node_id is not None and (
-        not isinstance(caller_node_id, str) or not caller_node_id
-    ):
-        raise RemoteAuthError("request caller_node_id is invalid")
-    if not isinstance(op, str):
-        raise RemoteProtocolError("request op must be a string")
-    if not isinstance(params, dict):
-        raise RemoteProtocolError("request params must be an object")
-    if not isinstance(request_id, str) or not request_id:
-        raise RemoteAuthError("request_id is invalid")
-    if not isinstance(nonce, str) or not nonce:
-        raise RemoteAuthError("request nonce is invalid")
-    if (
-        not isinstance(timestamp, (int, float))
-        or isinstance(timestamp, bool)
-        or not math.isfinite(timestamp)
-    ):
-        raise RemoteAuthError("request timestamp is invalid")
-    now = clock()
-    age = now - float(timestamp)
-    if age > freshness_seconds or age < -freshness_seconds:
-        raise RemoteAuthError("request timestamp is outside the freshness window")
-    if not replay_cache.check_and_record(node_id, request_id, nonce, now):
-        raise RemoteAuthError("request has been replayed")
-    return RemoteRequest(
-        node_id=NodeId(node_id),
-        caller_node_id=(NodeId(caller_node_id) if caller_node_id else None),
-        op=op,
-        params=params,
-        request_id=request_id,
-        nonce=nonce,
-        timestamp=float(timestamp),
-    )
-
-
-def verify_response(
-    envelope: Any,
-    *,
-    secret: str,
-    clock: Callable[[], float],
-    freshness_seconds: float,
-) -> RemoteResponse:
-    if not isinstance(envelope, dict):
-        raise RemoteProtocolError("response envelope must be an object")
-    if envelope.get("v") != REMOTE_PROTOCOL_VERSION:
-        raise RemoteProtocolError("unsupported remote protocol version")
-    allowed_fields = {
-        "v",
-        "node_id",
-        "request_id",
-        "status",
-        "payload",
-        "error",
-        "ts",
-        "sig",
-    }
-    if not set(envelope) <= allowed_fields or "sig" not in envelope:
-        raise RemoteProtocolError("response envelope fields are invalid")
-    signature = envelope.get("sig")
-    if not isinstance(signature, str):
-        raise RemoteAuthError("response is missing its signature")
-    fields = {key: value for key, value in envelope.items() if key != "sig"}
-    if not hmac.compare_digest(signature, _signature(secret, fields)):
-        raise RemoteAuthError("response signature is invalid")
-    node_id = envelope.get("node_id")
-    request_id = envelope.get("request_id")
-    status = envelope.get("status")
-    timestamp = envelope.get("ts")
-    if (
-        not isinstance(node_id, str)
-        or not node_id
-        or not isinstance(request_id, str)
-        or not request_id
-    ):
-        raise RemoteAuthError("response identity fields are invalid")
-    if status not in ("ok", "error"):
-        raise RemoteProtocolError("response status is invalid")
-    payload = envelope.get("payload")
-    if payload is not None and not isinstance(payload, dict):
-        raise RemoteProtocolError("response payload must be an object or null")
-    error = envelope.get("error")
-    if error is not None and not isinstance(error, str):
-        raise RemoteProtocolError("response error must be a string or null")
-    if (
-        not isinstance(timestamp, (int, float))
-        or isinstance(timestamp, bool)
-        or not math.isfinite(timestamp)
-    ):
-        raise RemoteAuthError("response timestamp is invalid")
-    age = clock() - float(timestamp)
-    if age > freshness_seconds or age < -freshness_seconds:
-        raise RemoteAuthError("response timestamp is outside the freshness window")
-    return RemoteResponse(
-        node_id=NodeId(node_id),
-        request_id=request_id,
-        status=status,
-        payload=payload,
-        error=error,
-        timestamp=float(timestamp),
-    )
-
-
-def validate_operation_params(op: str, params: dict[str, Any]) -> None:
-    if op not in OP_REQUIRED_CAPABILITY:
-        raise RemoteProtocolError(f"unknown operation: {op}")
-    if op == "component_summary":
-        key = params.get("key")
-        if not isinstance(key, str) or not key:
-            raise RemoteProtocolError("component_summary requires a key")
-        return
-    if op in {"process_request_quit", "process_force_quit"}:
-        processes = params.get("processes")
-        if not isinstance(processes, list) or not processes:
-            raise RemoteProtocolError(f"{op} requires process references")
-        for item in processes:
-            if not isinstance(item, dict):
-                raise RemoteProtocolError("process reference must be an object")
-            if (
-                not isinstance(item.get("pid"), int)
-                or isinstance(item.get("pid"), bool)
-                or item["pid"] < 0
-            ):
-                raise RemoteProtocolError("process reference pid is invalid")
-            create_time = item.get("create_time")
-            if create_time is None or (
-                not isinstance(create_time, (int, float))
-                or isinstance(create_time, bool)
-                or not math.isfinite(float(create_time))
-                or float(create_time) < 0
-            ):
-                raise RemoteProtocolError("process reference create_time is required")
-        expected_action = (
-            ProcessActionKind.REQUEST_QUIT.value
-            if op == "process_request_quit"
-            else ProcessActionKind.FORCE_QUIT.value
-        )
-        if params.get("action") != expected_action:
-            raise RemoteProtocolError("process action is not allowlisted")
-        if set(params) != {"processes", "action"}:
-            raise RemoteProtocolError(f"{op} has unexpected parameters")
-        return
-    if op in {
-        "consume_invite",
-        "assign_role",
-        "renew_coordinator_lease",
-        "worker_snapshot",
-        "standby_batch",
-        "pause_worker",
-        "revoke_worker",
-        "resume_worker",
-    }:
-        required = {"cluster_id", "epoch", "fencing_token"}
-        if not required <= set(params):
-            raise RemoteProtocolError(f"{op} requires cluster fencing fields")
-        if not isinstance(params["cluster_id"], str) or not params["cluster_id"]:
-            raise RemoteProtocolError("cluster_id is invalid")
-        if (
-            not isinstance(params["epoch"], int)
-            or isinstance(params["epoch"], bool)
-            or params["epoch"] < 0
-        ):
-            raise RemoteProtocolError("cluster epoch is invalid")
-        if not isinstance(params["fencing_token"], str) or not params["fencing_token"]:
-            raise RemoteProtocolError("fencing token is invalid")
-        if op in {"renew_coordinator_lease", "consume_invite"}:
-            if op == "consume_invite" and not isinstance(params.get("token"), str):
-                raise RemoteProtocolError("invite token is invalid")
-            return
-        if op == "assign_role":
-            if not isinstance(params.get("target_node_id"), str):
-                raise RemoteProtocolError("role target is invalid")
-            roles = params.get("roles")
-            if not isinstance(roles, list) or not roles or any(
-                not isinstance(role, str) for role in roles
-            ):
-                raise RemoteProtocolError("role list is invalid")
-            return
-        if op in {"pause_worker", "resume_worker", "revoke_worker"}:
-            if not isinstance(params.get("target_node_id"), str):
-                raise RemoteProtocolError("role target is invalid")
-            return
-        payload = params.get("payload")
-        if not isinstance(payload, dict):
-            raise RemoteProtocolError("snapshot payload is invalid")
-        if len(json.dumps(payload, separators=(",", ":"))) > MAX_ENVELOPE_BYTES // 2:
-            raise RemoteProtocolError("snapshot payload is too large")
-        return
-    if params:
-        raise RemoteProtocolError(f"{op} accepts no parameters")
+__all__ = [
+    # protocol envelope constants
+    "REMOTE_PROTOCOL_VERSION",
+    "MAX_ENVELOPE_BYTES",
+    "DEFAULT_FRESHNESS_SECONDS",
+    "DEFAULT_REPLAY_TTL_SECONDS",
+    "DEFAULT_REPLAY_MAX_ENTRIES",
+    "DEFAULT_MAX_ACTIVE_HANDLERS",
+    "READ_CAPABILITIES",
+    "OP_REQUIRED_CAPABILITY",
+    "OP_REQUIRED_PERMISSION",
+    "ROLE_OPERATIONS",
+    # protocol envelope errors
+    "RemoteProtocolError",
+    "RemoteAuthError",
+    "RemoteAuthorizationError",
+    "RemoteExecutionError",
+    "RemoteTransportError",
+    "RemoteUnavailableError",
+    # protocol models and helpers
+    "PeerGrant",
+    "PairingRequest",
+    "RemoteRequest",
+    "RemoteResponse",
+    "ReplayCache",
+    "sign_request",
+    "sign_response",
+    "verify_request",
+    "verify_response",
+    "parse_hello_capabilities",
+    "validate_hello_payload",
+    "validate_operation_params",
+    # transports
+    "MemoryRemoteTransport",
+    "SocketRemoteTransport",
+    "TLSRemoteTransport",
+    "build_trusted_transport",
+    # listening server
+    "RemoteSocketServer",
+    # high-level remote surface
+    "RemoteService",
+    "AuthenticatedNodeProvider",
+    "RemoteProcessActionBackend",
+]
 
 
 class RemoteService:
@@ -673,13 +190,13 @@ class RemoteService:
         self._identity_fingerprint = identity_fingerprint or node_identity_fingerprint(
             node_id
         )
-        _validate_secret(secret)
+        self._validate_secret(secret)
         self._secret = secret
         self._grant_mode = grants is not None
         self._grant_lock = threading.RLock()
         self._grants = dict(grants or {})
         for grant in self._grants.values():
-            _validate_secret(grant.secret)
+            self._validate_secret(grant.secret)
         self._app_version = app_version
         self._clock = clock
         self._freshness_seconds = freshness_seconds
@@ -705,6 +222,15 @@ class RemoteService:
         self._coordinator_epoch = coordinator_epoch
         self._fencing_token = fencing_token
         self._role_handler = role_handler
+
+    @staticmethod
+    def _validate_secret(secret: str) -> None:
+        if not isinstance(secret, str) or len(secret) != 64:
+            raise ValueError("peer credentials must be 256-bit hex text")
+        try:
+            bytes.fromhex(secret)
+        except ValueError as error:
+            raise ValueError("peer credentials must be hexadecimal") from error
 
     def handle(self, envelope_text: str) -> str:
         try:
@@ -804,7 +330,7 @@ class RemoteService:
 
         validated = dict(grants)
         for grant in validated.values():
-            _validate_secret(grant.secret)
+            self._validate_secret(grant.secret)
         with self._grant_lock:
             self._grant_mode = True
             self._grants = validated
@@ -928,368 +454,6 @@ class RemoteService:
             scanned_at=dashboard.scanned_at,
             dashboard=dashboard,
         )
-
-
-class MemoryRemoteTransport:
-    """In-process transport that hands envelopes straight to a ``RemoteService``.
-
-    Used by tests and by any in-app loopback path; the authentication and
-    authorization checks run exactly as they would over a socket.
-    """
-
-    def __init__(self, service: RemoteService) -> None:
-        self._service = service
-
-    def request(self, envelope_text: str, cancel_event: Any | None = None) -> str:
-        return self._service.handle(envelope_text)
-
-
-def _recv_exact(
-    sock: Any,
-    length: int,
-    *,
-    closed_message: str = "connection closed before response",
-    cancel_event: Any | None = None,
-) -> bytes:
-    chunks: list[bytes] = []
-    remaining = length
-    while remaining:
-        if cancel_event is not None and cancel_event.is_set():
-            raise RemoteExecutionError("cancelled")
-        try:
-            chunk = sock.recv(remaining)
-        except TimeoutError:
-            if cancel_event is None:
-                raise
-            continue
-        if not chunk:
-            raise RemoteTransportError(closed_message)
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
-
-
-def _recv_frame(
-    sock: Any,
-    *,
-    max_bytes: int,
-    closed_message: str,
-    cancel_event: Any | None = None,
-) -> bytes:
-    header = _recv_exact(
-        sock,
-        4,
-        closed_message=closed_message,
-        cancel_event=cancel_event,
-    )
-    length = struct.unpack(">I", header)[0]
-    if length > max_bytes:
-        raise RemoteTransportError("envelope is too large")
-    return _recv_exact(
-        sock,
-        length,
-        closed_message=closed_message,
-        cancel_event=cancel_event,
-    )
-
-
-def _send_frame(sock: Any, payload: bytes, *, max_bytes: int) -> None:
-    if len(payload) > max_bytes:
-        raise RemoteTransportError("envelope is too large")
-    sock.sendall(struct.pack(">I", len(payload)) + payload)
-
-
-class SocketRemoteTransport:
-    """Length-prefixed JSON client for one TCP request/response exchange."""
-
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        *,
-        timeout: float = 10.0,
-        ssl_context: ssl.SSLContext | None = None,
-        expected_fingerprint: str | None = None,
-    ) -> None:
-        self._host = host
-        self._port = port
-        self._timeout = timeout
-        self._ssl_context = ssl_context
-        self._expected_fingerprint = expected_fingerprint
-
-    def request(self, envelope_text: str, cancel_event: Any | None = None) -> str:
-        data = envelope_text.encode("utf-8")
-        if len(data) > MAX_ENVELOPE_BYTES:
-            raise RemoteTransportError("request envelope is too large")
-        wrapped_socket: Any | None = None
-        try:
-            if cancel_event is not None and cancel_event.is_set():
-                raise RemoteExecutionError("cancelled")
-            connect_timeout = (
-                min(self._timeout, 0.25) if cancel_event else self._timeout
-            )
-            with socket_module.create_connection(
-                (self._host, self._port), timeout=connect_timeout
-            ) as sock:
-                if self._ssl_context is not None:
-                    sock = self._ssl_context.wrap_socket(
-                        sock, server_hostname=self._host
-                    )
-                    wrapped_socket = sock
-                    certificate = sock.getpeercert(binary_form=True)
-                    if certificate is None:
-                        raise RemoteAuthError("peer certificate is missing")
-                    fingerprint = certificate_fingerprint(certificate)
-                    if (
-                        self._expected_fingerprint is not None
-                        and not hmac.compare_digest(
-                            fingerprint, self._expected_fingerprint
-                        )
-                    ):
-                        raise RemoteAuthError("peer certificate fingerprint changed")
-                sock.settimeout(
-                    min(self._timeout, 0.25) if cancel_event else self._timeout
-                )
-                _send_frame(sock, data, max_bytes=MAX_ENVELOPE_BYTES)
-                body = _recv_frame(
-                    sock,
-                    max_bytes=MAX_ENVELOPE_BYTES,
-                    closed_message="connection closed before response",
-                    cancel_event=cancel_event,
-                )
-        except RemoteTransportError:
-            raise
-        except RemoteAuthError:
-            raise
-        except OSError as error:
-            if cancel_event is not None and cancel_event.is_set():
-                raise RemoteExecutionError("cancelled") from error
-            raise RemoteTransportError(f"remote transport failed: {error}") from error
-        finally:
-            if wrapped_socket is not None:
-                wrapped_socket.close()
-        try:
-            return body.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise RemoteProtocolError("response is not valid UTF-8") from error
-
-
-class TLSRemoteTransport(SocketRemoteTransport):
-    """Socket transport with TLS encryption and optional certificate pinning."""
-
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        *,
-        expected_fingerprint: str,
-        timeout: float = 10.0,
-    ) -> None:
-        from maintenance.remote_security import client_context
-
-        super().__init__(
-            host,
-            port,
-            timeout=timeout,
-            ssl_context=client_context(),
-            expected_fingerprint=expected_fingerprint,
-        )
-
-
-def build_trusted_transport(
-    record: TrustedNodeRecord,
-    *,
-    transport_cls: Callable[..., Any] = TLSRemoteTransport,
-) -> Any:
-    """Build a pinned transport from persisted trusted-node data."""
-
-    if not record.host or record.port is None:
-        raise RemoteAuthError("trusted peer has no complete endpoint")
-    if not record.transport_fingerprint:
-        raise RemoteAuthError("trusted peer has no pinned TLS fingerprint")
-    return transport_cls(
-        record.host,
-        record.port,
-        expected_fingerprint=record.transport_fingerprint,
-    )
-
-
-class RemoteSocketServer:
-    """One optional loopback/listening TCP server fronting a ``RemoteService``.
-
-    ``start``/``stop`` are idempotent; the server runs on its own daemon
-    thread. Binding is to the caller-supplied host (loopback by default);
-    exposing it on a LAN is an explicit, separate deployment decision.
-    """
-
-    def __init__(
-        self,
-        service: RemoteService,
-        *,
-        host: str = "127.0.0.1",
-        port: int = 0,
-        timeout: float = 10.0,
-        max_active_handlers: int = DEFAULT_MAX_ACTIVE_HANDLERS,
-        ssl_context: ssl.SSLContext | None = None,
-        pairing_handler: Callable[[PairingRequest], bool] | None = None,
-    ) -> None:
-        if max_active_handlers < 1:
-            raise ValueError("max_active_handlers must be positive")
-        self._service = service
-        self._host = host
-        self._port = port
-        self._timeout = timeout
-        self._max_active_handlers = max_active_handlers
-        self._ssl_context = ssl_context
-        self._pairing_handler = pairing_handler
-        self._server: Any = None
-        self._thread: Any = None
-        self._admission: threading.BoundedSemaphore | None = None
-
-    @property
-    def bound_port(self) -> int | None:
-        if self._server is None:
-            return None
-        return int(self._server.server_address[1])
-
-    def start(self) -> None:
-        if self._server is not None:
-            return
-
-        def make_handler(
-            service: RemoteService,
-            admission: threading.BoundedSemaphore,
-        ) -> type[socketserver.BaseRequestHandler]:
-            class _Handler(socketserver.BaseRequestHandler):
-                def handle(self) -> None:
-                    request_socket = self.request
-                    try:
-                        try:
-                            request_socket.settimeout(service_timeout)
-                            if ssl_context is not None:
-                                request_socket = ssl_context.wrap_socket(
-                                    self.request, server_side=True
-                                )
-                            body = _recv_frame(
-                                request_socket,
-                                max_bytes=MAX_ENVELOPE_BYTES,
-                                closed_message="connection closed before request",
-                            )
-                            text = body.decode("utf-8")
-                            raw = json.loads(text)
-                            if (
-                                isinstance(raw, dict)
-                                and raw.get("op") == "pair_request"
-                            ):
-                                response = _handle_pairing_request(raw, pairing_handler)
-                            else:
-                                response = service.handle(text)
-                        except Exception:  # noqa: BLE001 - auth failures close silently.
-                            return
-                        payload = response.encode("utf-8")
-                        _send_frame(
-                            request_socket,
-                            payload,
-                            max_bytes=MAX_ENVELOPE_BYTES,
-                        )
-                    finally:
-                        if request_socket is not self.request:
-                            request_socket.close()
-                        admission.release()
-
-            return _Handler
-
-        service_timeout = self._timeout
-        ssl_context = self._ssl_context
-        pairing_handler = self._pairing_handler
-
-        class _Server(socketserver.ThreadingTCPServer):
-            allow_reuse_address = True
-            request_queue_size = 16
-
-            def process_request(self, request: Any, client_address: Any) -> None:
-                if not admission.acquire(blocking=False):
-                    request.close()
-                    return
-                try:
-                    super().process_request(request, client_address)
-                except BaseException:
-                    admission.release()
-                    request.close()
-                    raise
-
-        admission = threading.BoundedSemaphore(self._max_active_handlers)
-        self._admission = admission
-        server = _Server(
-            (self._host, self._port),
-            make_handler(self._service, admission),
-        )
-        # A provider may not honour cooperative cancellation. Daemon handlers
-        # and non-blocking close keep application shutdown bounded; idle and
-        # malformed clients remain bounded by the socket timeout.
-        server.daemon_threads = True
-        server.block_on_close = False
-        self._server = server
-        self._thread = threading.Thread(target=server.serve_forever, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        server = self._server
-        self._server = None
-        self._thread = None
-        if server is not None:
-            try:
-                server.shutdown()
-            except Exception:  # shutdown is best-effort.
-                LOGGER.debug("Remote socket server shutdown failed", exc_info=True)
-            server.server_close()
-
-    def update_grants(self, grants: dict[NodeId, PeerGrant]) -> None:
-        """Update authorization without restarting the listening socket."""
-
-        self._service.update_grants(grants)
-
-    def update_cluster_fence(
-        self, *, cluster_id: str, coordinator_epoch: int, fencing_token: str
-    ) -> None:
-        self._service.update_cluster_fence(
-            cluster_id=cluster_id,
-            coordinator_epoch=coordinator_epoch,
-            fencing_token=fencing_token,
-        )
-
-
-def _handle_pairing_request(
-    raw: dict[str, Any], handler: Callable[[PairingRequest], bool] | None
-) -> str:
-    if handler is None or set(raw) != {
-        "op",
-        "caller_node_id",
-        "identity_fingerprint",
-        "transport_fingerprint",
-        "secret",
-        "permissions",
-    }:
-        return json.dumps({"approved": False, "error": "pairing_unavailable"})
-    permissions = raw["permissions"]
-    if not isinstance(permissions, list) or any(
-        not isinstance(item, str) for item in permissions
-    ):
-        return json.dumps({"approved": False, "error": "invalid_pairing"})
-    try:
-        request = PairingRequest(
-            caller_node_id=NodeId(raw["caller_node_id"]),
-            identity_fingerprint=raw["identity_fingerprint"],
-            transport_fingerprint=raw["transport_fingerprint"],
-            proposed_secret=raw["secret"],
-            permissions=frozenset(NodePermission(item) for item in permissions),
-        )
-        approved = handler(request)
-    except (KeyError, TypeError, ValueError, RemoteProtocolError):
-        approved = False
-    return json.dumps(
-        {"approved": bool(approved), "error": None if approved else "denied"}
-    )
 
 
 class AuthenticatedNodeProvider:

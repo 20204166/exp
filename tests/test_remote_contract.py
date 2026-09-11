@@ -55,13 +55,12 @@ from maintenance.remote import (
     RemoteUnavailableError,
     ReplayCache,
     SocketRemoteTransport,
-    _recv_frame,
-    _send_frame,
     build_trusted_transport,
     sign_request,
     sign_response,
     verify_request,
 )
+from maintenance.remote_support.transport import _recv_frame, _send_frame
 from tests.support.models import make_file_candidate, make_snapshot, make_summary
 from tests.support.temperature import make_temperature_sample
 
