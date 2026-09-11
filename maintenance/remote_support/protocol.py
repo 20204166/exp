@@ -59,6 +59,8 @@ OP_REQUIRED_CAPABILITY: dict[str, NodeCapability] = {
     "pause_worker": NodeCapability.REMOTE_MANAGEMENT,
     "revoke_worker": NodeCapability.REMOTE_MANAGEMENT,
     "resume_worker": NodeCapability.REMOTE_MANAGEMENT,
+    "remove_connection": NodeCapability.REMOTE_MANAGEMENT,
+    "remove_job": NodeCapability.REMOTE_MANAGEMENT,
 }
 
 OP_REQUIRED_PERMISSION: dict[str, NodePermission] = {
@@ -77,6 +79,8 @@ OP_REQUIRED_PERMISSION.update(
         "pause_worker": NodePermission.REMOTE_MANAGEMENT,
         "revoke_worker": NodePermission.REMOTE_MANAGEMENT,
         "resume_worker": NodePermission.REMOTE_MANAGEMENT,
+        "remove_connection": NodePermission.REMOTE_MANAGEMENT,
+        "remove_job": NodePermission.REMOTE_MANAGEMENT,
     }
 )
 
@@ -90,6 +94,8 @@ ROLE_OPERATIONS = frozenset(
         "pause_worker",
         "revoke_worker",
         "resume_worker",
+        "remove_connection",
+        "remove_job",
     }
 )
 
@@ -551,6 +557,8 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
         "pause_worker",
         "revoke_worker",
         "resume_worker",
+        "remove_connection",
+        "remove_job",
     }:
         required = {"cluster_id", "epoch", "fencing_token"}
         if not required <= set(params):
@@ -579,6 +587,10 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
                 raise RemoteProtocolError("role list is invalid")
             return
         if op in {"pause_worker", "resume_worker", "revoke_worker"}:
+            if not isinstance(params.get("target_node_id"), str):
+                raise RemoteProtocolError("role target is invalid")
+            return
+        if op in {"remove_connection", "remove_job"}:
             if not isinstance(params.get("target_node_id"), str):
                 raise RemoteProtocolError("role target is invalid")
             return

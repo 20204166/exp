@@ -70,6 +70,7 @@ class PeerConnectionManager:
         self._standby = standby
         self._on_promoted = on_promoted
         self._stopped = False
+        self._manual_disconnected: set[NodeId] = set()
 
     def reconcile(self, now: float | None = None) -> float | None:
         """Start due attempts and return the earliest future retry deadline."""
@@ -82,6 +83,8 @@ class PeerConnectionManager:
             if context.descriptor.is_local or not is_trusted_descriptor(
                 context.descriptor
             ):
+                continue
+            if context.node_id in self._manual_disconnected:
                 continue
             if context.connection.status is NodeConnectionStatus.IDENTITY_CHANGED:
                 continue
@@ -334,6 +337,18 @@ class PeerConnectionManager:
         if self._on_failed is not None:
             self._on_failed(context, failure)
         return True
+
+    def disconnect_manual(self, node_id: NodeId) -> None:
+        """Detach a relationship without revoking trust; suppress reconnect."""
+
+        self._manual_disconnected.add(node_id)
+        self.cancel(node_id)
+
+    def reconnect(self, node_id: NodeId) -> None:
+        self._manual_disconnected.discard(node_id)
+
+    def is_manual_disconnected(self, node_id: NodeId) -> bool:
+        return node_id in self._manual_disconnected
 
     def cancel(self, node_id: NodeId) -> None:
         """Cancel a peer attempt and invalidate late completion callbacks."""

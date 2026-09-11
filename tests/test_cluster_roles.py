@@ -96,3 +96,49 @@ class ClusterRoleTests(unittest.TestCase):
             returned.assignment_for(NodeId("coord")).roles,
             frozenset({ClusterRole.WORKER}),
         )
+
+    def test_remove_job_requires_active_coordinator(self) -> None:
+        with self.assertRaises(RoleAuthorizationError):
+            RoleState(assignments=(self.worker,)).remove_job(
+                actor=self.worker,
+                target=NodeId("worker"),
+            )
+
+    def test_remove_job_clears_active_assignment(self) -> None:
+        state = RoleState(assignments=(self.coordinator, self.worker))
+        updated = state.remove_job(actor=self.coordinator, target=NodeId("worker"))
+        assignment = updated.assignment_for(NodeId("worker"))
+        self.assertIsNotNone(assignment)
+        assert assignment is not None
+        self.assertFalse(assignment.has_active_job)
+
+    def test_remove_job_revoked_target_is_rejected(self) -> None:
+        revoked = RoleAssignment(
+            frozenset({ClusterRole.WORKER}),
+            NodeId("worker"),
+            revoked=True,
+        )
+        state = RoleState(assignments=(self.coordinator, revoked))
+        with self.assertRaises(RoleAuthorizationError):
+            state.remove_job(actor=self.coordinator, target=NodeId("worker"))
+
+    def test_remove_job_non_worker_target_is_rejected(self) -> None:
+        state = RoleState(assignments=(self.coordinator, self.sub))
+        with self.assertRaises(RoleAuthorizationError):
+            state.remove_job(actor=self.coordinator, target=NodeId("sub"))
+
+    def test_assign_job_restores_participation(self) -> None:
+        idle = RoleAssignment(
+            frozenset({ClusterRole.WORKER}),
+            NodeId("worker"),
+            has_active_job=False,
+        )
+        state = RoleState(assignments=(self.coordinator, idle))
+        updated = state.assign_job(actor=self.coordinator, target=NodeId("worker"))
+        assignment = updated.assignment_for(NodeId("worker"))
+        self.assertIsNotNone(assignment)
+        assert assignment is not None
+        self.assertTrue(assignment.has_active_job)
+
+    def test_default_assignment_has_active_job(self) -> None:
+        self.assertTrue(self.worker.has_active_job)

@@ -36,7 +36,9 @@ from maintenance.nodes import (
     node_identity_fingerprint,
     node_operation_key,
 )
+from maintenance.remote import RemoteAuthError
 from maintenance.ui import window_node_actions
+from maintenance.ui import window_discovery as ui_window_discovery
 from maintenance.ui.render_coordinator import UICoordinator
 from maintenance.ui.window_supports import node_specs
 from tests.support.models import make_snapshot, make_summary
@@ -567,6 +569,134 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window._refresh_cluster_page.assert_called()
         with self.assertRaises(KeyError):
             window._node_registry.context(NodeId("peer-a"))
+
+    def test_revoke_removes_node_from_cluster_connection_specs(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
+            start_discovery=False,
+        )
+        state = ClusterState.create_local(local_node_id="local")
+        state.role_assignments = state.role_assignments + (
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
+            ),
+        )
+        state.trusted_nodes = (
+            trusted_node_record(
+                node_id="peer-a",
+                display_name="Peer A",
+                hostname="peer-a",
+                host="192.0.2.10",
+                port=5000,
+                secret="secret",
+                transport_fingerprint="tls-pin",
+            ),
+        )
+        window._cluster_state = state
+
+        def save_state(saved: ClusterState) -> bool:
+            window._cluster_state = saved
+            return True
+
+        window._save_cluster_state = Mock(side_effect=save_state)
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._rebuild_node_selector = Mock()
+        window._nodes_status = Mock()
+        window._nodes_error = Mock()
+        window._cancel_node_operations = Mock()
+        window._cancel_peer_connection = Mock()
+        window._invalidate_node_render_targets = Mock()
+
+        specs = node_specs.cluster_node_specs(window._node_registry)
+        self.assertIn("peer-a", {spec.node_id for spec in specs})
+
+        window_node_actions.revoke_node(window, "peer-a")
+
+        specs = node_specs.cluster_node_specs(window._node_registry)
+        self.assertNotIn("peer-a", {spec.node_id for spec in specs})
+        self.assertIn("local", {spec.node_id for spec in specs})
+
+    def test_handle_remove_job_clears_target_assignment(self) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        state.role_assignments = state.role_assignments + (
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
+            ),
+        )
+        window._cluster_state = state
+
+        def save_state(saved: ClusterState) -> bool:
+            window._cluster_state = saved
+            return True
+
+        window._save_cluster_state = Mock(side_effect=save_state)
+        request = SimpleNamespace(
+            op="remove_job",
+            caller_node_id=NodeId("local"),
+            params={
+                "target_node_id": "peer-a",
+                "cluster_id": state.cluster_id,
+                "epoch": 1,
+                "fencing_token": "t",
+            },
+        )
+
+        result = ui_window_discovery.handle_role_request(window, request)
+
+        self.assertEqual(result, {"ok": True})
+        peer = next(
+            item
+            for item in window._cluster_state.role_assignments
+            if item.node_id == NodeId("peer-a")
+        )
+        self.assertFalse(peer.has_active_job)
+
+    def test_handle_remove_connection_detaches_caller(self) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        state.role_assignments = state.role_assignments + (
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
+            ),
+        )
+        window._cluster_state = state
+        manager = Mock()
+        window._peer_connection_manager = manager
+        request = SimpleNamespace(
+            op="remove_connection",
+            caller_node_id=NodeId("peer-a"),
+            params={
+                "target_node_id": "peer-a",
+                "cluster_id": state.cluster_id,
+                "epoch": 1,
+                "fencing_token": "t",
+            },
+        )
+
+        result = ui_window_discovery.handle_role_request(window, request)
+
+        self.assertEqual(result, {"ok": True})
+        manager.disconnect_manual.assert_called_once_with(NodeId("peer-a"))
+
+    def test_handle_remove_connection_rejects_wrong_target(self) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        window._cluster_state = state
+        request = SimpleNamespace(
+            op="remove_connection",
+            caller_node_id=NodeId("peer-a"),
+            params={
+                "target_node_id": "other",
+                "cluster_id": state.cluster_id,
+                "epoch": 1,
+                "fencing_token": "t",
+            },
+        )
+
+        with self.assertRaises(RemoteAuthError):
+            ui_window_discovery.handle_role_request(window, request)
 
     def test_role_less_trusted_node_can_still_be_revoked(self) -> None:
         window = _make_window(

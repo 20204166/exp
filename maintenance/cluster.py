@@ -817,6 +817,7 @@ class ClusterStore:
                     node_id=NodeId(item["node_id"]),
                     paused=bool(item.get("paused", False)),
                     revoked=bool(item.get("revoked", False)),
+                    has_active_job=bool(item.get("has_active_job", True)),
                 )
             except (TypeError, ValueError):
                 continue
@@ -1007,6 +1008,7 @@ class ClusterStore:
                     "roles": sorted(role.value for role in item.roles),
                     "paused": item.paused,
                     "revoked": item.revoked,
+                    "has_active_job": item.has_active_job,
                 }
                 for item in state.role_assignments
                 if item.node_id is not None

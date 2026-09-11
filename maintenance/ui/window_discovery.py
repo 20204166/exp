@@ -268,6 +268,21 @@ def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, An
         updated = role_state.revoke(
             actor=actor, target=NodeId(request.params["target_node_id"])
         )
+    elif request.op == "remove_connection":
+        if request.params.get("target_node_id") != actor_id.value:
+            raise RemoteAuthError(
+                "remove_connection is limited to the caller relationship"
+            )
+        manager = controller.__dict__.get("_peer_connection_manager")
+        if manager is None:
+            manager = peer_connections(controller)
+        if manager is not None:
+            manager.disconnect_manual(actor_id)
+        return {"ok": True}
+    elif request.op == "remove_job":
+        updated = role_state.remove_job(
+            actor=actor, target=NodeId(request.params["target_node_id"])
+        )
     else:
         raise RemoteAuthError("unknown role operation")
     if not controller._save_cluster_state(replace(state, role_assignments=updated.assignments)):

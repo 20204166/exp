@@ -703,6 +703,32 @@ class AuthenticatedNodeProvider:
             },
         )
 
+    def remove_connection(
+        self, target_node_id: str, *, cluster_id: str, epoch: int, fencing_token: str
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "remove_connection",
+            {
+                "target_node_id": target_node_id,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
+    def remove_job(
+        self, target_node_id: str, *, cluster_id: str, epoch: int, fencing_token: str
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "remove_job",
+            {
+                "target_node_id": target_node_id,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
     def terminate(self, request: ProcessTerminationRequest) -> ProcessActionResult:
         if request.target_node_id != self._node_id:
             raise RemoteAuthError("process request target does not match provider")

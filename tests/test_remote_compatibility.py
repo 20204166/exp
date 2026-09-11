@@ -12,12 +12,14 @@ from maintenance.cluster import (
 )
 from maintenance.nodes import NodeCapability, NodeId
 from maintenance.remote import (
+    OP_REQUIRED_CAPABILITY,
     REMOTE_PROTOCOL_VERSION,
     RemoteAuthError,
     RemoteProtocolError,
     parse_hello_capabilities,
     sign_response,
     validate_hello_payload,
+    validate_operation_params,
     verify_response,
 )
 
@@ -158,6 +160,41 @@ class RemoteCompatibilityTests(unittest.TestCase):
                 ClusterStore(path).load().trusted_nodes[0].permissions,
                 frozenset(),
             )
+
+    def test_remove_connection_is_a_typed_fenced_operation(self) -> None:
+        self.assertIn("remove_connection", OP_REQUIRED_CAPABILITY)
+        validate_operation_params(
+            "remove_connection",
+            {
+                "target_node_id": "peer-a",
+                "cluster_id": "c",
+                "epoch": 1,
+                "fencing_token": "t",
+            },
+        )
+
+    def test_remove_connection_rejects_missing_target(self) -> None:
+        with self.assertRaises(RemoteProtocolError):
+            validate_operation_params(
+                "remove_connection",
+                {"cluster_id": "c", "epoch": 1, "fencing_token": "t"},
+            )
+
+    def test_remove_job_requires_fencing_fields(self) -> None:
+        with self.assertRaises(RemoteProtocolError):
+            validate_operation_params("remove_job", {})
+
+    def test_remove_job_is_a_typed_fenced_operation(self) -> None:
+        self.assertIn("remove_job", OP_REQUIRED_CAPABILITY)
+        validate_operation_params(
+            "remove_job",
+            {
+                "target_node_id": "peer-a",
+                "cluster_id": "c",
+                "epoch": 1,
+                "fencing_token": "t",
+            },
+        )
 
 
 if __name__ == "__main__":

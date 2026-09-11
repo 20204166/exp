@@ -39,6 +39,7 @@ class RoleAssignment:
     node_id: NodeId | None = None
     paused: bool = False
     revoked: bool = False
+    has_active_job: bool = True
 
     def __post_init__(self) -> None:
         roles = frozenset(self.roles)
@@ -203,6 +204,24 @@ class RoleState:
         if current is None or current.revoked:
             raise RoleAuthorizationError("unknown or revoked node")
         return self._replace_assignment(replace(current, revoked=True))
+
+    def remove_job(self, *, actor: RoleAssignment, target: NodeId) -> RoleState:
+        self._assert_control(actor)
+        current = self.assignment_for(target)
+        if current is None or current.revoked:
+            raise RoleAuthorizationError("unknown or revoked node")
+        if ClusterRole.WORKER not in current.roles:
+            raise RoleAuthorizationError("target has no worker role")
+        return self._replace_assignment(replace(current, has_active_job=False))
+
+    def assign_job(self, *, actor: RoleAssignment, target: NodeId) -> RoleState:
+        self._assert_control(actor)
+        current = self.assignment_for(target)
+        if current is None or current.revoked:
+            raise RoleAuthorizationError("unknown or revoked node")
+        if ClusterRole.WORKER not in current.roles:
+            raise RoleAuthorizationError("target has no worker role")
+        return self._replace_assignment(replace(current, has_active_job=True))
 
     def _assert_control(self, actor: RoleAssignment) -> None:
         if ClusterRole.COORDINATOR not in actor.roles or actor.paused or actor.revoked:

@@ -143,6 +143,40 @@ class PeerConnectionTests(unittest.TestCase):
         self.manager.shutdown()
         self.assertFalse(self.manager.complete(self.peer.node_id, generation + 1))
 
+    def test_manual_disconnect_suppresses_reconcile(self) -> None:
+        self.manager.disconnect_manual(self.peer.node_id)
+
+        self.assertIsNone(self.manager.reconcile(0.0))
+        self.assertEqual(self.connect.call_count, 0)
+        self.assertTrue(self.manager.is_manual_disconnected(self.peer.node_id))
+
+    def test_reconnect_restores_automatic_reconcile(self) -> None:
+        self.manager.disconnect_manual(self.peer.node_id)
+        self.manager.reconnect(self.peer.node_id)
+
+        self.assertFalse(self.manager.is_manual_disconnected(self.peer.node_id))
+        self.assertIsNone(self.manager.reconcile(0.0))
+        self.assertEqual(self.connect.call_count, 1)
+
+    def test_manual_disconnect_cancels_pending_attempt(self) -> None:
+        self.coordinator = AppCoordinator(runner=lambda _worker: None)
+        self.manager = PeerConnectionManager(
+            registry=self.registry,
+            coordinator=self.coordinator,
+            connect=self.connect,
+            clock=lambda: self.clock,
+        )
+        self.manager.reconcile(0.0)
+        generation = self.peer.connection_generation
+        cancel_event = self.coordinator.state("node:peer:connect").cancel_event
+
+        self.manager.disconnect_manual(self.peer.node_id)
+
+        self.assertIsNotNone(cancel_event)
+        assert cancel_event is not None
+        self.assertTrue(cancel_event.is_set())
+        self.assertFalse(self.manager.complete(self.peer.node_id, generation))
+
 
 if __name__ == "__main__":
     unittest.main()

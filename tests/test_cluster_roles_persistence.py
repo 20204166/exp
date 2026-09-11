@@ -30,6 +30,40 @@ class ClusterRolePersistenceTests(unittest.TestCase):
             state = ClusterStore(path).load()
         self.assertIn(ClusterRole.COORDINATOR, state.local_assignment.roles)
 
+    def test_has_active_job_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            store = ClusterStore(path)
+            state = ClusterState.create_local(local_node_id="coord")
+            assignment = state.local_assignment
+            idle = type(assignment)(
+                assignment.roles,
+                node_id=assignment.node_id,
+                paused=assignment.paused,
+                revoked=assignment.revoked,
+                has_active_job=False,
+            )
+            state.role_assignments = (idle,)
+            store.save(state)
+            loaded = store.load()
+        self.assertFalse(loaded.local_assignment.has_active_job)
+
+    def test_has_active_job_defaults_true_for_old_documents(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            payload = {
+                "schema_version": 2,
+                "local_node_id": "worker",
+                "trusted_nodes": [],
+                "peer_grants": [],
+                "role_assignments": [
+                    {"node_id": "worker", "roles": ["worker"]}
+                ],
+            }
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            loaded = ClusterStore(path).load()
+        self.assertTrue(loaded.local_assignment.has_active_job)
+
     def test_expired_invite_is_consumed_and_rejected(self) -> None:
         state = ClusterState.create_local(local_node_id="coord")
         invite = state.create_invite(now=100.0, ttl_seconds=60.0)
