@@ -220,9 +220,11 @@ def revoke_node(
         return
     try:
         role_state = _role_state(controller)
-        if role_state.assignment_for(NodeId(node_id)) is None:
-            # A trusted node without a role record has no persisted role to
-            # revoke; revocation means removing trust entirely.
+        assignment = role_state.assignment_for(NodeId(node_id))
+        if assignment is None or assignment.revoked:
+            # A trusted node without a role record, or one whose revocation was
+            # already persisted by an interrupted earlier revocation, has no
+            # role to revoke; revocation means removing trust entirely.
             revoke_trusted_node(controller, node_id)
             return
         if not _save_role_state(

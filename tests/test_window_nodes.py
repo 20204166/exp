@@ -617,6 +617,58 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         self.assertNotIn("peer-a", {spec.node_id for spec in specs})
         self.assertIn("local", {spec.node_id for spec in specs})
 
+    def test_revoke_already_revoked_assignment_removes_connection(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
+            start_discovery=False,
+        )
+        state = ClusterState.create_local(local_node_id="local")
+        state.role_assignments = state.role_assignments + (
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}),
+                node_id=NodeId("peer-a"),
+                revoked=True,
+            ),
+        )
+        state.trusted_nodes = (
+            trusted_node_record(
+                node_id="peer-a",
+                display_name="Peer A",
+                hostname="peer-a",
+                host="192.0.2.10",
+                port=5000,
+                secret="secret",
+                transport_fingerprint="tls-pin",
+            ),
+        )
+        window._cluster_state = state
+
+        def save_state(saved: ClusterState) -> bool:
+            window._cluster_state = saved
+            return True
+
+        window._save_cluster_state = Mock(side_effect=save_state)
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._rebuild_node_selector = Mock()
+        window._nodes_status = Mock()
+        window._nodes_error = Mock()
+        window._cancel_node_operations = Mock()
+        window._cancel_peer_connection = Mock()
+        window._invalidate_node_render_targets = Mock()
+
+        specs = node_specs.cluster_node_specs(window._node_registry)
+        self.assertIn("peer-a", {spec.node_id for spec in specs})
+
+        window_node_actions.revoke_node(window, "peer-a", messagebox_module=Mock(return_value=True))
+
+        window._nodes_error.assert_not_called()
+        self.assertIsNone(window._cluster_state.record("peer-a"))
+        specs = node_specs.cluster_node_specs(window._node_registry)
+        self.assertNotIn("peer-a", {spec.node_id for spec in specs})
+        with self.assertRaises(KeyError):
+            window._node_registry.context(NodeId("peer-a"))
+
     def test_handle_remove_job_clears_target_assignment(self) -> None:
         window = _make_window(start_discovery=False)
         state = ClusterState.create_local(local_node_id="local")
