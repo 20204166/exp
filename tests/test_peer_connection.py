@@ -9,6 +9,7 @@ from maintenance.nodes import (
     ConnectionState,
     NodeConnectionStatus,
     NodeContext,
+    NodeId,
     NodeRegistry,
     NodeTrustState,
     PeerFailure,
@@ -176,6 +177,36 @@ class PeerConnectionTests(unittest.TestCase):
         assert cancel_event is not None
         self.assertTrue(cancel_event.is_set())
         self.assertFalse(self.manager.complete(self.peer.node_id, generation))
+
+    def test_disconnect_manual_local_node_is_noop(self) -> None:
+        local_id = self.registry.local_id()
+        assert local_id is not None
+        self.manager.disconnect_manual(local_id)
+        self.assertTrue(self.manager.is_manual_disconnected(local_id))
+
+    def test_disconnect_manual_unknown_node_does_not_raise(self) -> None:
+        self.manager.disconnect_manual(NodeId("ghost"))
+        self.assertTrue(self.manager.is_manual_disconnected(NodeId("ghost")))
+
+    def test_disconnect_manual_suppresses_reconnect_after_deadline(self) -> None:
+        self.manager.disconnect_manual(self.peer.node_id)
+        self.clock = 100.0
+        self.assertIsNone(self.manager.reconcile(100.0))
+        self.assertEqual(self.connect.call_count, 0)
+
+    def test_reconnect_then_complete_clears_disconnect_state(self) -> None:
+        self.manager.disconnect_manual(self.peer.node_id)
+        self.manager.reconnect(self.peer.node_id)
+        self.assertIsNone(self.manager.reconcile(0.0))
+        self.assertFalse(self.manager.is_manual_disconnected(self.peer.node_id))
+        self.assertEqual(self.connect.call_count, 1)
+
+    def test_disconnect_manual_is_idempotent(self) -> None:
+        self.manager.disconnect_manual(self.peer.node_id)
+        self.manager.disconnect_manual(self.peer.node_id)
+        self.assertTrue(self.manager.is_manual_disconnected(self.peer.node_id))
+        self.assertIsNone(self.manager.reconcile(0.0))
+        self.assertEqual(self.connect.call_count, 0)
 
 
 if __name__ == "__main__":

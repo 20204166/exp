@@ -591,7 +591,9 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
                 raise RemoteProtocolError("role target is invalid")
             return
         if op in {"remove_connection", "remove_job"}:
-            if not isinstance(params.get("target_node_id"), str):
+            if not isinstance(params.get("target_node_id"), str) or not params[
+                "target_node_id"
+            ]:
                 raise RemoteProtocolError("role target is invalid")
             return
         payload = params.get("payload")

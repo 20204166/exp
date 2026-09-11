@@ -196,6 +196,56 @@ class RemoteCompatibilityTests(unittest.TestCase):
             },
         )
 
+    def test_remove_connection_rejects_empty_target(self) -> None:
+        with self.assertRaises(RemoteProtocolError):
+            validate_operation_params(
+                "remove_connection",
+                {
+                    "target_node_id": "",
+                    "cluster_id": "c",
+                    "epoch": 1,
+                    "fencing_token": "t",
+                },
+            )
+
+    def test_remove_job_rejects_missing_fencing_token(self) -> None:
+        with self.assertRaises(RemoteProtocolError):
+            validate_operation_params(
+                "remove_job",
+                {"target_node_id": "peer-a", "cluster_id": "c", "epoch": 1},
+            )
+
+    def test_remove_job_rejects_bool_epoch(self) -> None:
+        with self.assertRaises(RemoteProtocolError):
+            validate_operation_params(
+                "remove_job",
+                {
+                    "target_node_id": "peer-a",
+                    "cluster_id": "c",
+                    "epoch": True,
+                    "fencing_token": "t",
+                },
+            )
+
+    def test_remove_connection_rejects_missing_cluster_id(self) -> None:
+        with self.assertRaises(RemoteProtocolError):
+            validate_operation_params(
+                "remove_connection",
+                {"target_node_id": "peer-a", "epoch": 1, "fencing_token": "t"},
+            )
+
+    def test_remove_job_rejects_negative_epoch(self) -> None:
+        with self.assertRaises(RemoteProtocolError):
+            validate_operation_params(
+                "remove_job",
+                {
+                    "target_node_id": "peer-a",
+                    "cluster_id": "c",
+                    "epoch": -1,
+                    "fencing_token": "t",
+                },
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

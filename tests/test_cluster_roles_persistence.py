@@ -6,6 +6,7 @@ from pathlib import Path
 
 from maintenance.cluster import ClusterState, ClusterStore, InviteExpiredError
 from maintenance.components.cluster_roles import ClusterRole
+from maintenance.nodes import NodeId
 
 
 class ClusterRolePersistenceTests(unittest.TestCase):
@@ -62,6 +63,74 @@ class ClusterRolePersistenceTests(unittest.TestCase):
             }
             path.write_text(json.dumps(payload), encoding="utf-8")
             loaded = ClusterStore(path).load()
+        self.assertTrue(loaded.local_assignment.has_active_job)
+
+    def test_has_active_job_false_and_paused_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            store = ClusterStore(path)
+            state = ClusterState.create_local(local_node_id="worker")
+            idle = type(state.local_assignment)(
+                frozenset({ClusterRole.WORKER}),
+                node_id=NodeId("worker"),
+                paused=True,
+                has_active_job=False,
+            )
+            state.role_assignments = (idle,)
+            store.save(state)
+            loaded = store.load()
+        assignment = loaded.local_assignment
+        self.assertTrue(assignment.paused)
+        self.assertFalse(assignment.has_active_job)
+
+    def test_non_bool_has_active_job_defaults_true(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            payload = {
+                "schema_version": 2,
+                "local_node_id": "worker",
+                "trusted_nodes": [],
+                "peer_grants": [],
+                "role_assignments": [
+                    {"node_id": "worker", "roles": ["worker"], "has_active_job": "yes"}
+                ],
+            }
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            loaded = ClusterStore(path).load()
+        self.assertTrue(loaded.local_assignment.has_active_job)
+
+    def test_revoked_with_no_active_job_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            store = ClusterStore(path)
+            state = ClusterState.create_local(local_node_id="coord")
+            revoked_idle = type(state.local_assignment)(
+                frozenset({ClusterRole.WORKER}),
+                node_id=NodeId("peer"),
+                revoked=True,
+                has_active_job=False,
+            )
+            state.role_assignments = (
+                state.local_assignment,
+                revoked_idle,
+            )
+            store.save(state)
+            loaded = store.load()
+        peer = next(
+            item
+            for item in loaded.role_assignments
+            if item.node_id == NodeId("peer")
+        )
+        self.assertTrue(peer.revoked)
+        self.assertFalse(peer.has_active_job)
+
+    def test_coordinator_assignment_persists_active_job(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            store = ClusterStore(path)
+            state = ClusterState.create_local(local_node_id="coord")
+            store.save(state)
+            loaded = store.load()
         self.assertTrue(loaded.local_assignment.has_active_job)
 
     def test_expired_invite_is_consumed_and_rejected(self) -> None:
