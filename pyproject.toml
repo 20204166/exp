@@ -16,6 +16,16 @@ dependencies = [
     "zeroconf>=0.131",
 ]
 
+[project.optional-dependencies]
+# Dev-only static-analysis gates, mirrored in requirements.txt. Pinned so the
+# `ruff check .`, `ruff format --check .`, `pyright`, and `mypy --ignore-missing-imports`
+# gates stay reproducible; install with `pip install -e '.[dev]'`.
+dev = [
+    "ruff==0.16.6",
+    "pyright==1.1.411",
+    "mypy==2.3.1",
+]
+
 [project.scripts]
 system-analyzer = "main:main"
 system-analyzer-snapshot = "maintenance.snapshot:main"
