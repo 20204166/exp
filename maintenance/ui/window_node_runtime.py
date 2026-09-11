@@ -244,14 +244,15 @@ def render_selected_node(controller: Any, context: NodeContext) -> None:
     if node_title_label is not None:
         presentation = render_target_state(context.descriptor, snapshot)
         node_title_label.config(text=context.descriptor.display_name.upper())
-        target_status_label = getattr(controller, "target_status_label", None)
-        if target_status_label is not None:
-            target_status_label.config(
-                text=(
-                    f"{presentation.label} · {presentation.identity} · "
-                    f"capabilities: {', '.join(presentation.capabilities) or 'none'}"
-                )
+    target_status_label = getattr(controller, "target_status_label", None)
+    if target_status_label is not None:
+        presentation = render_target_state(context.descriptor, snapshot)
+        target_status_label.config(
+            text=(
+                f"{presentation.label} · {presentation.identity} · "
+                f"capabilities: {', '.join(presentation.capabilities) or 'none'}"
             )
+        )
     if snapshot is None:
         controller.refreshed_label.config(text="Not refreshed yet")
         controller.scan_time_label.config(text="Not scanned yet")

@@ -39,19 +39,13 @@ def build(controller: Any, parent: Any) -> Any:
     controller.node_title_label = getattr(
         controller.header_actions, "_dashboard_node_label", None
     )
-    controller.target_status_label = controller.ttk.Label(
-        controller.header_actions,
-        text=(
-            f"{rendered.label} · {rendered.identity} · "
-            f"capabilities: {', '.join(rendered.capabilities) or 'none'}"
-            if (context := controller._selected_context()) is not None
-            and (rendered := render_target_state(context.descriptor, context.snapshot))
-            else ""
-        ),
-        wraplength=ui_styles.LAYOUT["dashboard_status_wrap"],
-        style="Description.TLabel",
+    controller.target_status_text = (
+        f"{rendered.label} · {rendered.identity} · "
+        f"capabilities: {', '.join(rendered.capabilities) or 'none'}"
+        if (context := controller._selected_context()) is not None
+        and (rendered := render_target_state(context.descriptor, context.snapshot))
+        else ""
     )
-    controller.target_status_label.pack(anchor="e", pady=(2, 0))
     controller.discovery_status_label = getattr(
         controller.header_actions, "_dashboard_discovery_label", None
     )
@@ -185,12 +179,25 @@ def build(controller: Any, parent: Any) -> Any:
         controller.cards[feature.key] = card
     controller.cards_empty_label = None
 
+    controller.dashboard_meta_frame = controller.ttk.Frame(
+        controller.main_frame, style="App.TFrame"
+    )
+    controller.dashboard_meta_frame.pack(fill="x", pady=(4, 0))
     controller.refreshed_label = controller.ttk.Label(
-        controller.main_frame,
+        controller.dashboard_meta_frame,
         text="Not refreshed yet",
         style="Description.TLabel",
     )
-    controller.refreshed_label.pack(anchor="w", pady=(4, 0))
+    controller.refreshed_label.pack(side="left", anchor="w")
+    controller.target_status_label = controller.ttk.Label(
+        controller.dashboard_meta_frame,
+        text=controller.target_status_text,
+        justify="right",
+        anchor="e",
+        wraplength=ui_styles.LAYOUT["dashboard_status_wrap"],
+        style="Description.TLabel",
+    )
+    controller.target_status_label.pack(side="right", anchor="e", padx=(16, 0))
     controller.health_label = controller.ttk.Label(
         controller.main_frame,
         text="Health: No issues detected",

@@ -35,6 +35,9 @@ class ClusterPageCallbacks:
 
     on_back: Callable[[], None]
     on_open_node: Callable[[str], None]
+    on_pause: Callable[[str], None] | None = None
+    on_resume: Callable[[str], None] | None = None
+    on_revoke: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +56,9 @@ class ClusterNodeSpec:
     last_refresh: str | None = None
     pairing_state: str = "trusted"
     target_state: str = "Unknown"
+    role: str = "worker"
+    paused: bool = False
+    role_editable: bool = False
 
 
 class ClusterPage:
@@ -195,6 +201,9 @@ class ClusterPage:
         trust_text = node_presentation.trust_label(spec.trust, is_local=spec.is_local)
         pairing_text = _PAIRING_TEXT.get(spec.pairing_state, spec.pairing_state)
         meta = f"{trust_text} · {node_presentation.status_label(spec.status)}"
+        meta += f" · {spec.role.title()}"
+        if spec.paused:
+            meta += " · Paused"
         if spec.hostname and spec.hostname != spec.display_name:
             meta += f" · {spec.hostname}"
         if spec.target_state != "Unknown":
@@ -233,6 +242,33 @@ class ClusterPage:
                 action_id = f"cluster:node:{spec.node_id}:open"
                 coordinator.register(action_id, open_node, replace=True)
                 coordinator.bind(button, action_id)
+        if spec.role_editable and not spec.is_local and self.callbacks.on_revoke is not None:
+            revoke = self.button_cls(
+                row,
+                text="Revoke",
+                command=lambda: self.callbacks.on_revoke(spec.node_id),
+                style=ui_styles.STYLE_DANGER_BUTTON,
+            )
+            revoke.pack(side="right", padx=(0, 8))
+        if (
+            spec.role_editable
+            and not spec.is_local
+            and (self.callbacks.on_pause is not None or self.callbacks.on_resume is not None)
+        ):
+            paused = spec.paused
+            if paused and self.callbacks.on_resume is not None:
+                command = lambda: self.callbacks.on_resume(spec.node_id)
+            elif not paused and self.callbacks.on_pause is not None:
+                command = lambda: self.callbacks.on_pause(spec.node_id)
+            else:
+                command = lambda: None
+            pause = self.button_cls(
+                row,
+                text="Re-enable" if paused else "Pause",
+                command=command,
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+            pause.pack(side="right", padx=(0, 8))
 
     def focus_back(self) -> None:
         self.back_button.focus_set()

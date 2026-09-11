@@ -7,8 +7,10 @@ from types import SimpleNamespace
 from maintenance.components.placement import PlacementDecision
 from maintenance.diagnostics import (
     MAX_DETAIL_LENGTH,
+    ClusterDiagnostic,
     build_diagnostics_snapshot,
     format_timestamp,
+    serialize_cluster_diagnostic,
     serialize_diagnostics,
     truncate_detail,
 )
@@ -16,6 +18,13 @@ from maintenance.nodes import NodeId
 
 
 class DiagnosticsSnapshotTests(unittest.TestCase):
+    def test_cluster_diagnostic_does_not_claim_physical_storage_accounting(self) -> None:
+        diagnostic = ClusterDiagnostic(
+            "coordinator", "coord", 2, 1.0, 10, 20, 0, 256,
+            "normal", 100.0, False, None,
+        )
+        self.assertNotIn("physical disk", serialize_cluster_diagnostic(diagnostic))
+
     def test_format_timestamp_is_human_readable(self) -> None:
         self.assertRegex(format_timestamp(1789056712.440), r"^\d{2}:\d{2}:\d{2}$")
         self.assertEqual(format_timestamp(None), "No data yet")

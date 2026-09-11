@@ -4,6 +4,7 @@ import threading
 import tkinter as tk
 import unittest
 from queue import Queue
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock, patch
 
@@ -19,9 +20,12 @@ from maintenance.models import (
     ResourceSummary,
     unavailable_summary,
 )
+from maintenance.ui import dashboard_page
+from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
 from tests.support.models import make_snapshot, make_summary
 from tests.support.scheduling import TimerMaster
+from tests.support.widget_recording import WidgetRecorder
 from window import AppWindow
 
 
@@ -241,6 +245,46 @@ class ResourceCardContractTests(unittest.TestCase):
 
 
 class DashboardWindowTests(unittest.TestCase):
+    def _dashboard_controller(self, recorder: WidgetRecorder) -> Any:
+        controller = SimpleNamespace(
+            ttk=SimpleNamespace(
+                Frame=recorder.frame_cls(),
+                Label=recorder.label_cls(),
+                Button=recorder.button_cls(),
+                Scrollbar=recorder.scrollbar_cls(),
+            ),
+            tk=SimpleNamespace(Canvas=recorder.canvas_cls()),
+            BACKGROUND="#000000",
+            colors=ui_styles.COLORS,
+            fonts=ui_styles.FONTS,
+            _feature_catalog=SimpleNamespace(all=list),
+            _button_coordinator=ButtonCoordinator(),
+            _multi_node_selectable=lambda: False,
+            _selected_context=lambda: None,
+            _node_registry=SimpleNamespace(discovered_candidates=list),
+            _show_settings_page=lambda: None,
+            _show_cluster_page=lambda: None,
+            _show_thermals_page=lambda: None,
+            _build_node_selector=lambda _parent: None,
+            _layout_dashboard_cards=Mock(),
+        )
+        return controller
+
+    def test_dashboard_footer_places_refresh_left_and_target_status_right(
+        self,
+    ) -> None:
+        recorder = WidgetRecorder()
+        controller = self._dashboard_controller(recorder)
+
+        dashboard_page.build(controller, recorder.parent())
+
+        self.assertIs(controller.refreshed_label.args[0], controller.dashboard_meta_frame)
+        self.assertIs(
+            controller.target_status_label.args[0], controller.dashboard_meta_frame
+        )
+        self.assertEqual(controller.refreshed_label.pack_calls[0]["side"], "left")
+        self.assertEqual(controller.target_status_label.pack_calls[0]["side"], "right")
+
     def test_open_resource_during_background_refresh_constructs_dialog(self) -> None:
         window = make_window()
         window._background_tasks = 2

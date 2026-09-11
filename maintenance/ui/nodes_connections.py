@@ -41,6 +41,9 @@ class NodesConnectionsCallbacks:
     on_add_manual_host: Callable[[str, str, int | None], None]
     on_remove_manual: Callable[[str], None]
     on_permissions: Callable[[str, frozenset[str]], None] | None = None
+    on_role_change: Callable[[str, frozenset[str]], None] | None = None
+    on_pause: Callable[[str], None] | None = None
+    on_resume: Callable[[str], None] | None = None
     on_start_discovery: Callable[[], None] = lambda: None
 
 
@@ -77,6 +80,10 @@ class TrustedNodeSpec:
     permissions: tuple[str, ...] = ()
     pairing_state: str = "trusted"
     target_state: str = "Unknown"
+    role: str = "worker"
+    roles: tuple[str, ...] = ()
+    role_editable: bool = False
+    paused: bool = False
 
 
 class NodesConnectionsPage:
@@ -483,6 +490,63 @@ class NodesConnectionsPage:
                 )
                 control.pack(anchor="w", pady=(0, 2))
 
+        if spec.roles or spec.role_editable or spec.role != "worker":
+            role_frame = self.frame_cls(row, bg=self.colors["card"])
+            role_frame.pack(fill="x", pady=(8, 0))
+            self.label_cls(
+                role_frame,
+                text="Cluster role",
+                bg=self.colors["card"],
+                fg=self.colors["secondary"],
+                font=self.fonts["body"],
+            ).pack(anchor="w")
+            role_controls = self.frame_cls(role_frame, bg=self.colors["card"])
+            role_controls.pack(fill="x", pady=(3, 0))
+            role_values: dict[str, Any] = {}
+            selected = set(spec.roles) or {spec.role}
+            self.worker_role_control = None
+            self.subcoordinator_role_control = None
+            self.coordinator_role_control = None
+            for role, label in (("worker", "Worker"), ("subcoordinator", "Subcoordinator")):
+                variable = self._boolean_var_factory()
+                variable.set(role in selected)
+                role_values[role] = variable
+                control = self.checkbutton_cls(
+                    role_controls,
+                    text=label,
+                    variable=variable,
+                    state=(tk.NORMAL if spec.role_editable and not spec.paused else tk.DISABLED),
+                    command=lambda: self.callbacks.on_role_change
+                    and self.callbacks.on_role_change(
+                        spec.node_id,
+                        frozenset(
+                            key for key, value in role_values.items() if value.get()
+                        ),
+                    ),
+                )
+                control.pack(anchor="w", pady=(0, 2))
+                if role == "worker":
+                    self.worker_role_control = control
+                else:
+                    self.subcoordinator_role_control = control
+            coordinator_var = self._boolean_var_factory()
+            coordinator_var.set("coordinator" in selected)
+            self.coordinator_role_control = self.checkbutton_cls(
+                role_controls,
+                text="Coordinator",
+                variable=coordinator_var,
+                state=tk.DISABLED,
+            )
+            self.coordinator_role_control.pack(anchor="w", pady=(0, 2))
+            self.label_cls(
+                role_frame,
+                text="Coordinator is assigned by the active Coordinator",
+                bg=self.colors["card"],
+                fg=self.colors["muted_text"],
+                font=self.fonts["node"],
+                anchor="w",
+            ).pack(anchor="w", pady=(2, 0))
+
         actions = self.frame_cls(row, bg=self.colors["card"])
         actions.pack(fill="x", pady=(8, 0))
         primary_actions = self.frame_cls(actions, bg=self.colors["card"])
@@ -531,6 +595,19 @@ class NodesConnectionsPage:
                 button,
                 enabled,
             )
+        if spec.role_editable and self.callbacks.on_pause is not None:
+            pause_text = "Re-enable" if spec.paused else "Pause"
+            if spec.paused and self.callbacks.on_resume is not None:
+                pause_command = lambda: self.callbacks.on_resume(spec.node_id)
+            else:
+                pause_command = lambda: self.callbacks.on_pause(spec.node_id)
+            pause_button = self.button_cls(
+                secondary_actions,
+                text=pause_text,
+                command=pause_command,
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+            pause_button.pack(side="left", padx=(0, 8))
         return row
 
     def _build_manual_hosts_section(self) -> None:

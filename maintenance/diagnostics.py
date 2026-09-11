@@ -66,6 +66,29 @@ class NodeDiagnostic:
 
 
 @dataclass(frozen=True, slots=True)
+class ClusterDiagnostic:
+    role: str
+    coordinator_id: str
+    epoch: int
+    heartbeat_age_seconds: float | None
+    database_bytes: int
+    database_cap_bytes: int
+    standby_bytes: int
+    standby_cap_bytes: int
+    retention_pressure: str
+    last_snapshot_at: float | None
+    history_writes_paused: bool
+    failure: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "role", truncate_detail(self.role) or "unknown")
+        object.__setattr__(
+            self, "coordinator_id", truncate_detail(self.coordinator_id) or "unknown"
+        )
+        object.__setattr__(self, "failure", truncate_detail(self.failure))
+
+
+@dataclass(frozen=True, slots=True)
 class RenderDiagnostic:
     pending: int
     requests: int
@@ -103,6 +126,7 @@ class DiagnosticsSnapshot:
     render: RenderDiagnostic
     most_recent_failure: str | None = None
     placement: PlacementDiagnostic | None = None
+    cluster: ClusterDiagnostic | None = None
 
 
 def _component_state(in_flight: bool, paused: bool, error: Any) -> str:
@@ -122,6 +146,7 @@ def build_diagnostics_snapshot(
     capabilities: dict[str, Any] | None = None,
     discovery_reason: str | None = None,
     placement: PlacementDecision | None = None,
+    cluster: ClusterDiagnostic | None = None,
 ) -> DiagnosticsSnapshot:
     component_rows: list[ComponentDiagnostic] = []
     for key in scheduler.intervals:
@@ -204,8 +229,15 @@ def build_diagnostics_snapshot(
         render=render,
         most_recent_failure=truncate_detail(failures[-1] if failures else None),
         placement=placement_diagnostic,
+        cluster=cluster,
     )
 
 
 def serialize_diagnostics(snapshot: DiagnosticsSnapshot) -> str:
     return json.dumps(asdict(snapshot), sort_keys=True, indent=2)
+
+
+def serialize_cluster_diagnostic(diagnostic: ClusterDiagnostic) -> str:
+    """Serialize only the bounded, non-secret cluster projection."""
+
+    return json.dumps(asdict(diagnostic), sort_keys=True)

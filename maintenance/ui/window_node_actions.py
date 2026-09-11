@@ -13,6 +13,12 @@ from typing import Any
 
 from maintenance.cluster import ClusterState, PeerGrantRecord, trusted_node_record
 from maintenance.components.coordinator import ComponentRefreshScheduler
+from maintenance.components.cluster_roles import (
+    ClusterRole,
+    RoleAssignment,
+    RoleAuthorizationError,
+    RoleState,
+)
 from maintenance.nodes import (
     READ_PERMISSIONS,
     NodeCapability,
@@ -54,13 +60,7 @@ def _pairing_confirmation(candidate: Any) -> str:
 
 
 def apply_discovery_enabled(controller: Any, enabled: bool) -> None:
-    candidate = ClusterState(
-        discovery_enabled=enabled,
-        trusted_nodes=controller._cluster_state.trusted_nodes,
-        local_node_id=controller._cluster_state.local_node_id,
-        local_identity_persisted=controller._cluster_state.local_identity_persisted,
-        peer_grants=controller._cluster_state.peer_grants,
-    )
+    candidate = replace(controller._cluster_state, discovery_enabled=enabled)
     if not controller._save_cluster_state(candidate):
         page = getattr(controller, "nodes_page", None)
         if page is not None:
@@ -74,6 +74,108 @@ def apply_discovery_enabled(controller: Any, enabled: bool) -> None:
     controller._nodes_status(
         f"Discovery {'enabled' if enabled else 'disabled'} and saved"
     )
+
+
+def _role_state(controller: Any) -> RoleState:
+    state = controller._cluster_state
+    return RoleState(
+        assignments=state.role_assignments,
+        epoch=state.coordinator_epoch,
+        promotion_epochs=state.promotion_epochs,
+    )
+
+
+def _save_role_state(controller: Any, state: RoleState) -> bool:
+    updated = replace(
+        controller._cluster_state,
+        role_assignments=state.assignments,
+        coordinator_epoch=state.epoch,
+    )
+    if not controller._save_cluster_state(updated):
+        controller._nodes_error("Cluster settings could not be saved")
+        return False
+    registry = controller.__dict__.get("_node_registry")
+    if registry is not None:
+        for assignment in state.assignments:
+            if assignment.node_id is None:
+                continue
+            try:
+                context = registry.context(assignment.node_id)
+            except KeyError:
+                continue
+            role = (
+                "coordinator"
+                if ClusterRole.COORDINATOR in assignment.roles
+                else "subcoordinator"
+                if ClusterRole.SUBCOORDINATOR in assignment.roles
+                else "worker"
+            )
+            context.descriptor = replace(context.descriptor, role=role)
+    controller._refresh_nodes_page()
+    controller._refresh_cluster_page()
+    return True
+
+
+def set_node_roles(controller: Any, node_id: str, roles: frozenset[str]) -> None:
+    try:
+        requested = frozenset(ClusterRole(value) for value in roles)
+        current = _role_state(controller)
+        assignment, _change = current.assign(
+            actor=controller._cluster_state.local_assignment,
+            target=NodeId(node_id),
+            roles=requested,
+        )
+        _save_role_state(controller, assignment)
+    except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
+        controller._nodes_error(str(error))
+
+
+def pause_node(controller: Any, node_id: str) -> None:
+    try:
+        _save_role_state(
+            controller,
+            _role_state(controller).pause(
+                actor=controller._cluster_state.local_assignment,
+                target=NodeId(node_id),
+            ),
+        )
+    except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
+        controller._nodes_error(str(error))
+
+
+def resume_node(controller: Any, node_id: str) -> None:
+    try:
+        _save_role_state(
+            controller,
+            _role_state(controller).resume(
+                actor=controller._cluster_state.local_assignment,
+                target=NodeId(node_id),
+            ),
+        )
+    except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
+        controller._nodes_error(str(error))
+
+
+def revoke_node(controller: Any, node_id: str) -> None:
+    try:
+        role_state = _role_state(controller)
+        if role_state.assignment_for(NodeId(node_id)) is None:
+            # A trusted node without a role record has no persisted role to
+            # revoke; revocation means removing trust entirely.
+            revoke_trusted_node(controller, node_id)
+            return
+        if not _save_role_state(
+            controller,
+            role_state.revoke(
+                actor=controller._cluster_state.local_assignment,
+                target=NodeId(node_id),
+            ),
+        ):
+            return
+        # Role revocation and trust/provider cleanup are one user-visible action.
+        revoke_trusted_node(controller, node_id)
+    except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
+        controller._nodes_error(str(error))
 
 
 def pair_discovered_node(
@@ -189,13 +291,7 @@ def pair_discovered_node(
     )
     if existing_record is None:
         trusted_nodes = (*trusted_nodes, record)
-    state = ClusterState(
-        discovery_enabled=controller._cluster_state.discovery_enabled,
-        trusted_nodes=trusted_nodes,
-        local_node_id=controller._cluster_state.local_node_id,
-        local_identity_persisted=controller._cluster_state.local_identity_persisted,
-        peer_grants=controller._cluster_state.peer_grants,
-    )
+    state = replace(controller._cluster_state, trusted_nodes=trusted_nodes)
     if not controller._save_cluster_state(state):
         registry.revoke_trusted(node)
         if previous_context is not None:
@@ -281,13 +377,7 @@ def rename_node(
         replace(record, display_name=name) if record.node_id == node_id else record
         for record in controller._cluster_state.trusted_nodes
     ]
-    state = ClusterState(
-        discovery_enabled=controller._cluster_state.discovery_enabled,
-        trusted_nodes=tuple(records),
-        local_node_id=controller._cluster_state.local_node_id,
-        local_identity_persisted=controller._cluster_state.local_identity_persisted,
-        peer_grants=controller._cluster_state.peer_grants,
-    )
+    state = replace(controller._cluster_state, trusted_nodes=tuple(records))
     if not controller._save_cluster_state(state):
         registry.set_display_name(NodeId(node_id), current)
         controller._nodes_error("Cluster settings could not be saved")
@@ -329,11 +419,9 @@ def set_node_permissions(
         else record
         for record in controller._cluster_state.trusted_nodes
     ]
-    state = ClusterState(
-        discovery_enabled=controller._cluster_state.discovery_enabled,
+    state = replace(
+        controller._cluster_state,
         trusted_nodes=tuple(records),
-        local_node_id=controller._cluster_state.local_node_id,
-        local_identity_persisted=controller._cluster_state.local_identity_persisted,
         peer_grants=tuple(
             replace(grant, permissions=permissions)
             if grant.caller_node_id == node_id
@@ -363,13 +451,7 @@ def set_node_color(controller: Any, node_id: str, color: str) -> None:
         replace(record, color=color) if record.node_id == node_id else record
         for record in controller._cluster_state.trusted_nodes
     ]
-    state = ClusterState(
-        discovery_enabled=controller._cluster_state.discovery_enabled,
-        trusted_nodes=tuple(records),
-        local_node_id=controller._cluster_state.local_node_id,
-        local_identity_persisted=controller._cluster_state.local_identity_persisted,
-        peer_grants=controller._cluster_state.peer_grants,
-    )
+    state = replace(controller._cluster_state, trusted_nodes=tuple(records))
     if not controller._save_cluster_state(state):
         registry.set_color(NodeId(node_id), previous)
         controller._nodes_error("Cluster settings could not be saved")
@@ -394,15 +476,13 @@ def revoke_trusted_node(controller: Any, node_id: str) -> None:
     except ValueError as error:
         controller._nodes_error(str(error))
         return
-    state = ClusterState(
-        discovery_enabled=controller._cluster_state.discovery_enabled,
+    state = replace(
+        controller._cluster_state,
         trusted_nodes=tuple(
             record
             for record in controller._cluster_state.trusted_nodes
             if record.node_id != node_id
         ),
-        local_node_id=controller._cluster_state.local_node_id,
-        local_identity_persisted=controller._cluster_state.local_identity_persisted,
         peer_grants=tuple(
             grant
             for grant in controller._cluster_state.peer_grants
@@ -487,11 +567,9 @@ def add_manual_host(
         capabilities=READ_CAPABILITIES,
         permissions=READ_PERMISSIONS,
     )
-    state = ClusterState(
-        discovery_enabled=controller._cluster_state.discovery_enabled,
+    state = replace(
+        controller._cluster_state,
         trusted_nodes=controller._cluster_state.trusted_nodes + (record,),
-        local_node_id=controller._cluster_state.local_node_id,
-        local_identity_persisted=controller._cluster_state.local_identity_persisted,
         peer_grants=tuple(
             grant
             for grant in controller._cluster_state.peer_grants

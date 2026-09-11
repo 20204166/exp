@@ -3,6 +3,7 @@
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from maintenance.nodes import (
@@ -16,6 +17,15 @@ from maintenance.nodes import (
     classify_peer_failure,
     is_trusted_descriptor,
     node_operation_key,
+)
+from maintenance.components.cluster_roles import (
+    CoordinatorEpoch,
+    FencingError,
+    PromotionDecision,
+    RoleState,
+    promote_subcoordinator,
+    rejoin_as_worker,
+    renew_lease,
 )
 
 
@@ -34,21 +44,31 @@ class PeerConnectionManager:
         coordinator: Any,
         connect: Callable[[NodeContext, threading.Event, Callable[[str], None]], Any],
         clock: Callable[[], float] = time.monotonic,
+        role_clock: Callable[[], float] = time.time,
         jitter: Callable[[int], float] = lambda _attempt: 0.0,
         is_closing: Callable[[], bool] = lambda: False,
         can_connect: Callable[[NodeContext], bool] = lambda _context: True,
         on_connected: Callable[[NodeContext, Any], None] | None = None,
         on_failed: Callable[[NodeContext, PeerFailure], None] | None = None,
+        cluster_store: Any | None = None,
+        timeline: Any | None = None,
+        standby: Any | None = None,
+        on_promoted: Callable[[Any, PromotionDecision], None] | None = None,
     ) -> None:
         self._registry = registry
         self._coordinator = coordinator
         self._connect = connect
         self._clock = clock
+        self._role_clock = role_clock
         self._jitter = jitter
         self._is_closing = is_closing
         self._can_connect = can_connect
         self._on_connected = on_connected
         self._on_failed = on_failed
+        self._cluster_store = cluster_store
+        self._timeline = timeline
+        self._standby = standby
+        self._on_promoted = on_promoted
         self._stopped = False
 
     def reconcile(self, now: float | None = None) -> float | None:
@@ -114,10 +134,174 @@ class PeerConnectionManager:
         if context.connection_generation != generation:
             return False
         context.connection = ConnectionState.online(now=self._clock())
+        context.last_heartbeat_at = self._clock()
         context.retry.reset()
         if self._on_connected is not None:
             self._on_connected(context, result)
         return True
+
+    def record_heartbeat(
+        self,
+        node_id: NodeId,
+        *,
+        now: float | None = None,
+        epoch: CoordinatorEpoch | None = None,
+        fencing_token: str | None = None,
+        role_state: Any | None = None,
+    ) -> bool:
+        """Record a valid authenticated heartbeat for an existing peer."""
+
+        try:
+            context = self._registry.context(node_id)
+        except KeyError:
+            return False
+        if context.descriptor.is_local or context.connection.status is not NodeConnectionStatus.ONLINE:
+            return False
+        current = self._clock() if now is None else now
+        role_now = self._role_clock() if now is None else now
+        if role_state is not None:
+            current_epoch = (
+                role_state.epoch
+                if isinstance(role_state, RoleState)
+                else role_state.coordinator_epoch
+            )
+            if (
+                current_epoch is None
+                or epoch is None
+                or epoch != current_epoch
+                or fencing_token is None
+            ):
+                return False
+            try:
+                renewed = renew_lease(
+                    current_epoch,
+                    coordinator_id=node_id,
+                    fencing_token=fencing_token,
+                    now=role_now,
+                )
+            except FencingError:
+                return False
+            if not isinstance(role_state, RoleState):
+                role_state.coordinator_epoch = renewed
+                if self._cluster_store is not None:
+                    self._cluster_store.save(role_state)
+        context.last_heartbeat_at = current
+        return True
+
+    def heartbeat_age(self, node_id: NodeId, *, now: float | None = None) -> float | None:
+        try:
+            observed = self._registry.context(node_id).last_heartbeat_at
+        except KeyError:
+            return None
+        if observed is None:
+            return None
+        current = self._clock() if now is None else now
+        return max(0.0, current - observed)
+
+    def renew_cluster_lease(
+        self,
+        state: Any,
+        *,
+        coordinator_id: NodeId,
+        fencing_token: str,
+        now: float | None = None,
+    ) -> Any:
+        """Renew and atomically publish the active Coordinator lease."""
+
+        current_epoch = state.coordinator_epoch
+        if current_epoch is None:
+            raise FencingError("no coordinator epoch exists")
+        renewed = renew_lease(
+            current_epoch,
+            coordinator_id=coordinator_id,
+            fencing_token=fencing_token,
+            now=self._role_clock() if now is None else now,
+        )
+        updated = replace(state, coordinator_epoch=renewed)
+        if self._cluster_store is not None:
+            self._cluster_store.save(updated)
+        state.coordinator_epoch = renewed
+        return state
+
+    def evaluate_failover(
+        self, state: RoleState, *, now: float | None = None
+    ) -> PromotionDecision | None:
+        """Evaluate the pure promotion rule from the existing peer timer path."""
+
+        if state.epoch is None:
+            return None
+        current = self._role_clock() if now is None else now
+        try:
+            return promote_subcoordinator(state, now=current)
+        except ValueError:
+            return None
+
+    def promote_if_due(
+        self, state: Any, *, now: float | None = None
+    ) -> PromotionDecision | None:
+        """Persist one promotion through the existing peer reconciliation tick."""
+
+        current = self._role_clock() if now is None else now
+        role_state = state if isinstance(state, RoleState) else RoleState(
+            assignments=state.role_assignments,
+            epoch=state.coordinator_epoch,
+            promotion_epochs=frozenset(state.promotion_epochs),
+        )
+        try:
+            decision = promote_subcoordinator(role_state, now=current)
+        except FencingError:
+            return None
+        if role_state.epoch is None:
+            return None
+        updated = replace(
+            state,
+            role_assignments=decision.assignments,
+            coordinator_epoch=decision.epoch,
+            promotion_epochs=role_state.promotion_epochs | {role_state.epoch.epoch},
+        )
+        if self._cluster_store is not None:
+            self._cluster_store.save(updated)
+        if isinstance(state, RoleState):
+            return decision
+        state.role_assignments = updated.role_assignments
+        state.coordinator_epoch = updated.coordinator_epoch
+        state.promotion_epochs = updated.promotion_epochs
+        if self._timeline is not None and self._standby is not None:
+            for batch in self._standby.batches():
+                try:
+                    self._timeline.import_batch(
+                        batch,
+                        cluster_id=state.cluster_id,
+                        expected_source_node_id=role_state.epoch.coordinator_id,
+                        expected_epoch=role_state.epoch.epoch,
+                        now=current,
+                    )
+                except ValueError:
+                    continue
+        if self._on_promoted is not None:
+            self._on_promoted(state, decision)
+        return decision
+
+    def rejoin_as_worker(self, state: Any, node_id: NodeId, current_epoch: int) -> Any:
+        """Persist the fencing result before accepting a former Coordinator."""
+
+        role_state = state if isinstance(state, RoleState) else RoleState(
+            assignments=state.role_assignments,
+            epoch=state.coordinator_epoch,
+            promotion_epochs=frozenset(state.promotion_epochs),
+        )
+        updated_roles = rejoin_as_worker(
+            role_state, node_id=node_id, current_epoch=current_epoch
+        )
+        if updated_roles == role_state:
+            return state
+        if isinstance(state, RoleState):
+            return updated_roles
+        updated = replace(state, role_assignments=updated_roles.assignments)
+        if self._cluster_store is not None:
+            self._cluster_store.save(updated)
+        state.role_assignments = updated.role_assignments
+        return state
 
     def failed(
         self,

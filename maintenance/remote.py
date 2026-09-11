@@ -86,6 +86,14 @@ OP_REQUIRED_CAPABILITY: dict[str, NodeCapability] = {
     "storage_candidates": NodeCapability.STORAGE_REVIEW,
     "process_request_quit": NodeCapability.PROCESS_TERMINATION,
     "process_force_quit": NodeCapability.PROCESS_FORCE_TERMINATION,
+    "consume_invite": NodeCapability.REMOTE_MANAGEMENT,
+    "assign_role": NodeCapability.REMOTE_MANAGEMENT,
+    "renew_coordinator_lease": NodeCapability.REMOTE_MANAGEMENT,
+    "worker_snapshot": NodeCapability.REMOTE_MANAGEMENT,
+    "standby_batch": NodeCapability.REMOTE_MANAGEMENT,
+    "pause_worker": NodeCapability.REMOTE_MANAGEMENT,
+    "revoke_worker": NodeCapability.REMOTE_MANAGEMENT,
+    "resume_worker": NodeCapability.REMOTE_MANAGEMENT,
 }
 
 OP_REQUIRED_PERMISSION: dict[str, NodePermission] = {
@@ -96,6 +104,27 @@ OP_REQUIRED_PERMISSION.update(
     {
         "process_request_quit": NodePermission.PROCESS_TERMINATION,
         "process_force_quit": NodePermission.PROCESS_FORCE_TERMINATION,
+        "consume_invite": NodePermission.REMOTE_MANAGEMENT,
+        "assign_role": NodePermission.REMOTE_MANAGEMENT,
+        "renew_coordinator_lease": NodePermission.REMOTE_MANAGEMENT,
+        "worker_snapshot": NodePermission.REMOTE_MANAGEMENT,
+        "standby_batch": NodePermission.REMOTE_MANAGEMENT,
+        "pause_worker": NodePermission.REMOTE_MANAGEMENT,
+        "revoke_worker": NodePermission.REMOTE_MANAGEMENT,
+        "resume_worker": NodePermission.REMOTE_MANAGEMENT,
+    }
+)
+
+ROLE_OPERATIONS = frozenset(
+    {
+        "consume_invite",
+        "assign_role",
+        "renew_coordinator_lease",
+        "worker_snapshot",
+        "standby_batch",
+        "pause_worker",
+        "revoke_worker",
+        "resume_worker",
     }
 )
 
@@ -548,6 +577,52 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
         if set(params) != {"processes", "action"}:
             raise RemoteProtocolError(f"{op} has unexpected parameters")
         return
+    if op in {
+        "consume_invite",
+        "assign_role",
+        "renew_coordinator_lease",
+        "worker_snapshot",
+        "standby_batch",
+        "pause_worker",
+        "revoke_worker",
+        "resume_worker",
+    }:
+        required = {"cluster_id", "epoch", "fencing_token"}
+        if not required <= set(params):
+            raise RemoteProtocolError(f"{op} requires cluster fencing fields")
+        if not isinstance(params["cluster_id"], str) or not params["cluster_id"]:
+            raise RemoteProtocolError("cluster_id is invalid")
+        if (
+            not isinstance(params["epoch"], int)
+            or isinstance(params["epoch"], bool)
+            or params["epoch"] < 0
+        ):
+            raise RemoteProtocolError("cluster epoch is invalid")
+        if not isinstance(params["fencing_token"], str) or not params["fencing_token"]:
+            raise RemoteProtocolError("fencing token is invalid")
+        if op in {"renew_coordinator_lease", "consume_invite"}:
+            if op == "consume_invite" and not isinstance(params.get("token"), str):
+                raise RemoteProtocolError("invite token is invalid")
+            return
+        if op == "assign_role":
+            if not isinstance(params.get("target_node_id"), str):
+                raise RemoteProtocolError("role target is invalid")
+            roles = params.get("roles")
+            if not isinstance(roles, list) or not roles or any(
+                not isinstance(role, str) for role in roles
+            ):
+                raise RemoteProtocolError("role list is invalid")
+            return
+        if op in {"pause_worker", "resume_worker", "revoke_worker"}:
+            if not isinstance(params.get("target_node_id"), str):
+                raise RemoteProtocolError("role target is invalid")
+            return
+        payload = params.get("payload")
+        if not isinstance(payload, dict):
+            raise RemoteProtocolError("snapshot payload is invalid")
+        if len(json.dumps(payload, separators=(",", ":"))) > MAX_ENVELOPE_BYTES // 2:
+            raise RemoteProtocolError("snapshot payload is too large")
+        return
     if params:
         raise RemoteProtocolError(f"{op} accepts no parameters")
 
@@ -581,6 +656,10 @@ class RemoteService:
         expected_caller_id: NodeId | None = None,
         grants: dict[NodeId, PeerGrant] | None = None,
         identity_fingerprint: str | None = None,
+        cluster_id: str | None = None,
+        coordinator_epoch: int | None = None,
+        fencing_token: str | None = None,
+        role_handler: Callable[[RemoteRequest], dict[str, Any]] | None = None,
     ) -> None:
         self._node_id = node_id
         self._display_name = display_name
@@ -622,6 +701,10 @@ class RemoteService:
                 }
             )
         )
+        self._cluster_id = cluster_id
+        self._coordinator_epoch = coordinator_epoch
+        self._fencing_token = fencing_token
+        self._role_handler = role_handler
 
     def handle(self, envelope_text: str) -> str:
         try:
@@ -661,6 +744,8 @@ class RemoteService:
             request.node_id.value, request.request_id, self._clock()
         ):
             raise RemoteAuthError("destructive request_id has already been used")
+        if request.op in ROLE_OPERATIONS:
+            self._verify_role_fence(request)
         try:
             payload = self._solve(request, grant=grant)
         except RemoteAuthorizationError as error:
@@ -744,6 +829,10 @@ class RemoteService:
         if permission not in permissions:
             raise RemoteAuthorizationError(f"caller lacks permission for {request.op}")
         validate_operation_params(request.op, request.params)
+        if request.op in ROLE_OPERATIONS:
+            if self._role_handler is None:
+                raise RemoteUnavailableError("role operations are unavailable")
+            return self._role_handler(request)
         if request.op == "hello":
             return {
                 "ok": True,
@@ -808,6 +897,24 @@ class RemoteService:
             candidates = self._provider.storage_candidates()
             return {"files": [file_candidate_to_dict(c) for c in candidates]}
         raise RemoteProtocolError(f"unknown operation: {request.op}")
+
+    def _verify_role_fence(self, request: RemoteRequest) -> None:
+        params = request.params
+        if self._cluster_id is not None and params.get("cluster_id") != self._cluster_id:
+            raise RemoteAuthorizationError("cluster identity is invalid")
+        if self._coordinator_epoch is not None and params.get("epoch") != self._coordinator_epoch:
+            raise RemoteAuthorizationError("coordinator epoch is stale")
+        if self._fencing_token is not None and not hmac.compare_digest(
+            str(params.get("fencing_token")), self._fencing_token
+        ):
+            raise RemoteAuthorizationError("coordinator fencing token is stale")
+
+    def update_cluster_fence(
+        self, *, cluster_id: str, coordinator_epoch: int, fencing_token: str
+    ) -> None:
+        self._cluster_id = cluster_id
+        self._coordinator_epoch = coordinator_epoch
+        self._fencing_token = fencing_token
 
     def _dashboard_snapshot(self) -> NodeSnapshot:
         dashboard = self._provider.dashboard_snapshot()
@@ -1142,6 +1249,15 @@ class RemoteSocketServer:
 
         self._service.update_grants(grants)
 
+    def update_cluster_fence(
+        self, *, cluster_id: str, coordinator_epoch: int, fencing_token: str
+    ) -> None:
+        self._service.update_cluster_fence(
+            cluster_id=cluster_id,
+            coordinator_epoch=coordinator_epoch,
+            fencing_token=fencing_token,
+        )
+
 
 def _handle_pairing_request(
     raw: dict[str, Any], handler: Callable[[PairingRequest], bool] | None
@@ -1313,6 +1429,116 @@ class AuthenticatedNodeProvider:
     def force_quit(self, refs: list[dict[str, Any]]) -> ProcessActionResult:
         return self.terminate(self._typed_request(refs, ProcessActionKind.FORCE_QUIT))
 
+    def consume_invite(
+        self, token: str, *, cluster_id: str, epoch: int, fencing_token: str
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "consume_invite",
+            {
+                "token": token,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
+    def assign_role(
+        self,
+        target_node_id: str,
+        roles: list[str],
+        *,
+        cluster_id: str,
+        epoch: int,
+        fencing_token: str,
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "assign_role",
+            {
+                "target_node_id": target_node_id,
+                "roles": roles,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
+    def renew_coordinator_lease(
+        self, *, cluster_id: str, epoch: int, fencing_token: str
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "renew_coordinator_lease",
+            {
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
+    def upload_snapshot(
+        self, payload: dict[str, Any], *, cluster_id: str, epoch: int, fencing_token: str
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "worker_snapshot",
+            {
+                "payload": payload,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
+    def upload_standby_batch(
+        self, payload: dict[str, Any], *, cluster_id: str, epoch: int, fencing_token: str
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "standby_batch",
+            {
+                "payload": payload,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
+    def pause_worker(
+        self, target_node_id: str, *, cluster_id: str, epoch: int, fencing_token: str
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "pause_worker",
+            {
+                "target_node_id": target_node_id,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
+    def revoke_worker(
+        self, target_node_id: str, *, cluster_id: str, epoch: int, fencing_token: str
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "revoke_worker",
+            {
+                "target_node_id": target_node_id,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
+    def resume_worker(
+        self, target_node_id: str, *, cluster_id: str, epoch: int, fencing_token: str
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "resume_worker",
+            {
+                "target_node_id": target_node_id,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
     def terminate(self, request: ProcessTerminationRequest) -> ProcessActionResult:
         if request.target_node_id != self._node_id:
             raise RemoteAuthError("process request target does not match provider")
@@ -1355,6 +1581,9 @@ class AuthenticatedNodeProvider:
             raise RemoteExecutionError(
                 "remote sent invalid process action data"
             ) from error
+
+    def _role_request(self, operation: str, params: dict[str, Any]) -> dict[str, Any]:
+        return self._request(operation, params)
 
     def reset_component_sample(self, key: str) -> None:
         return None

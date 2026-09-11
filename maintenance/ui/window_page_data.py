@@ -108,4 +108,14 @@ def nodes_manual_specs(controller: Any) -> list[ui_nodes.TrustedNodeSpec]:
 
 def cluster_specs(controller: Any) -> list[ui_cluster.ClusterNodeSpec]:
     registry = controller.__dict__.get("_node_registry")
-    return [] if registry is None else node_specs.cluster_node_specs(registry)
+    return (
+        []
+        if registry is None
+        else node_specs.cluster_node_specs(
+            registry,
+            role_editable=any(
+                role.value == "coordinator"
+                for role in controller._cluster_state.local_assignment.roles
+            ),
+        )
+    )

@@ -49,6 +49,12 @@ class RecordingWidget:
     def grid(self, **options: Any) -> None:
         del options
 
+    def grid_forget(self) -> None:
+        pass
+
+    def grid_columnconfigure(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
     def pack_forget(self) -> None:
         self.pack_forget_calls += 1
         self.mapped = False

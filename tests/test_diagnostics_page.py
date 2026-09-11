@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock
 
 from maintenance.diagnostics import (
+    ClusterDiagnostic,
     DiagnosticsSnapshot,
     PlacementDiagnostic,
     RenderDiagnostic,
@@ -65,6 +66,24 @@ class DiagnosticsPageTests(unittest.TestCase):
         texts = recorder.label_texts()
         self.assertIn("placement", texts)
         self.assertIn("worker-a · 2 eligible · selected", texts)
+
+    def test_cluster_history_row_is_labeled_as_logical_bytes(self) -> None:
+        page, _callbacks, _copy_callback, recorder = self.make_page()
+        page.render(
+            DiagnosticsSnapshot(
+                components=(),
+                operations=(),
+                nodes=(),
+                render=RenderDiagnostic(0, 0, 0, 0, 0),
+                cluster=ClusterDiagnostic(
+                    "coordinator", "coord", 2, 1.0, 10, 20, 0, 256,
+                    "normal", 100.0, False, None,
+                ),
+            )
+        )
+        texts = recorder.label_texts()
+        self.assertIn("History (logical bytes)", texts)
+        self.assertIn("10 / 20 bytes", texts)
 
     def test_copy_callback_receives_serialized_snapshot(self) -> None:
         page, _callbacks, copy_callback, _recorder = self.make_page()

@@ -9,8 +9,13 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock, call, patch
 
-from maintenance.cluster import ClusterState, trusted_node_record
+from maintenance.cluster import (
+    ClusterState,
+    PeerGrantRecord,
+    trusted_node_record,
+)
 from maintenance.components import ScanCoordinator
+from maintenance.components.cluster_roles import ClusterRole, RoleAssignment
 from maintenance.components.coordinator import (
     AppCoordinator,
     ComponentRefreshScheduler,
@@ -515,6 +520,111 @@ class WindowNodeConnectionTests(unittest.TestCase):
 
 
 class WindowNodeSwitchingTests(unittest.TestCase):
+    def test_role_revoke_removes_role_trust_grant_and_provider(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
+            start_discovery=False,
+        )
+        state = ClusterState.create_local(local_node_id="local")
+        state.role_assignments = state.role_assignments + (
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
+            ),
+        )
+        state.trusted_nodes = (
+            trusted_node_record(
+                node_id="peer-a",
+                display_name="Peer A",
+                hostname="peer-a",
+                host="192.0.2.10",
+                port=5000,
+                secret="secret",
+                transport_fingerprint="tls-pin",
+            ),
+        )
+        state.peer_grants = (
+            PeerGrantRecord(
+                caller_node_id="peer-a",
+                secret="a" * 64,
+                permissions=frozenset({NodePermission.DASHBOARD_READ}),
+            ),
+        )
+        window._cluster_state = state
+
+        def save_state(saved: ClusterState) -> bool:
+            window._cluster_state = saved
+            return True
+
+        window._save_cluster_state = Mock(side_effect=save_state)
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._rebuild_node_selector = Mock()
+        window._nodes_status = Mock()
+        window._nodes_error = Mock()
+        window._cancel_node_operations = Mock()
+        window._cancel_peer_connection = Mock()
+        window._invalidate_node_render_targets = Mock()
+        provider = window._node_registry.context(NodeId("peer-a")).provider
+
+        window_node_actions.revoke_node(window, "peer-a")
+
+        peer_assignment = next(
+            item
+            for item in window._cluster_state.role_assignments
+            if item.node_id == NodeId("peer-a")
+        )
+        self.assertTrue(peer_assignment.revoked)
+        self.assertIsNone(window._cluster_state.record("peer-a"))
+        self.assertIsNone(window._cluster_state.grant("peer-a"))
+        provider.invalidate.assert_called_once_with()
+        window._refresh_nodes_page.assert_called()
+        window._refresh_cluster_page.assert_called()
+        with self.assertRaises(KeyError):
+            window._node_registry.context(NodeId("peer-a"))
+
+    def test_role_less_trusted_node_can_still_be_revoked(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
+            start_discovery=False,
+        )
+        state = ClusterState.create_local(local_node_id="local")
+        state.trusted_nodes = (
+            trusted_node_record(
+                node_id="peer-a",
+                display_name="Peer A",
+                hostname="peer-a",
+                host="192.0.2.10",
+                port=5000,
+                secret="secret",
+                transport_fingerprint="tls-pin",
+            ),
+        )
+        window._cluster_state = state
+
+        def save_state(saved: ClusterState) -> bool:
+            window._cluster_state = saved
+            return True
+
+        window._save_cluster_state = Mock(side_effect=save_state)
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._rebuild_node_selector = Mock()
+        window._nodes_status = Mock()
+        window._nodes_error = Mock()
+        window._cancel_node_operations = Mock()
+        window._cancel_peer_connection = Mock()
+        window._invalidate_node_render_targets = Mock()
+        provider = window._node_registry.context(NodeId("peer-a")).provider
+
+        window_node_actions.revoke_node(window, "peer-a")
+
+        self.assertIsNone(window._cluster_state.record("peer-a"))
+        self.assertIsNone(window._cluster_state.grant("peer-a"))
+        provider.invalidate.assert_called_once_with()
+        window._nodes_error.assert_not_called()
+        with self.assertRaises(KeyError):
+            window._node_registry.context(NodeId("peer-a"))
+
     def test_revoke_selected_node_returns_to_local_without_render_crash(self) -> None:
         window = _make_window(
             _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),

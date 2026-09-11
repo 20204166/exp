@@ -47,6 +47,19 @@ def build_local_node_context(
         descriptor,
         id=NodeId(cluster_state.local_node_id or stable_node_id()),
         identity_fingerprint=node_identity_fingerprint(cluster_state.local_node_id),
+        role=(
+            "coordinator"
+            if any(
+                role.value == "coordinator"
+                for role in cluster_state.local_assignment.roles
+            )
+            else "subcoordinator"
+            if any(
+                role.value == "subcoordinator"
+                for role in cluster_state.local_assignment.roles
+            )
+            else "worker"
+        ),
     )
     return NodeContext(
         descriptor=descriptor,
@@ -94,6 +107,23 @@ def restore_trusted_nodes(
                 else NodeIdentityStatus.UNVERIFIED
             ),
             permissions=record.permissions,
+            role=(
+                "coordinator"
+                if any(
+                    assignment.node_id == node_id
+                    and any(role.value == "coordinator" for role in assignment.roles)
+                    for assignment in cluster_state.role_assignments
+                )
+                else "subcoordinator"
+                if any(
+                    assignment.node_id == node_id
+                    and any(
+                        role.value == "subcoordinator" for role in assignment.roles
+                    )
+                    for assignment in cluster_state.role_assignments
+                )
+                else "worker"
+            ),
         )
         context = NodeContext(
             descriptor=descriptor,

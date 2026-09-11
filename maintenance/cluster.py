@@ -12,12 +12,15 @@ display. The authenticated transport that consumes these envelopes lives in
 ``maintenance.remote``.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import math
+import secrets
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
@@ -25,6 +28,13 @@ from typing import Any, cast
 from maintenance.components.temperature import (
     temperature_sample_from_dict,
     temperature_sample_to_dict,
+)
+from maintenance.components.cluster_roles import (
+    ClusterRole,
+    CoordinatorEpoch,
+    RoleAssignment,
+    hash_invite,
+    new_fencing_token,
 )
 from maintenance.models import (
     CapabilityState,
@@ -50,7 +60,7 @@ from maintenance.preferences import default_preferences_path
 
 LOGGER = logging.getLogger(__name__)
 
-CLUSTER_SCHEMA_VERSION = 1
+CLUSTER_SCHEMA_VERSION = 2
 CONFIG_FILE_NAME = "cluster.json"
 
 
@@ -60,6 +70,42 @@ class ClusterDataError(ValueError):
 
 class ClusterSaveError(RuntimeError):
     """Raised when cluster settings could not be committed to disk."""
+
+
+class InviteExpiredError(ValueError):
+    """Raised when a pairing-only invite is no longer valid."""
+
+
+@dataclass(frozen=True, slots=True)
+class InviteRecord:
+    token_hash: str
+    target_node_id: str
+    expires_at: float
+    token: str = field(default="", repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.expires_at):
+            raise ValueError("invite expiry must be finite")
+
+
+def _initial_roles(local_node_id: str, now: float | None = None) -> tuple[RoleAssignment, ...]:
+    return (
+        RoleAssignment(
+            frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}),
+            node_id=NodeId(local_node_id),
+        ),
+    )
+
+
+def _initial_epoch(local_node_id: str, now: float | None = None) -> CoordinatorEpoch:
+    current = time.time() if now is None else now
+    return CoordinatorEpoch(
+        epoch=1,
+        coordinator_id=NodeId(local_node_id),
+        fencing_token=new_fencing_token(),
+        issued_at=current,
+        lease_expires_at=current + 120.0,
+    )
 
 
 def default_cluster_path(
@@ -481,7 +527,7 @@ class PeerGrantRecord:
     permissions: frozenset[NodePermission]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class ClusterState:
     """The persisted cluster settings and trusted-node records."""
 
@@ -490,6 +536,63 @@ class ClusterState:
     local_node_id: str = "local"
     local_identity_persisted: bool = True
     peer_grants: tuple[PeerGrantRecord, ...] = ()
+    cluster_id: str = "local-cluster"
+    role_assignments: tuple[RoleAssignment, ...] = ()
+    coordinator_epoch: CoordinatorEpoch | None = None
+    active_invites: tuple[InviteRecord, ...] = ()
+    promotion_epochs: frozenset[int] = frozenset()
+
+    @classmethod
+    def create_local(cls, *, local_node_id: str | None = None) -> ClusterState:
+        node_id = local_node_id or generate_stable_node_id()
+        return cls(
+            local_node_id=node_id,
+            cluster_id=secrets.token_urlsafe(18),
+            role_assignments=_initial_roles(node_id),
+            coordinator_epoch=_initial_epoch(node_id),
+        )
+
+    @property
+    def local_assignment(self) -> RoleAssignment:
+        assignment = next(
+            (
+                item
+                for item in self.role_assignments
+                if item.node_id is not None and item.node_id.value == self.local_node_id
+            ),
+            None,
+        )
+        return assignment or RoleAssignment(
+            frozenset({ClusterRole.WORKER}), node_id=NodeId(self.local_node_id)
+        )
+
+    def create_invite(
+        self, *, target_node_id: str = "", now: float | None = None, ttl_seconds: float = 300.0
+    ) -> InviteRecord:
+        if ttl_seconds <= 0:
+            raise ValueError("invite TTL must be positive")
+        token = secrets.token_urlsafe(32)
+        record = InviteRecord(
+            hash_invite(token),
+            target_node_id,
+            (time.time() if now is None else now) + ttl_seconds,
+        )
+        self.active_invites = self.active_invites + (record,)
+        # The token is returned to the caller but is never persisted.
+        return replace(record, token=token)
+
+    def consume_invite(self, token: str, *, now: float | None = None) -> InviteRecord:
+        current = time.time() if now is None else now
+        token_hash = hash_invite(token)
+        for record in self.active_invites:
+            if record.token_hash == token_hash:
+                self.active_invites = tuple(
+                    item for item in self.active_invites if item != record
+                )
+                if current > record.expires_at:
+                    raise InviteExpiredError("pairing invite has expired")
+                return record
+        raise InviteExpiredError("pairing invite is unknown or expired")
 
     def grant(self, caller_node_id: str) -> PeerGrantRecord | None:
         for grant in self.peer_grants:
@@ -557,18 +660,32 @@ class ClusterStore:
             warning_template="Failed to read cluster settings: %s",
         )
         if text is None:
-            state = ClusterState(local_node_id=generate_stable_node_id())
+            state = ClusterState.create_local()
             return replace(
                 state,
                 local_identity_persisted=self._save_identity_migration(state),
             )
         state = self._parse(text)
         if state.local_node_id == "local":
-            state = replace(state, local_node_id=generate_stable_node_id())
+            local_node_id = generate_stable_node_id()
+            state = replace(
+                state,
+                local_node_id=local_node_id,
+                role_assignments=_initial_roles(local_node_id),
+                coordinator_epoch=_initial_epoch(local_node_id),
+            )
             state = replace(
                 state,
                 local_identity_persisted=self._save_identity_migration(state),
             )
+        elif not state.role_assignments:
+            state = replace(
+                state,
+                role_assignments=_initial_roles(state.local_node_id),
+                coordinator_epoch=_initial_epoch(state.local_node_id),
+            )
+        elif state.coordinator_epoch is None:
+            state = replace(state, coordinator_epoch=_initial_epoch(state.local_node_id))
         return state
 
     def _save_identity_migration(self, state: ClusterState) -> bool:
@@ -610,7 +727,8 @@ class ClusterStore:
         if not isinstance(data, dict):
             LOGGER.warning("Cluster settings root must be an object; using defaults")
             return ClusterState()
-        if data.get("schema_version") != CLUSTER_SCHEMA_VERSION:
+        schema_version = data.get("schema_version")
+        if schema_version not in (1, CLUSTER_SCHEMA_VERSION):
             LOGGER.warning("Unsupported cluster settings schema; using defaults")
             return ClusterState()
         discovery = data.get("discovery_enabled", True)
@@ -648,12 +766,112 @@ class ClusterStore:
         if not isinstance(local_node_id, str) or not local_node_id:
             LOGGER.warning("Cluster local node identity is malformed; using a new id")
             local_node_id = "local"
+        role_assignments = self._parse_roles(data.get("role_assignments"), local_node_id)
+        epoch = self._parse_epoch(data.get("coordinator_epoch"))
+        invites = self._parse_invites(data.get("active_invites"))
+        raw_promotion_epochs = data.get("promotion_epochs", [])
+        promotion_epochs = (
+            frozenset(
+                item
+                for item in raw_promotion_epochs
+                if isinstance(item, int)
+                and not isinstance(item, bool)
+                and item >= 0
+            )
+            if isinstance(raw_promotion_epochs, list)
+            else frozenset()
+        )
         return ClusterState(
             discovery_enabled=discovery,
             trusted_nodes=records,
             local_node_id=local_node_id,
             peer_grants=grants,
+            cluster_id=(
+                data.get("cluster_id", "local-cluster")
+                if isinstance(data.get("cluster_id", "local-cluster"), str)
+                else "local-cluster"
+            ),
+            role_assignments=role_assignments,
+            coordinator_epoch=epoch,
+            active_invites=invites,
+            promotion_epochs=promotion_epochs,
         )
+
+    @staticmethod
+    def _parse_roles(value: Any, local_node_id: str) -> tuple[RoleAssignment, ...]:
+        if value is None:
+            return _initial_roles(local_node_id)
+        if not isinstance(value, list):
+            return ()
+        assignments: list[RoleAssignment] = []
+        for item in value:
+            if not isinstance(item, dict) or not isinstance(item.get("node_id"), str):
+                continue
+            raw_roles = item.get("roles", [])
+            if not isinstance(raw_roles, list):
+                continue
+            try:
+                roles = frozenset(ClusterRole(raw) for raw in raw_roles)
+                assignment = RoleAssignment(
+                    roles,
+                    node_id=NodeId(item["node_id"]),
+                    paused=bool(item.get("paused", False)),
+                    revoked=bool(item.get("revoked", False)),
+                )
+            except (TypeError, ValueError):
+                continue
+            if any(
+                (
+                    ClusterRole.SUBCOORDINATOR in current.roles
+                    and ClusterRole.SUBCOORDINATOR in assignment.roles
+                )
+                or (
+                    ClusterRole.COORDINATOR in current.roles
+                    and ClusterRole.COORDINATOR in assignment.roles
+                )
+                for current in assignments
+            ):
+                continue
+            assignments.append(assignment)
+        return tuple(assignments) or _initial_roles(local_node_id)
+
+    @staticmethod
+    def _parse_epoch(value: Any) -> CoordinatorEpoch | None:
+        if not isinstance(value, dict):
+            return None
+        try:
+            epoch = int(value["epoch"])
+            issued_at = float(value["issued_at"])
+            expiry = float(value["lease_expires_at"])
+            coordinator = value["coordinator_id"]
+            token = value["fencing_token"]
+            if not isinstance(coordinator, str) or not isinstance(token, str):
+                return None
+            return CoordinatorEpoch(
+                epoch, NodeId(coordinator), token, issued_at, expiry
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_invites(value: Any) -> tuple[InviteRecord, ...]:
+        if not isinstance(value, list):
+            return ()
+        records: list[InviteRecord] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            token_hash = item.get("token_hash")
+            target = item.get("target_node_id", "")
+            expiry = item.get("expires_at")
+            if isinstance(token_hash, str) and isinstance(target, str) and isinstance(
+                expiry, (int, float)
+            ):
+                try:
+                    records.append(InviteRecord(token_hash, target, float(expiry)))
+                except ValueError:
+                    continue
+        return tuple(records)
 
     @staticmethod
     def _parse_record(item: Any) -> TrustedNodeRecord | None:
@@ -782,6 +1000,37 @@ class ClusterStore:
             "schema_version": CLUSTER_SCHEMA_VERSION,
             "discovery_enabled": state.discovery_enabled,
             "local_node_id": state.local_node_id,
+            "cluster_id": state.cluster_id,
+            "role_assignments": [
+                {
+                    "node_id": item.node_id.value if item.node_id is not None else "",
+                    "roles": sorted(role.value for role in item.roles),
+                    "paused": item.paused,
+                    "revoked": item.revoked,
+                }
+                for item in state.role_assignments
+                if item.node_id is not None
+            ],
+            "coordinator_epoch": (
+                {
+                    "epoch": state.coordinator_epoch.epoch,
+                    "coordinator_id": state.coordinator_epoch.coordinator_id.value,
+                    "fencing_token": state.coordinator_epoch.fencing_token,
+                    "issued_at": state.coordinator_epoch.issued_at,
+                    "lease_expires_at": state.coordinator_epoch.lease_expires_at,
+                }
+                if state.coordinator_epoch is not None
+                else None
+            ),
+            "active_invites": [
+                {
+                    "token_hash": invite.token_hash,
+                    "target_node_id": invite.target_node_id,
+                    "expires_at": invite.expires_at,
+                }
+                for invite in state.active_invites
+            ],
+            "promotion_epochs": sorted(state.promotion_epochs),
             "trusted_nodes": [
                 {
                     "node_id": record.node_id,

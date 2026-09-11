@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import logging
+import json
 import subprocess
 import threading
 import time
 from dataclasses import replace
 from typing import Any, cast
 
-from maintenance.cluster import ClusterState, PeerGrantRecord
+from maintenance.cluster import PeerGrantRecord
 from maintenance.components import PeerConnectionManager
+from maintenance.components.cluster_storage import (
+    ResourceSnapshot,
+    SnapshotBatch,
+    snapshot_batch_to_dict,
+)
 from maintenance.components.coordinator import ComponentRefreshScheduler
 from maintenance.components.discovery_session import DiscoverySession
 from maintenance.nodes import (
@@ -25,6 +31,8 @@ from maintenance.remote import (
     PairingRequest,
     PeerGrant,
     RemoteAuthError,
+    RemoteUnavailableError,
+    RemoteRequest,
     build_trusted_transport,
 )
 from maintenance.remote_security import ensure_tls_material, server_context
@@ -108,6 +116,18 @@ def start_peer_listener(controller: Any) -> None:
         app_version=window.__version__,
         grants=grants,
         identity_fingerprint=descriptor.identity_fingerprint,
+        cluster_id=controller._cluster_state.cluster_id,
+        coordinator_epoch=(
+            controller._cluster_state.coordinator_epoch.epoch
+            if controller._cluster_state.coordinator_epoch is not None
+            else None
+        ),
+        fencing_token=(
+            controller._cluster_state.coordinator_epoch.fencing_token
+            if controller._cluster_state.coordinator_epoch is not None
+            else None
+        ),
+        role_handler=lambda request: handle_role_request(controller, request),
     )
     try:
         material = ensure_tls_material(
@@ -130,6 +150,129 @@ def start_peer_listener(controller: Any) -> None:
         return
     controller._peer_server = server
     controller._tls_fingerprint = material.fingerprint
+
+
+def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, Any]:
+    """Apply only the typed role operations accepted by the local target."""
+
+    from maintenance.components.cluster_roles import ClusterRole, RoleState, hash_invite
+
+    state = controller._cluster_state
+    if request.op == "consume_invite":
+        invite = next(
+            (
+                item
+                for item in state.active_invites
+                if item.token_hash == hash_invite(request.params["token"])
+            ),
+            None,
+        )
+        if invite is None:
+            raise RemoteAuthError("pairing invite is unknown or expired")
+        if invite.target_node_id and invite.target_node_id != (
+            request.caller_node_id or NodeId("")
+        ).value:
+            raise RemoteAuthError("pairing invite is bound to another node")
+        invite = state.consume_invite(request.params["token"], now=time.time())
+        if not controller._save_cluster_state(state):
+            state.active_invites = (*state.active_invites, invite)
+            raise RemoteAuthError("pairing invite could not be consumed")
+        return {"target_node_id": invite.target_node_id, "expires_at": invite.expires_at}
+    if request.op == "renew_coordinator_lease":
+        manager = controller.__dict__.get("_peer_connection_manager")
+        if manager is None:
+            manager = peer_connections(controller)
+        if manager is None:
+            raise RemoteUnavailableError("peer lifecycle is unavailable")
+        manager.renew_cluster_lease(
+            state,
+            coordinator_id=request.caller_node_id or NodeId(""),
+            fencing_token=request.params["fencing_token"],
+            now=time.time(),
+        )
+        update_listener_fence(controller, state)
+        return {"ok": True, "epoch": request.params["epoch"]}
+    if request.op in {"worker_snapshot", "standby_batch"}:
+        from maintenance.components.cluster_storage import snapshot_batch_from_dict
+
+        batch = snapshot_batch_from_dict(request.params["payload"])
+        if batch.cluster_id not in ("", state.cluster_id):
+            raise RemoteAuthError("snapshot cluster identity is invalid")
+        caller = request.caller_node_id
+        assignment = next(
+            (
+                item
+                for item in state.role_assignments
+                if item.node_id == caller
+            ),
+        )
+        if assignment is None or assignment.paused or assignment.revoked:
+            raise RemoteAuthError("snapshot sender is not active")
+        expected_role = (
+            ClusterRole.COORDINATOR
+            if request.op == "standby_batch"
+            else ClusterRole.WORKER
+        )
+        if expected_role not in assignment.roles:
+            raise RemoteAuthError("snapshot sender has no required role")
+        if batch.source_node_id != caller:
+            raise RemoteAuthError("snapshot source does not match authenticated caller")
+        storage = controller.__dict__.get(
+            "_standby_buffer" if request.op == "standby_batch" else "_cluster_timeline"
+        )
+        if storage is None:
+            raise RemoteUnavailableError("cluster storage is unavailable")
+        accepted = storage.import_batch(
+            batch,
+            cluster_id=state.cluster_id,
+            expected_source_node_id=caller,
+            expected_epoch=request.params["epoch"],
+            now=time.time(),
+        )
+        return {"accepted": accepted, "sequence": batch.sequence}
+    actor_id = request.caller_node_id
+    if actor_id is None:
+        raise RemoteAuthError("role operation has no caller identity")
+    actor = next(
+        (
+            item
+            for item in state.role_assignments
+            if item.node_id == actor_id
+        ),
+        None,
+    )
+    if actor is None:
+        raise RemoteAuthError("role caller is not enrolled")
+    role_state = RoleState(state.role_assignments, state.coordinator_epoch)
+    if request.op == "assign_role":
+        if state.record(request.params["target_node_id"]) is None and not any(
+            item.node_id == NodeId(request.params["target_node_id"])
+            for item in state.role_assignments
+        ):
+            raise RemoteAuthError("role target is not enrolled")
+        updated, _change = role_state.assign(
+            actor=actor,
+            target=NodeId(request.params["target_node_id"]),
+            roles=frozenset(ClusterRole(value) for value in request.params["roles"]),
+            now=time.time(),
+        )
+    elif request.op == "pause_worker":
+        updated = role_state.pause(
+            actor=actor, target=NodeId(request.params["target_node_id"])
+        )
+    elif request.op == "resume_worker":
+        updated = role_state.resume(
+            actor=actor, target=NodeId(request.params["target_node_id"])
+        )
+    elif request.op == "revoke_worker":
+        updated = role_state.revoke(
+            actor=actor, target=NodeId(request.params["target_node_id"])
+        )
+    else:
+        raise RemoteAuthError("unknown role operation")
+    if not controller._save_cluster_state(replace(state, role_assignments=updated.assignments)):
+        raise RemoteAuthError("role state could not be saved")
+    return {"ok": True}
 
 
 def handle_pairing_request(controller: Any, request: PairingRequest) -> bool:
@@ -167,13 +310,7 @@ def handle_pairing_request(controller: Any, request: PairingRequest) -> bool:
                 ),
             )
             result["approved"] = controller._save_cluster_state(
-                ClusterState(
-                    discovery_enabled=current.discovery_enabled,
-                    trusted_nodes=current.trusted_nodes,
-                    local_node_id=current.local_node_id,
-                    local_identity_persisted=current.local_identity_persisted,
-                    peer_grants=grants,
-                )
+                replace(current, peer_grants=grants)
             )
         completed.set()
 
@@ -232,9 +369,52 @@ def peer_connections(controller: Any) -> PeerConnectionManager | None:
         can_connect=lambda context: can_connect_peer(controller, context),
         on_connected=lambda context, result: attach_peer(controller, context, result),
         on_failed=lambda context, _failure: detach_peer(controller, context),
+        cluster_store=getattr(controller, "_cluster_store", None),
+        timeline=getattr(controller, "_cluster_timeline", None),
+        standby=getattr(controller, "_standby_buffer", None),
+        on_promoted=lambda state, decision: handle_promotion(controller, state, decision),
     )
     controller.__dict__["_peer_connection_manager"] = manager
     return manager
+
+
+def update_listener_fence(controller: Any, state: Any) -> None:
+    server = controller.__dict__.get("_peer_server")
+    epoch = state.coordinator_epoch
+    if server is not None and epoch is not None:
+        server.update_cluster_fence(
+            cluster_id=state.cluster_id,
+            coordinator_epoch=epoch.epoch,
+            fencing_token=epoch.fencing_token,
+        )
+
+
+def handle_promotion(controller: Any, state: Any, decision: Any) -> None:
+    """Activate Coordinator storage and import the prior standby epoch."""
+
+    from maintenance.components.cluster_storage import CoordinatorTimeline
+
+    if controller.__dict__.get("_cluster_timeline") is None:
+        controller.__dict__["_cluster_timeline"] = CoordinatorTimeline(
+            controller._cluster_store.path.with_name("cluster-history.sqlite3")
+        )
+    standby = controller.__dict__.get("_standby_buffer")
+    timeline = controller.__dict__["_cluster_timeline"]
+    if standby is not None:
+        previous_epoch = decision.epoch.epoch - 1
+        for batch in standby.batches():
+            if batch.source_epoch != previous_epoch:
+                continue
+            try:
+                timeline.import_batch(
+                    batch,
+                    cluster_id=state.cluster_id,
+                    expected_epoch=previous_epoch,
+                    now=time.time(),
+                )
+            except ValueError:
+                continue
+    update_listener_fence(controller, state)
 
 
 def can_connect_peer(controller: Any, context: NodeContext) -> bool:
@@ -317,8 +497,93 @@ def reconcile_peer_connections(controller: Any) -> None:
     manager = controller._peer_connections()
     if manager is None or controller._is_closing:
         return
+    manager.promote_if_due(controller._cluster_state)
+    queue_cluster_uploads(controller, manager)
     deadline = manager.reconcile()
     controller._schedule_peer_reconciliation(deadline)
+
+
+def queue_cluster_uploads(controller: Any, manager: PeerConnectionManager) -> None:
+    """Deliver bounded local snapshots through the existing coordinator runner."""
+
+    state = controller._cluster_state
+    epoch = state.coordinator_epoch
+    snapshot = getattr(controller, "snapshot", None)
+    if epoch is None or snapshot is None:
+        return
+    registry = controller.__dict__.get("_node_registry")
+    coordinator_context = None
+    subcoordinator_context = None
+    if registry is not None:
+        for context in registry.contexts():
+            if context.descriptor.role == "coordinator" and not context.descriptor.is_local:
+                coordinator_context = context
+            if context.descriptor.role == "subcoordinator" and not context.descriptor.is_local:
+                subcoordinator_context = context
+    resources = getattr(snapshot, "resources", ())
+    now = time.time()
+    sequence = int(controller.__dict__.get("_cluster_upload_sequence", 0)) + 1
+    controller.__dict__["_cluster_upload_sequence"] = sequence
+    payload = tuple(
+        ResourceSnapshot(
+            NodeId(state.local_node_id),
+            str(getattr(resource, "key", "unknown")),
+            str(getattr(resource, "value", "Unavailable")),
+            None,
+            getattr(resource, "percent", None),
+            now,
+        )
+        for resource in resources
+    )
+    batch = SnapshotBatch(
+        f"{state.local_node_id}:{epoch.epoch}:{sequence}",
+        NodeId(state.local_node_id),
+        epoch.epoch,
+        sequence,
+        now,
+        payload,
+        0,
+        state.cluster_id,
+    )
+    batch = replace(
+        batch,
+        encoded_size=len(
+            json.dumps(snapshot_batch_to_dict(batch), separators=(",", ":")).encode()
+        ),
+    )
+    local_roles = state.local_assignment.roles
+    if coordinator_context is not None and coordinator_context.provider is not None and "worker" in {
+        role.value for role in local_roles
+    } and "coordinator" not in {role.value for role in local_roles}:
+        key = f"cluster:worker-snapshot:{coordinator_context.node_id.value}"
+        if not manager._coordinator.in_flight(key):
+            manager._coordinator.run(
+                key,
+                lambda cancel, _progress: coordinator_context.provider.upload_snapshot(
+                    snapshot_batch_to_dict(batch),
+                    cluster_id=state.cluster_id,
+                    epoch=epoch.epoch,
+                    fencing_token=epoch.fencing_token,
+                ),
+            )
+    if subcoordinator_context is not None and subcoordinator_context.provider is not None and "coordinator" in {
+        role.value for role in local_roles
+    }:
+        timeline = controller.__dict__.get("_cluster_timeline")
+        batches = timeline.batches() if timeline is not None else ()
+        if batches:
+            latest = batches[-1]
+            key = f"cluster:standby-batch:{subcoordinator_context.node_id.value}"
+            if not manager._coordinator.in_flight(key):
+                manager._coordinator.run(
+                    key,
+                    lambda cancel, _progress: subcoordinator_context.provider.upload_standby_batch(
+                        snapshot_batch_to_dict(latest),
+                        cluster_id=state.cluster_id,
+                        epoch=epoch.epoch,
+                        fencing_token=epoch.fencing_token,
+                    ),
+                )
 
 
 def schedule_peer_reconciliation(controller: Any, deadline: float | None) -> None:
@@ -546,13 +811,7 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
         updated_record if item.node_id == record.node_id else item
         for item in state.trusted_nodes
     )
-    updated_state = ClusterState(
-        discovery_enabled=state.discovery_enabled,
-        trusted_nodes=updated_records,
-        local_node_id=state.local_node_id,
-        local_identity_persisted=state.local_identity_persisted,
-        peer_grants=state.peer_grants,
-    )
+    updated_state = replace(state, trusted_nodes=updated_records)
     if not controller._save_cluster_state(updated_state):
         controller._nodes_error("Cluster settings could not be saved")
         return False

@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 import tkinter as tk
 from collections.abc import Callable
 from queue import Queue
@@ -21,6 +22,9 @@ from maintenance.components import (
     DashboardScanLifecycle,
     NodeSelection,
     PeerConnectionManager,
+    CoordinatorTimeline,
+    StandbyBuffer,
+    StorageStatus,
     ResourceFeatureCatalog,
     ScanCoordinator,
     node_context,  # noqa: F401 - retained context patch seam
@@ -45,7 +49,7 @@ from maintenance.components.temperature import (
     TemperatureRenderState,
     TemperatureTelemetryUpdate,
 )
-from maintenance.diagnostics import build_diagnostics_snapshot
+from maintenance.diagnostics import ClusterDiagnostic, build_diagnostics_snapshot
 from maintenance.dialogs import (
     InfoDialog,  # noqa: F401 - retained dialog patch seam
     ProcessDialog,  # noqa: F401 - retained dialog patch seam
@@ -179,6 +183,17 @@ class AppWindow:
         self._preferences = self._preferences_store.load()
         self._cluster_store = cluster_store or ClusterStore(default_cluster_path())
         self._cluster_state = self._cluster_store.load()
+        local_roles = self._cluster_state.local_assignment.roles
+        self._cluster_timeline = (
+            CoordinatorTimeline(self._cluster_store.path.with_name("cluster-history.sqlite3"))
+            if any(role.value == "coordinator" for role in local_roles)
+            else None
+        )
+        self._standby_buffer = (
+            StandbyBuffer(self._cluster_store.path.with_name("cluster-standby.sqlite3"))
+            if any(role.value == "subcoordinator" for role in local_roles)
+            else None
+        )
         self._provision_target_grant = provision_target_grant
         self.snapshot: DashboardSnapshot | None = None
         self._is_closing = False
@@ -365,6 +380,36 @@ class AppWindow:
             discovery_reason=getattr(
                 self._coordinator.discovery, "unavailable_reason", None
             ),
+            cluster=self._cluster_diagnostic(),
+        )
+
+    def _cluster_diagnostic(self) -> ClusterDiagnostic:
+        assignment = self._cluster_state.local_assignment
+        role = ", ".join(sorted(item.value for item in assignment.roles))
+        epoch = self._cluster_state.coordinator_epoch
+        timeline = self._cluster_timeline
+        standby = self._standby_buffer
+        status = timeline.status() if timeline is not None else StorageStatus(
+            0, 2 * 1024 * 1024 * 1024, 0, None, None
+        )
+        standby_status = standby.status() if standby is not None else None
+        return ClusterDiagnostic(
+            role=role,
+            coordinator_id=(epoch.coordinator_id.value if epoch is not None else "unknown"),
+            epoch=epoch.epoch if epoch is not None else 0,
+            heartbeat_age_seconds=(
+                max(0.0, time.time() - epoch.issued_at) if epoch is not None else None
+            ),
+            database_bytes=status.bytes_used,
+            database_cap_bytes=status.max_bytes,
+            standby_bytes=standby_status.bytes_used if standby_status else 0,
+            standby_cap_bytes=standby_status.max_bytes if standby_status else 0,
+            retention_pressure=(
+                "limit reached" if status.history_writes_paused else "normal"
+            ),
+            last_snapshot_at=status.newest_at,
+            history_writes_paused=status.history_writes_paused,
+            failure=status.warning,
         )
 
     def _copy_diagnostics(self, text: str) -> None:
@@ -472,6 +517,18 @@ class AppWindow:
         self, node_id: str, raw_permissions: frozenset[str]
     ) -> None:
         ui_node_actions.set_node_permissions(self, node_id, raw_permissions)
+
+    def _set_node_roles(self, node_id: str, roles: frozenset[str]) -> None:
+        ui_node_actions.set_node_roles(self, node_id, roles)
+
+    def _pause_node(self, node_id: str) -> None:
+        ui_node_actions.pause_node(self, node_id)
+
+    def _resume_node(self, node_id: str) -> None:
+        ui_node_actions.resume_node(self, node_id)
+
+    def _revoke_node(self, node_id: str) -> None:
+        ui_node_actions.revoke_node(self, node_id)
 
     def _set_node_color(self, node_id: str, color: str) -> None:
         ui_node_actions.set_node_color(self, node_id, color)

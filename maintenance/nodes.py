@@ -242,6 +242,7 @@ class NodePermission(str, Enum):
     PROCESS_FORCE_TERMINATION = "process_force_termination"
     STORAGE_REVIEW = "storage_review"
     CLEANUP = "cleanup"
+    REMOTE_MANAGEMENT = "remote_management"
 
 
 class ProcessActionKind(str, Enum):
@@ -292,6 +293,7 @@ class NodeDescriptor:
     identity_status: NodeIdentityStatus = NodeIdentityStatus.UNVERIFIED
     permissions: frozenset[NodePermission] = frozenset()
     pairing_state: NodePairingState = NodePairingState.TRUSTED
+    role: str = "worker"
 
     def has(self, capability: NodeCapability) -> bool:
         return capability in self.capabilities
@@ -380,6 +382,7 @@ def local_capabilities() -> frozenset[NodeCapability]:
             NodeCapability.PROCESS_FORCE_TERMINATION,
             NodeCapability.STORAGE_REVIEW,
             NodeCapability.CLEANUP,
+            NodeCapability.REMOTE_MANAGEMENT,
         }
     )
 
@@ -677,6 +680,8 @@ class NodeContext:
     connection: ConnectionState = field(default_factory=ConnectionState.unknown)
     retry: RetryState = field(default_factory=RetryState)
     connection_generation: int = 0
+    last_heartbeat_at: float | None = None
+    last_snapshot_at: float | None = None
 
     @property
     def node_id(self) -> NodeId:

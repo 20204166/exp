@@ -41,6 +41,14 @@ def save_cluster_state(controller: Any, state: Any) -> bool:
         window.LOGGER.warning("Failed to save cluster settings: %s", error)
         return False
     controller._cluster_state = state
+    epoch = state.coordinator_epoch
+    server = controller.__dict__.get("_peer_server")
+    if server is not None and epoch is not None:
+        server.update_cluster_fence(
+            cluster_id=state.cluster_id,
+            coordinator_epoch=epoch.epoch,
+            fencing_token=epoch.fencing_token,
+        )
     controller._sync_peer_listener_grants()
     return True
 

@@ -38,6 +38,7 @@ def trusted_node_specs(
 
     manual = set(manual_node_ids)
     selectable = {descriptor.id for descriptor in registry.selectable_descriptors()}
+    actor = cluster_state.local_assignment
     specs: list[ui_nodes.TrustedNodeSpec] = []
     for context in registry.contexts():
         descriptor = context.descriptor
@@ -48,6 +49,14 @@ def trusted_node_specs(
         ):
             continue
         record = cluster_state.record(descriptor.id.value)
+        assignment = next(
+            (
+                item
+                for item in cluster_state.role_assignments
+                if item.node_id is not None and item.node_id.value == descriptor.id.value
+            ),
+            None,
+        )
         specs.append(
             ui_nodes.TrustedNodeSpec(
                 node_id=descriptor.id.value,
@@ -71,6 +80,24 @@ def trusted_node_specs(
                 ),
                 pairing_state=descriptor.pairing_state.value,
                 target_state=render_target_state(descriptor, context.snapshot).label,
+                role=(
+                    "coordinator"
+                    if assignment is not None
+                    and any(item.value == "coordinator" for item in assignment.roles)
+                    else "subcoordinator"
+                    if assignment is not None
+                    and any(item.value == "subcoordinator" for item in assignment.roles)
+                    else "worker"
+                ),
+                roles=tuple(
+                    sorted(item.value for item in assignment.roles)
+                    if assignment is not None
+                    else ("worker",)
+                ),
+                role_editable=any(
+                    item.value == "coordinator" for item in actor.roles
+                ),
+                paused=assignment.paused if assignment is not None else False,
             )
         )
     return specs
@@ -115,7 +142,7 @@ def manual_node_specs(
     return specs
 
 
-def cluster_node_specs(registry: Any) -> list[ui_cluster.ClusterNodeSpec]:
+def cluster_node_specs(registry: Any, *, role_editable: bool = False) -> list[ui_cluster.ClusterNodeSpec]:
     """Project registered contexts and untrusted observations for All Systems."""
 
     selectable = {descriptor.id for descriptor in registry.selectable_descriptors()}
@@ -143,6 +170,8 @@ def cluster_node_specs(registry: Any) -> list[ui_cluster.ClusterNodeSpec]:
                     else None
                 ),
                 target_state=presentation.label,
+                role=descriptor.role,
+                role_editable=role_editable,
             )
         )
     for candidate in registry.discovered_candidates():

@@ -15,6 +15,25 @@ if TYPE_CHECKING:
     from .background import BackgroundTaskRunner
 
 from .catalog import ResourceFeature, ResourceFeatureCatalog
+from .cluster_roles import (
+    ClusterRole,
+    CoordinatorEpoch,
+    CoordinatorLease,
+    FencingError,
+    PromotionDecision,
+    RoleAssignment,
+    RoleAuthorizationError,
+    RoleChange,
+    RoleState,
+    rejoin_as_worker,
+)
+from .cluster_storage import (
+    CoordinatorTimeline,
+    ResourceSnapshot,
+    SnapshotBatch,
+    StandbyBuffer,
+    StorageStatus,
+)
 from .coordinator import ScanCoordinator
 from .dashboard_scan import DashboardScanLifecycle
 from .discovery_session import DiscoverySession, DiscoveryStartResult
@@ -83,6 +102,10 @@ __all__ = [
     "PROTECTED_PROCESS_NAMES",
     "SERVICE_TYPE",
     "BackgroundTaskRunner",
+    "ClusterRole",
+    "CoordinatorEpoch",
+    "CoordinatorLease",
+    "CoordinatorTimeline",
     "DashboardScanLifecycle",
     "DiscoveryAdvertisement",
     "DiscoveryEndpoint",
@@ -91,6 +114,7 @@ __all__ = [
     "DownloadScanner",
     "DownloadsPathResolver",
     "GpuDetector",
+    "FencingError",
     "HashFingerprint",
     "JobClass",
     "NetworkDiscovery",
@@ -101,13 +125,23 @@ __all__ = [
     "PlacementRequest",
     "PlacementView",
     "placement_view_for_context",
+    "PromotionDecision",
     "ProcessSafetyPolicy",
     "ProgressCallback",
     "ProgressTask",
     "ResourceFeature",
     "ResourceFeatureCatalog",
+    "ResourceSnapshot",
+    "RoleAssignment",
+    "RoleAuthorizationError",
+    "RoleChange",
+    "RoleState",
+    "rejoin_as_worker",
     "ScanCancelled",
     "ScanCoordinator",
+    "SnapshotBatch",
+    "StandbyBuffer",
+    "StorageStatus",
     "TemperatureEvent",
     "TemperaturePolicy",
     "TemperatureSample",

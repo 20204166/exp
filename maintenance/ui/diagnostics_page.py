@@ -88,6 +88,7 @@ class DiagnosticsPage:
         self._components_body = self._section(self.content, "Components")
         self._operations_body = self._section(self.content, "Running work")
         self._placement_body = self._section(self.content, "Placement")
+        self._cluster_body = self._section(self.content, "Cluster")
         self._nodes_body = self._section(self.content, "Nodes and connections")
         self._render_body = self._section(self.content, "Rendering")
 
@@ -149,6 +150,40 @@ class DiagnosticsPage:
             if placement is not None
             else [],
             empty_text="No placement decision yet",
+        )
+        cluster = snapshot.cluster
+        self._render_rows(
+            self._cluster_body,
+            [
+                ("Role", cluster.role),
+                ("Coordinator", cluster.coordinator_id),
+                ("Epoch", str(cluster.epoch)),
+                (
+                    "Heartbeat",
+                    "No heartbeat"
+                    if cluster.heartbeat_age_seconds is None
+                    else f"{cluster.heartbeat_age_seconds:.1f}s ago",
+                ),
+                (
+                    "History (logical bytes)",
+                    f"{cluster.database_bytes} / {cluster.database_cap_bytes} bytes",
+                ),
+                (
+                    "Standby",
+                    f"{cluster.standby_bytes} / {cluster.standby_cap_bytes} bytes",
+                ),
+                ("Retention", cluster.retention_pressure),
+                (
+                    "Writes",
+                    "History writes paused"
+                    if cluster.history_writes_paused
+                    else "Collecting",
+                ),
+                ("Failure", cluster.failure or "None"),
+            ]
+            if cluster is not None
+            else [],
+            empty_text="No cluster configured",
         )
         self._render_rows(
             self._nodes_body,
