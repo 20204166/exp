@@ -436,6 +436,14 @@ class AppCoordinator:
         state = self.state(key)
         if state.in_flight:
             state.rerun_requested = True
+            if on_result is not None:
+                state.on_result = on_result
+            if on_error is not None:
+                state.on_error = on_error
+            if on_progress is not None:
+                state.on_progress = on_progress
+            state.on_finished = on_finished
+            state.task_factory = task_factory
             return None
         if on_result is not None:
             state.on_result = on_result

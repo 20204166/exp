@@ -1408,8 +1408,8 @@ class AppCoordinatorRunTests(unittest.TestCase):
         runner.run_next()
         self.assertEqual(len(runner.workers), 1, "coalesced trigger must replay")
         runner.run_next()
-        self.assertEqual(results, [["first"], ["first"]])
-        self.assertEqual(coordinator.last_result("storage"), ["first"])
+        self.assertEqual(results, [["first"], ["second"]])
+        self.assertEqual(coordinator.last_result("storage"), ["second"])
 
     def test_run_delivers_progress_and_result_through_delivery(self) -> None:
         coordinator, runner = self._make()
@@ -1525,8 +1525,8 @@ class AppCoordinatorRunTests(unittest.TestCase):
         runner.run_next()
         self.assertEqual(len(runner.workers), 1, "replay started after release")
         runner.run_next()
-        self.assertEqual(coordinator.last_result("storage"), 1)
-        self.assertEqual(results, [1])
+        self.assertEqual(coordinator.last_result("storage"), 2)
+        self.assertEqual(results, [2])
 
     def test_run_notifies_waiting_subscribers(self) -> None:
         coordinator, runner = self._make()
@@ -1599,6 +1599,28 @@ class AppCoordinatorRunTests(unittest.TestCase):
         runner.run_next()
 
         self.assertEqual(completed, [["ok"]])
+
+    def test_run_after_cancel_replays_new_task_with_new_callbacks(self) -> None:
+        runner = DeferredRunner()
+        coordinator = AppCoordinator(runner=runner, deliver=lambda cb: cb())
+        results: list[tuple[str, str]] = []
+
+        coordinator.run(
+            "key",
+            lambda _cancel, _progress: "task-a",
+            on_result=lambda _key, value: results.append(("a", value)),
+        )
+        coordinator.cancel("key")
+        coordinator.run(
+            "key",
+            lambda _cancel, _progress: "task-b",
+            on_result=lambda _key, value: results.append(("b", value)),
+        )
+        runner.run()  # complete the cancelled A worker -> triggers replay
+        self.assertEqual(runner.pending, 1)
+        runner.run()  # the replay executes B
+
+        self.assertEqual(results, [("b", "task-b")])
 
 
 class MonotonicClockTests(unittest.TestCase):

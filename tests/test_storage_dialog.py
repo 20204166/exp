@@ -306,6 +306,8 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
         dialog = self._dialog()
         dialog.coordinator = coordinator
+        dialog.provider = Mock()
+        dialog.provider.storage_candidates = Mock(return_value=["shared"])
 
         generation = coordinator.run("storage", lambda _event, _progress: ["shared"])
         self.assertIsNotNone(generation)
@@ -316,10 +318,10 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         self.assertTrue(coordinator.in_flight("storage"))
 
         runner.run_next()  # the cancelled worker releases the lease + replays
-        runner.run_next()  # the replay delivers the result to the waiter
+        runner.run_next()  # the retry's replay scan delivers the result
 
         self.assertFalse(dialog._waiting_for_shared)
-        dialog._show_candidates.assert_called_once_with(["shared"])
+        dialog._show_candidates.assert_called_with(["shared"])
         self.assertFalse(coordinator.in_flight("storage"))
 
     def test_cached_result_is_rendered_on_reopen(self) -> None:
