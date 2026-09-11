@@ -1,6 +1,7 @@
 """Focused tests for conservative and reliable Storage Cleanup behaviour."""
 
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,11 @@ from unittest.mock import patch
 
 from maintenance.actions import FileManager
 from maintenance.components import DownloadScanner, ScanCancelled
+
+
+def _is_effective_root() -> bool:
+    geteuid = getattr(os, "geteuid", None)
+    return geteuid is not None and geteuid() == 0
 
 
 class DuplicateCorrectnessTests(unittest.TestCase):
@@ -129,7 +135,8 @@ class StorageEdgeCaseTests(unittest.TestCase):
 
             self.assertEqual([candidate.path for candidate in candidates], [target])
 
-    @unittest.skipIf(os.geteuid() == 0, "permission test requires a non-root user")
+    @unittest.skipIf(_is_effective_root(), "permission test requires a non-root user")
+    @unittest.skipIf(sys.platform == "win32", "permission bits are POSIX-only")
     def test_inaccessible_files_are_never_marked_as_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
