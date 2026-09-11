@@ -25,6 +25,7 @@ from tests.support.process_actions import ActionPsutil as FakePsutil
 from tests.support.scanner import (
     make_baseline_psutil,
     make_gpu_probe,
+    make_scanner,
     scanner_environment,
 )
 
@@ -235,7 +236,7 @@ class ScannerTests(unittest.TestCase):
         cancel_event.set()
 
         with self.assertRaises(ScanCancelled):
-            SystemScanner(Path("Downloads")).scan_processes(cancel_event=cancel_event)
+            make_scanner().scan_processes(cancel_event=cancel_event)
 
     def test_snapshot_get_returns_resource_and_rejects_unknown_key(self) -> None:
         resource = make_summary(
@@ -381,7 +382,7 @@ class ScannerTests(unittest.TestCase):
             )
 
     def test_gpu_fallback_details_are_cached_per_scanner(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         with (
             patch("maintenance.scanner.platform.system", return_value="Windows"),
             patch.object(scanner, "_nvidia_gpu_details", return_value=None),
@@ -397,7 +398,7 @@ class ScannerTests(unittest.TestCase):
         loader.assert_called_once_with()
 
     def test_gpu_fallback_errors_are_retried_for_recovery(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         with (
             patch("maintenance.scanner.platform.system", return_value="Darwin"),
             patch.object(scanner, "_mac_gpu_probe") as loader,
@@ -416,7 +417,7 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(loader.call_count, 2)
 
     def test_gpu_details_uses_gpu_detector(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with patch(
             "maintenance.scanner.GpuDetector.detect_with_capability",
@@ -427,7 +428,7 @@ class ScannerTests(unittest.TestCase):
         detect.assert_called_once_with()
 
     def test_nvml_failure_is_remembered_and_probes_are_skipped(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         calls = {"n": 0}
 
         def failing_init() -> None:
@@ -447,7 +448,7 @@ class ScannerTests(unittest.TestCase):
         self.assertIn("NVIDIA GPU query failed", "\n".join(log.output))
 
     def test_reset_static_cache_re_enables_nvml_probe(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         calls = {"n": 0}
 
         def failing_init() -> None:
@@ -466,7 +467,7 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(calls["n"], 2)
 
     def test_nvml_success_path_probes_every_call(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         calls = {"n": 0}
 
         def succeeding_init() -> None:
@@ -485,7 +486,7 @@ class ScannerTests(unittest.TestCase):
         self.assertFalse(scanner._nvml_probe_failed)
 
     def test_gpu_details_times_out_hung_query(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         scanner.GPU_QUERY_TIMEOUT_SECONDS = 0.05
 
         def hang() -> GpuProbe:
@@ -508,7 +509,7 @@ class ScannerTests(unittest.TestCase):
         self.assertLess(elapsed, 2)
 
     def test_gpu_details_bounds_hung_nvidia_query(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         scanner.GPU_QUERY_TIMEOUT_SECONDS = 0.05
 
         def hang_nvidia() -> tuple[str, ...] | None:
@@ -536,7 +537,7 @@ class ScannerTests(unittest.TestCase):
     def test_gpu_details_avoids_new_worker_while_previous_query_in_flight(
         self,
     ) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         scanner.GPU_QUERY_TIMEOUT_SECONDS = 0.05
 
         def hang() -> GpuProbe:
@@ -565,7 +566,7 @@ class ScannerTests(unittest.TestCase):
         thread_factory.assert_not_called()
 
     def test_gpu_details_recovers_after_late_worker_completion(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         scanner.GPU_QUERY_TIMEOUT_SECONDS = 0.05
         release = threading.Event()
 
@@ -598,7 +599,7 @@ class ScannerTests(unittest.TestCase):
             self.assertFalse(scanner._gpu_query_in_flight)
 
     def test_gpu_details_reports_worker_error_as_unavailable(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with (
             patch.object(
@@ -616,7 +617,7 @@ class ScannerTests(unittest.TestCase):
         self.assertIn("boom", "\n".join(log.output))
 
     def test_scan_dashboard_still_honours_cancellation(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         cancel_event = threading.Event()
         cancel_event.set()
 
@@ -624,7 +625,7 @@ class ScannerTests(unittest.TestCase):
             scanner.scan_dashboard(cancel_event=cancel_event)
 
     def test_scan_dashboard_output_matches_expected_cards(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake_psutil = make_baseline_psutil()
 
         with scanner_environment(scanner, fake_psutil):
@@ -664,7 +665,7 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(by_key["battery"].subtitle, "Charging")
 
     def test_scan_dashboard_degrades_failing_battery_sensor(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake_psutil = make_baseline_psutil()
 
         def deny_battery() -> None:
@@ -689,7 +690,7 @@ class ScannerTests(unittest.TestCase):
     def test_scan_dashboard_replaces_failing_card_with_unavailable_summary(
         self,
     ) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake_psutil = make_baseline_psutil()
 
         def broken_cpu_count(logical: bool) -> int:
@@ -716,7 +717,7 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(by_key["battery"].value, "75%")
 
     def test_scan_dashboard_survives_every_sensor_failing(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         def deny(*_args: Any, **_kwargs: Any) -> Any:
             raise PermissionError("sensor denied")
@@ -744,7 +745,7 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(snapshot.system_label, "Linux 6.1 • x86_64")
 
     def test_scan_dashboard_gpu_card_shows_unavailable_when_probe_fails(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake_psutil = make_baseline_psutil()
 
         with scanner_environment(
@@ -760,7 +761,7 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(snapshot.get("cpu").value, "12.3%")
 
     def test_scan_dashboard_gpu_card_lists_multiple_gpus(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake_psutil = make_baseline_psutil()
 
         with scanner_environment(
@@ -776,7 +777,7 @@ class ScannerTests(unittest.TestCase):
         self.assertIn("Memory: 4 GiB", gpu.details)
 
     def test_scan_component_is_independent_of_other_components(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake_psutil = make_baseline_psutil()
 
         def deny_battery() -> Any:
@@ -794,13 +795,13 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(battery.value, "Unavailable")
 
     def test_scan_component_rejects_unknown_key(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with self.assertRaisesRegex(ValueError, "Unknown component"):
             scanner.scan_component("not-a-component")
 
     def test_component_value_handles_missing_and_failing_psutil(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with patch("maintenance.scanner.psutil", None):
             self.assertIsNone(scanner._component_value(lambda: 42))
@@ -816,7 +817,7 @@ class ScannerTests(unittest.TestCase):
             self.assertIsNone(scanner._component_value(broken))
 
     def test_scan_component_matches_dashboard_card(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake_psutil = make_baseline_psutil()
 
         with scanner_environment(scanner, fake_psutil):
@@ -855,7 +856,7 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(SystemScanner._byte_unit(5 * 1024**2), (1024**2, "MiB"))
 
     def test_scan_dashboard_reports_component_progress(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake_psutil = make_baseline_psutil()
         messages: list[str] = []
 
@@ -915,7 +916,7 @@ class ScannerTests(unittest.TestCase):
         )
 
     def test_swap_details_uses_psutil_aggregate_without_devices(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         swap = SimpleNamespace(
             total=4 * 1024**3,
             used=1 * 1024**3,
@@ -928,7 +929,7 @@ class ScannerTests(unittest.TestCase):
         )
 
     def test_swap_details_reports_no_swap_and_unavailable(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         self.assertEqual(
             scanner._swap_details(SimpleNamespace(total=0, used=0, percent=0.0), []),
@@ -940,7 +941,7 @@ class ScannerTests(unittest.TestCase):
         )
 
     def test_swap_details_separates_zram_from_disk_swap(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         devices = [
             ("/dev/zram0", 2 * 1024**3, 512 * 1024**2),
             ("/swapfile", 2 * 1024**3, 0),
@@ -957,7 +958,7 @@ class ScannerTests(unittest.TestCase):
         )
 
     def test_swap_details_handles_zram_only(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         devices = [("/dev/zram0", 2 * 1024**3, 1 * 1024**3)]
 
         self.assertEqual(
@@ -1003,7 +1004,7 @@ class ScannerTests(unittest.TestCase):
             self.assertEqual(SystemScanner._swap_devices(), [])
 
     def test_memory_card_shows_zram_breakdown(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake_psutil = make_baseline_psutil()
 
         with scanner_environment(

@@ -3,13 +3,12 @@
 import threading
 import time
 import unittest
-from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
 
 from maintenance.components import ScanCancelled
 from maintenance.scanner import SystemScanner
-from tests.support.scanner import make_baseline_psutil
+from tests.support.scanner import make_baseline_psutil, make_scanner
 
 
 def _fake_psutil(
@@ -31,7 +30,7 @@ class CpuSamplingTests(unittest.TestCase):
             scanner._stop_cpu_sampler()
 
     def _new_scanner(self) -> SystemScanner:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         self._scanner = scanner
         return scanner
 

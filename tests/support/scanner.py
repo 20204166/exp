@@ -15,6 +15,7 @@ fully populated fake, so unintended scanner dependencies are not masked.
 import contextlib
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -22,6 +23,12 @@ from unittest.mock import patch
 from maintenance.components.gpu import GpuProbe
 from maintenance.models import CapabilityState
 from maintenance.scanner import SystemScanner
+
+
+def make_scanner(path: Path = Path("Downloads")) -> SystemScanner:
+    """Build a scanner rooted at the canonical test Downloads directory."""
+
+    return SystemScanner(path)
 
 
 def _cpu_freq() -> SimpleNamespace:

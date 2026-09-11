@@ -1,17 +1,16 @@
 """Focused tests for the TTL-cached trash-size walk and its shared engine."""
 
 import unittest
-from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
 from maintenance.scanner import SystemScanner
-from tests.support.scanner import scanner_environment
+from tests.support.scanner import scanner_environment, make_scanner
 
 
 class TrashSizeCacheTests(unittest.TestCase):
     def _scanner(self, trash_walk: Any) -> SystemScanner:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         self._walk = Mock(side_effect=trash_walk)
         return scanner
 
@@ -101,7 +100,7 @@ class TrashSizeCacheTests(unittest.TestCase):
 
 class TtlCacheEngineTests(unittest.TestCase):
     def _scanner(self) -> SystemScanner:
-        return SystemScanner(Path("Downloads"))
+        return make_scanner()
 
     def test_engine_reuses_value_within_ttl(self) -> None:
         scanner = self._scanner()

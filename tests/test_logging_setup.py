@@ -1,3 +1,4 @@
+from tests.support.scanner import make_scanner
 """Focused tests for per-user logging setup and error-path diagnostics."""
 
 import logging
@@ -8,7 +9,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import main
-from maintenance.scanner import SystemScanner
 
 
 class LoggingSetupTests(unittest.TestCase):
@@ -48,7 +48,7 @@ class LoggingSetupTests(unittest.TestCase):
 
 class ScannerErrorLoggingTests(unittest.TestCase):
     def test_psutil_value_logs_failed_sensor_read(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         def broken() -> object:
             raise PermissionError("sensor denied")

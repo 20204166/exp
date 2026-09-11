@@ -1,9 +1,9 @@
+from tests.support.scanner import make_scanner
 """Focused tests for the process tables: sorting, filtering, activity."""
 
 import getpass
 import tkinter as tk
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock, patch
@@ -367,7 +367,7 @@ class ProcessScanBehaviourTests(unittest.TestCase):
         fake = FakePsutil([keep, gone])
 
         with patch("maintenance.scanner.psutil", fake):
-            candidates = SystemScanner(Path("Downloads")).scan_processes()
+            candidates = make_scanner().scan_processes()
 
         pids = {candidate.pid for candidate in candidates}
         self.assertIn(50001, pids)
@@ -391,7 +391,7 @@ class ProcessScanBehaviourTests(unittest.TestCase):
         fake = FakePsutil([idle, busy])
 
         with patch("maintenance.scanner.psutil", fake):
-            candidates = SystemScanner(Path("Downloads")).scan_processes()
+            candidates = make_scanner().scan_processes()
 
         by_pid = {candidate.pid: candidate for candidate in candidates}
         self.assertEqual(by_pid[50001].activity, "Low activity")

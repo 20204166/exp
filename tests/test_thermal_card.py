@@ -1,14 +1,13 @@
 """Focused tests for the Battery/Thermal card behaviour."""
 
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 from maintenance.models import CapabilityState
 from maintenance.scanner import SystemScanner
-from tests.support.scanner import make_baseline_psutil, scanner_environment
+from tests.support.scanner import make_baseline_psutil, scanner_environment, make_scanner
 
 
 def _temp(current: float | None, label: str = "sensor") -> SimpleNamespace:
@@ -101,7 +100,7 @@ class TemperatureLinesTests(unittest.TestCase):
 
 class BatteryCardTests(unittest.TestCase):
     def test_battery_card_preserved_for_laptop(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         summary = scanner._battery_resource(_battery(75.0, True), None, [])
 
@@ -114,7 +113,7 @@ class BatteryCardTests(unittest.TestCase):
         )
 
     def test_battery_card_includes_temperature_lines(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         summary = scanner._battery_resource(
             _battery(75.0, True),
@@ -133,7 +132,7 @@ class BatteryCardTests(unittest.TestCase):
         )
 
     def test_no_battery_card_points_to_section_temperatures(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         summary = scanner._battery_resource(None, None, ["CPU: 45°C", "NVMe: 38°C"])
 
@@ -146,7 +145,7 @@ class BatteryCardTests(unittest.TestCase):
         )
 
     def test_no_battery_without_sensors_is_clearly_marked(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         summary = scanner._battery_resource(None, None, [])
 
@@ -158,7 +157,7 @@ class BatteryCardTests(unittest.TestCase):
         )
 
     def test_unreadable_battery_keeps_clear_unavailable_message(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         summary = scanner._battery_resource(
             None,
@@ -174,7 +173,7 @@ class BatteryCardTests(unittest.TestCase):
         )
 
     def test_unreadable_battery_without_sensors_preserves_message(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         summary = scanner._battery_resource(None, PermissionError("denied"), [])
 
@@ -200,17 +199,17 @@ class BatteryCardTests(unittest.TestCase):
         self.assertIsInstance(error, PermissionError)
 
     def test_battery_capability_is_supported_when_present(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         summary = scanner._battery_resource(_battery(75.0, True), None, [])
         self.assertEqual(summary.capability, CapabilityState.SUPPORTED)
 
     def test_battery_capability_is_unsupported_when_absent(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         summary = scanner._battery_resource(None, None, ["CPU: 45°C"])
         self.assertEqual(summary.capability, CapabilityState.UNSUPPORTED)
 
     def test_battery_capability_requires_permission_when_denied(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         summary = scanner._battery_resource(
             None,
             PermissionError("denied"),
@@ -219,7 +218,7 @@ class BatteryCardTests(unittest.TestCase):
         self.assertEqual(summary.capability, CapabilityState.PERMISSION_LIMITED)
 
     def test_battery_card_end_to_end_desktop(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake = make_baseline_psutil(
             swap_memory=lambda: SimpleNamespace(total=0, used=0, percent=0.0),
             net_io_counters=lambda: SimpleNamespace(bytes_sent=0, bytes_recv=0),
@@ -254,7 +253,7 @@ class SectionTemperatureTests(unittest.TestCase):
         )
 
     def test_section_temperatures_are_in_their_home_cards(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake = self._card_fake()
 
         with scanner_environment(scanner, fake, trash_size=0):
@@ -269,7 +268,7 @@ class SectionTemperatureTests(unittest.TestCase):
         self.assertIn("NVMe: 38°C", snapshot.get("battery").details)
 
     def test_sections_omit_temperature_when_sensor_missing(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake = self._card_fake()
         fake.sensors_temperatures = dict
 
@@ -292,7 +291,7 @@ class SectionTemperatureTests(unittest.TestCase):
         self.assertIsNone(SystemScanner._temperature_value(lines, "Other"))
 
     def test_cached_temperature_lines_reuse_until_expiry(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         calls = {"count": 0}
 
         def sensors() -> Any:

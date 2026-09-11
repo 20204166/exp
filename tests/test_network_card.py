@@ -1,14 +1,13 @@
 """Focused tests for the Network card: rate deltas, interfaces, VPN."""
 
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
 from maintenance.models import CapabilityState
 from maintenance.scanner import SystemScanner
-from tests.support.scanner import make_baseline_psutil, scanner_environment
+from tests.support.scanner import make_baseline_psutil, scanner_environment, make_scanner
 
 
 def _counters(sent: int, received: int) -> SimpleNamespace:
@@ -46,7 +45,7 @@ class NetworkRateTests(unittest.TestCase):
         )
 
     def test_network_rates_are_deltas_over_time(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with patch("maintenance.scanner.time.monotonic", side_effect=[100.0, 101.0]):
             self.assertEqual(
@@ -59,7 +58,7 @@ class NetworkRateTests(unittest.TestCase):
         self.assertEqual(up, 512 * 1024)
 
     def test_network_rates_clamp_counter_reset_to_zero(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with patch("maintenance.scanner.time.monotonic", side_effect=[100.0, 101.0]):
             scanner._sample_network_rates(_counters(1000, 2000))
@@ -69,7 +68,7 @@ class NetworkRateTests(unittest.TestCase):
         self.assertEqual(up, 0.0)
 
     def test_network_rates_return_none_for_zero_elapsed(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with patch("maintenance.scanner.time.monotonic", side_effect=[100.0, 100.0]):
             scanner._sample_network_rates(_counters(0, 0))
@@ -204,7 +203,7 @@ class VpnDetectionTests(unittest.TestCase):
 
 class NetworkObservationConsolidationTests(unittest.TestCase):
     def test_network_scan_reads_each_sensor_exactly_once(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         calls = {"global": 0, "pernic": 0, "stats": 0}
 
         def net_io_counters(pernic: bool = False) -> Any:
@@ -232,7 +231,7 @@ class NetworkObservationConsolidationTests(unittest.TestCase):
     def test_network_observation_reuses_one_read_for_capability_and_rendering(
         self,
     ) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         pernic_reads: list[bool] = []
         stats_reads: list[bool] = []
 
@@ -264,7 +263,7 @@ class NetworkObservationConsolidationTests(unittest.TestCase):
         self.assertEqual(snapshot.subtitle, "Active: eth0")
 
     def test_observation_path_distinguishes_failed_read_from_empty_state(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         def net_io_counters(pernic: bool = False) -> Any:
             if pernic:
@@ -293,7 +292,7 @@ class NetworkObservationConsolidationTests(unittest.TestCase):
 
 class NetworkCardTests(unittest.TestCase):
     def test_network_card_value_shows_rate_from_previous_sample(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         scanner._network_sample = (100.0, 0, 0)
         fake = _sensor_psutil(
             lambda: _counters(512 * 1024, 1024 * 1024),
@@ -316,7 +315,7 @@ class NetworkCardTests(unittest.TestCase):
         self.assertIn("VPN: Not detected", network.details)
 
     def test_network_card_reports_vpn_and_interface(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         scanner._network_sample = (100.0, 0, 0)
         fake = _sensor_psutil(
             lambda: _counters(512 * 1024, 1024 * 1024),
@@ -352,7 +351,7 @@ class NetworkCardTests(unittest.TestCase):
         self.assertIn("VPN: Connected", network.details)
 
     def test_network_card_disconnected_state_is_intentional(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake = _sensor_psutil(
             lambda pernic=False: (
                 {"eth0": _counters(100, 200)} if pernic else _counters(100, 200)
@@ -372,7 +371,7 @@ class NetworkCardTests(unittest.TestCase):
         self.assertIn("Active interface: none", network.details)
 
     def test_network_card_unknown_state_when_stats_unreadable(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         def net_io_counters(pernic: bool = False) -> Any:
             if pernic:
@@ -393,7 +392,7 @@ class NetworkCardTests(unittest.TestCase):
         self.assertIn("Active interface: Unknown", network.details)
 
     def test_network_capability_supported_when_global_counters_work(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake = _sensor_psutil(lambda: _counters(100, 200))
         fake.net_if_stats = lambda: {"eth0": SimpleNamespace(isup=False)}
 
@@ -410,7 +409,7 @@ class NetworkCardTests(unittest.TestCase):
         )
 
     def test_network_capability_temporarily_unavailable_when_counters_fail(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         def broken() -> Any:
             raise PermissionError("denied")
@@ -430,7 +429,7 @@ class NetworkCardTests(unittest.TestCase):
         )
 
     def test_network_capability_unsupported_when_loopback_only(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         def net_io_counters(pernic: bool = False) -> Any:
             if pernic:

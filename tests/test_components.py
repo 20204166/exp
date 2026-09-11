@@ -1,3 +1,4 @@
+from tests.support.scanner import make_scanner
 import hashlib
 import os
 import tempfile
@@ -564,7 +565,7 @@ class ProcessSafetyPolicyParityTests(unittest.TestCase):
 
         base = {0, 1, os.getpid()}
         self.assertLessEqual(base, ProcessSafetyPolicy().protected_pids())
-        self.assertLessEqual(base, SystemScanner(Path("Downloads"))._protected_pids())
+        self.assertLessEqual(base, make_scanner()._protected_pids())
 
     def test_decision_parity_with_scanner_and_manager_for_established_cases(
         self,

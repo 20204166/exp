@@ -1,7 +1,7 @@
+from tests.support.scanner import make_scanner
 """Focused tests for the concise GPU display name on the overview card."""
 
 import unittest
-from pathlib import Path
 from unittest import mock
 
 from maintenance.components.gpu import (
@@ -60,7 +60,7 @@ class GpuDisplayNameTests(unittest.TestCase):
                 self.assertEqual(SystemScanner._concise_gpu_name(name), None)
 
     def test_unavailable_gpu_card_uses_information_subtitle(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         for message in (
             "GPU information unavailable",
@@ -82,7 +82,7 @@ class GpuDisplayNameTests(unittest.TestCase):
                 self.assertTrue(resource.failed)
 
     def test_healthy_gpu_card_keeps_graphics_hardware_subtitle(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with mock.patch.object(
             scanner,
@@ -104,7 +104,7 @@ class GpuDisplayNameTests(unittest.TestCase):
         )
 
     def test_display_name_keeps_raw_identifier_in_details(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         raw = "Advanced Micro Devices, Inc. [AMD/ATI] Radeon RX 5700 XT (rev c1)"
 
         with mock.patch.object(
@@ -119,7 +119,7 @@ class GpuDisplayNameTests(unittest.TestCase):
         self.assertIn("GPU usage: 12%", resource.details)
 
     def test_dashboard_gpu_card_uses_concise_value_and_raw_details(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         raw = "NVIDIA Corporation GL104 [GeForce RTX 4080] (rev a1)"
 
         with mock.patch.object(
@@ -136,7 +136,7 @@ class GpuDisplayNameTests(unittest.TestCase):
         self.assertIsNone(gpu.percent)
 
     def test_component_and_dashboard_share_the_concise_value(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         raw = "Intel Corporation UHD Graphics 620 (rev 02)"
 
         with mock.patch.object(
@@ -151,7 +151,7 @@ class GpuDisplayNameTests(unittest.TestCase):
         self.assertEqual(dashboard.value, component.value)
 
     def test_patched_gpu_details_yield_unknown_capability(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with mock.patch.object(
             scanner,
@@ -164,7 +164,7 @@ class GpuDisplayNameTests(unittest.TestCase):
         self.assertEqual(resource.capability, CapabilityState.UNKNOWN)
 
     def test_linux_probe_classifies_absent_gpu_as_unsupported(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with mock.patch.object(
             SystemScanner,
@@ -177,7 +177,7 @@ class GpuDisplayNameTests(unittest.TestCase):
         self.assertEqual(probe.capability, CapabilityState.UNSUPPORTED)
 
     def test_linux_probe_classifies_error_as_temporarily_unavailable(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with mock.patch.object(
             SystemScanner,
@@ -189,7 +189,7 @@ class GpuDisplayNameTests(unittest.TestCase):
         self.assertEqual(probe.capability, CapabilityState.TEMPORARILY_UNAVAILABLE)
 
     def test_linux_probe_classifies_found_gpu_as_supported(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with mock.patch.object(
             SystemScanner,
@@ -202,7 +202,7 @@ class GpuDisplayNameTests(unittest.TestCase):
         self.assertEqual(probe.capability, CapabilityState.SUPPORTED)
 
     def test_multi_gpu_keeps_all_raw_lines_in_details(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with mock.patch.object(
             scanner,
@@ -246,7 +246,7 @@ class GpuProbeFromReadTests(unittest.TestCase):
         self.assertEqual(probe.capability, CapabilityState.SUPPORTED)
 
     def test_all_three_platform_probes_share_the_classification(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with (
             mock.patch.object(

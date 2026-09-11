@@ -3,12 +3,11 @@
 import threading
 import time
 import unittest
-from pathlib import Path
 
 from maintenance.components.gpu import GpuProbe
 from maintenance.models import DashboardSnapshot, ResourceSummary
 from maintenance.scanner import SystemScanner
-from tests.support.scanner import gpu_environment, make_gpu_probe
+from tests.support.scanner import gpu_environment, make_gpu_probe, make_scanner
 
 TIMEOUT = SystemScanner.GPU_QUERY_TIMEOUT_MESSAGE
 
@@ -20,7 +19,7 @@ class GpuConcurrencyTests(unittest.TestCase):
             scanner._stop_gpu_query()
 
     def _new_scanner(self) -> SystemScanner:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         scanner.GPU_QUERY_TIMEOUT_SECONDS = 0.05
         scanner.GPU_QUERY_ABANDON_SECONDS = 0.05
         self._scanner = scanner

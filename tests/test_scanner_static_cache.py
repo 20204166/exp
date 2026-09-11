@@ -1,7 +1,6 @@
 """Focused tests for modular scan recovery and the static-hardware cache."""
 
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -9,12 +8,12 @@ from unittest.mock import patch
 from maintenance.components.gpu import GpuProbe
 from maintenance.models import CapabilityState
 from maintenance.scanner import SystemScanner
-from tests.support.scanner import make_baseline_psutil, scanner_environment
+from tests.support.scanner import make_baseline_psutil, scanner_environment, make_scanner
 
 
 class StaticHardwareCacheTests(unittest.TestCase):
     def test_cpu_core_counts_are_cached_across_refreshes(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         calls: dict[str, int] = {"count": 0}
         fake_psutil = make_baseline_psutil()
 
@@ -33,7 +32,7 @@ class StaticHardwareCacheTests(unittest.TestCase):
         self.assertEqual(first.get("cpu").details[0], "Physical cores: 4")
 
     def test_system_label_is_cached_across_refreshes(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         counters: dict[str, int] = {"system": 0, "release": 0, "machine": 0}
         values = {"system": "Linux", "release": "6.1", "machine": "x86_64"}
 
@@ -57,7 +56,7 @@ class StaticHardwareCacheTests(unittest.TestCase):
         self.assertEqual(counters, {"system": 1, "release": 1, "machine": 1})
 
     def test_static_cache_invalidates_after_boot_session_change(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         state: dict[str, float] = {"boot": 1000.0, "cores": 0.0}
         fake_psutil = make_baseline_psutil()
         fake_psutil.boot_time = lambda: state["boot"]
@@ -76,7 +75,7 @@ class StaticHardwareCacheTests(unittest.TestCase):
         self.assertEqual(state["cores"], 4)
 
     def test_reset_static_cache_forces_re_read(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         calls: dict[str, int] = {"count": 0}
         fake_psutil = make_baseline_psutil()
 
@@ -94,7 +93,7 @@ class StaticHardwareCacheTests(unittest.TestCase):
         self.assertEqual(calls["count"], 4)
 
     def test_reset_static_cache_clears_gpu_details(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with (
             patch("maintenance.scanner.platform.system", return_value="Windows"),
@@ -112,7 +111,7 @@ class StaticHardwareCacheTests(unittest.TestCase):
         self.assertEqual(loader.call_count, 2)
 
     def test_live_metrics_refresh_while_static_stays_cached(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         state: dict[str, Any] = {"cpu": 10.0, "cores": 0}
         fake_psutil = make_baseline_psutil()
         fake_psutil.cpu_percent = lambda interval: state["cpu"]
@@ -135,7 +134,7 @@ class StaticHardwareCacheTests(unittest.TestCase):
 
 class IndependentFailureTests(unittest.TestCase):
     def test_dashboard_without_psutil_degrades_cards_independently(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
 
         with scanner_environment(scanner, None, trash_size=0):
             snapshot = scanner.scan_dashboard()
@@ -148,7 +147,7 @@ class IndependentFailureTests(unittest.TestCase):
         self.assertEqual(snapshot.system_label, "Linux 6.1 • x86_64")
 
     def test_storage_failure_degrades_only_storage_card(self) -> None:
-        scanner = SystemScanner(Path("Downloads"))
+        scanner = make_scanner()
         fake_psutil = make_baseline_psutil()
 
         def deny_disk(mount: str) -> SimpleNamespace:
@@ -173,7 +172,7 @@ class IndependentFailureTests(unittest.TestCase):
 
 class FingerprintSlotHelperTests(unittest.TestCase):
     def _scanner(self) -> SystemScanner:
-        return SystemScanner(Path("Downloads"))
+        return make_scanner()
 
     def test_helper_reuses_cached_value_without_recomputing(self) -> None:
         scanner = self._scanner()
