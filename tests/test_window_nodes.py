@@ -1454,6 +1454,36 @@ class WindowNodeSwitchingTests(unittest.TestCase):
             card.reset_summary.assert_called_once()
         window.node_title_label.config.assert_called_once_with(text="DEV NODE")
 
+    def test_remove_connection_on_selected_node_reverts_to_local(self) -> None:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
+            start_discovery=False,
+        )
+        registry = window._node_registry
+        registry.select(NodeId("peer-a"))
+        window._selected_node_id = NodeId("peer-a")
+        window._cluster_state = ClusterState.create_local(local_node_id="local")
+        window._save_cluster_state = Mock(return_value=True)
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._rebuild_node_selector = Mock()
+        window._nodes_status = Mock()
+        window._nodes_error = Mock()
+        window._cancel_node_operations = Mock()
+        window._cancel_peer_connection = Mock()
+        window._sync_selected_context_mirrors = Mock()
+        window._render_selected_node = Mock()
+        manager = Mock()
+        window._peer_connection_manager = manager
+
+        window_node_actions.remove_connection_node(
+            window, "peer-a", messagebox_module=Mock(return_value=True)
+        )
+
+        self.assertEqual(window._selected_node_id, NodeId(LOCAL_NODE_ID))
+        self.assertEqual(registry.selected_id(), NodeId(LOCAL_NODE_ID))
+        window._rebuild_node_selector.assert_called_once()
+
 
 class WindowDiscoveryIntegrationTests(unittest.TestCase):
     def test_migrated_local_identity_uses_matching_fingerprint(self) -> None:

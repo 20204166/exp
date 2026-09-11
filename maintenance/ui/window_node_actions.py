@@ -184,6 +184,16 @@ def remove_connection_node(
             context.coordinator = None
     controller._refresh_nodes_page()
     controller._refresh_cluster_page()
+    controller._rebuild_node_selector()
+    if controller.__dict__.get("_selected_node_id") == node and registry is not None:
+        local_id = registry.local_id()
+        if local_id is not None:
+            registry.select(local_id)
+    if controller.__dict__.get("_selected_node_id") != registry.selected_id():
+        controller.__dict__["_selected_node_id"] = registry.selected_id()
+        context = registry.selected_context()
+        controller._sync_selected_context_mirrors(context)
+        controller._render_selected_node(context)
     controller._nodes_status(f"Removed connection to {node_id}")
 
 
