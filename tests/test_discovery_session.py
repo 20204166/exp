@@ -7,23 +7,8 @@ from unittest.mock import Mock
 from maintenance.cluster import ClusterState
 from maintenance.components.discovery_session import DiscoverySession
 from maintenance.nodes import NodeRegistry
+from tests.support.discovery import FakeDiscovery
 from tests.support.nodes import make_local_context
-
-
-class FakeDiscovery:
-    available = True
-    unavailable_reason = None
-
-    def __init__(self, events: list[str]) -> None:
-        self.events = events
-        self.on_event: Any = None
-
-    def start(self) -> bool:
-        self.events.append("discovery.start")
-        return True
-
-    def stop(self) -> None:
-        self.events.append("discovery.stop")
 
 
 class DiscoverySessionTests(unittest.TestCase):

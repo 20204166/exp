@@ -10,52 +10,8 @@ from typing import Any
 
 from maintenance.components.coordinator import AppCoordinator
 from maintenance.nodes import DiscoveredNodeCandidate
+from tests.support.discovery import FakeDiscovery
 from tests.support.nodes import make_candidate
-
-
-class FakeDiscovery:
-    def __init__(self, *, available: bool = True) -> None:
-        self.available_flag = available
-        self.on_event: Any = None
-        self.started = False
-        self.stopped = False
-        self.unavailable_reason_value = None if available else "no transport"
-        self.expiries = 0
-
-    @property
-    def available(self) -> bool:
-        return self.available_flag
-
-    @property
-    def unavailable_reason(self) -> str | None:
-        return self.unavailable_reason_value
-
-    def start(self) -> bool:
-        self.started = True
-        return self.available_flag
-
-    def stop(self) -> None:
-        self.stopped = True
-
-    def expire_stale(self) -> None:
-        self.expiries += 1
-
-    def emit(self, kind: str, payload: Any) -> None:
-        if self.on_event is not None:
-            self.on_event(kind, payload)
-
-
-class RetryDiscovery(FakeDiscovery):
-    def __init__(self) -> None:
-        super().__init__()
-        self.fail_next_start = True
-
-    def start(self) -> bool:
-        self.started = True
-        if self.fail_next_start:
-            self.fail_next_start = False
-            return False
-        return True
 
 
 def _candidate() -> DiscoveredNodeCandidate:
@@ -132,7 +88,7 @@ class AppCoordinatorDiscoveryTests(unittest.TestCase):
 
     def test_failed_start_releases_lifecycle_ownership_for_retry(self) -> None:
         coordinator, _delivered, _activity = self._make()
-        failed = RetryDiscovery()
+        failed = FakeDiscovery(fail_next_start=True)
         replacement = FakeDiscovery()
 
         self.assertFalse(

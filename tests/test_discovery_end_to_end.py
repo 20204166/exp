@@ -17,35 +17,10 @@ from maintenance.nodes import (
 )
 from maintenance.ui.discovery_refresh import refresh_discovery_views
 from maintenance.ui.render_coordinator import RenderIntent, UICoordinator
+from tests.support.discovery import FakeBackend
 from tests.support.nodes import make_local_context
 
 SERVICE_TYPE = "_system-analyzer._tcp.local."
-
-
-class FakeBackend:
-    def __init__(self, listener: Any) -> None:
-        self.listener = listener
-        self.started = False
-        self.stopped = False
-
-    @property
-    def available(self) -> bool:
-        return True
-
-    def start(self, _advertisement: DiscoveryAdvertisement) -> None:
-        self.started = True
-
-    def stop(self) -> None:
-        self.stopped = True
-
-    def add(self, service_name: str, info: Any) -> None:
-        self.listener("add", service_name, info)
-
-    def update(self, service_name: str, info: Any) -> None:
-        self.listener("update", service_name, info)
-
-    def remove(self, service_name: str) -> None:
-        self.listener("remove", service_name, None)
 
 
 @dataclass

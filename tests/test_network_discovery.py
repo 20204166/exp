@@ -12,6 +12,7 @@ from maintenance.components.network_discovery import (
     ZeroconfDiscoveryBackend,
 )
 from maintenance.nodes import NodeId
+from tests.support.discovery import FakeBackend
 
 SERVICE_TYPE = "_system-analyzer._tcp.local."
 
@@ -56,37 +57,6 @@ def _info(
         "port": port,
         "addresses": addresses or ["192.168.1.10"],
     }
-
-
-class FakeBackend:
-    """In-memory discovery backend driven by the test."""
-
-    def __init__(self, listener: Any, *, available: bool = True) -> None:
-        self.listener = listener
-        self.available_flag = available
-        self.started = False
-        self.stopped = False
-        self.last_advertisement: Any = None
-
-    @property
-    def available(self) -> bool:
-        return self.available_flag
-
-    def start(self, advertisement: DiscoveryAdvertisement) -> None:
-        self.started = True
-        self.last_advertisement = advertisement
-
-    def stop(self) -> None:
-        self.stopped = True
-
-    def add(self, service_name: str, info: Any) -> None:
-        self.listener("add", service_name, info)
-
-    def update(self, service_name: str, info: Any) -> None:
-        self.listener("update", service_name, info)
-
-    def remove(self, service_name: str) -> None:
-        self.listener("remove", service_name, None)
 
 
 class FailingStartBackend(FakeBackend):
