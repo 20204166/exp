@@ -23,6 +23,7 @@ def run_text_command(
     *,
     timeout_seconds: float = COMMAND_TIMEOUT_SECONDS,
     runner: CommandRunner | None = None,
+    creationflags: int = 0,
 ) -> tuple[str, str | None]:
     """Run one command and return its decoded stdout or an error message.
 
@@ -30,7 +31,8 @@ def run_text_command(
     when the command is missing, permission is denied, the command times
     out, exits non-zero, or otherwise fails at the process level. The
     ``runner`` hook exists so callers keep their own monkeypatch seams; the
-    default resolves at call time.
+    default resolves at call time. ``creationflags`` forwards platform
+    subprocess creation flags (e.g. ``CREATE_NO_WINDOW`` on Windows).
     """
 
     try:
@@ -40,6 +42,7 @@ def run_text_command(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            creationflags=creationflags,
         )
     except (OSError, subprocess.SubprocessError) as error:
         return "", str(error)
@@ -52,6 +55,7 @@ def run_json_command(
     timeout_seconds: float = COMMAND_TIMEOUT_SECONDS,
     runner: CommandRunner | None = None,
     empty_stdout_fallback: str | None = None,
+    creationflags: int = 0,
 ) -> tuple[Any, str | None]:
     """Run one command and decode its stdout as JSON.
 
@@ -65,6 +69,7 @@ def run_json_command(
         command,
         timeout_seconds=timeout_seconds,
         runner=runner,
+        creationflags=creationflags,
     )
     if error is not None:
         return None, error

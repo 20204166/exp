@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import unittest
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -68,6 +69,7 @@ class RunTextCommandTests(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=COMMAND_TIMEOUT_SECONDS,
+            creationflags=0,
         )
         self.assertIsNone(error)
         self.assertEqual(stdout, "out")
@@ -91,6 +93,18 @@ class RunTextCommandTests(unittest.TestCase):
 
         self.assertIsNone(error)
         self.assertEqual(stdout, "parsed later")
+
+    def test_run_text_command_forwards_creationflags(self) -> None:
+        seen: dict[str, Any] = {}
+
+        def fake(command, **kwargs) -> Any:
+            seen.update(kwargs)
+            return SimpleNamespace(stdout="out", returncode=0)
+
+        stdout, error = run_text_command(["cmd"], runner=fake, creationflags=0x08000000)
+        self.assertEqual(stdout, "out")
+        self.assertIsNone(error)
+        self.assertEqual(seen.get("creationflags"), 0x08000000)
 
 
 class RunJsonCommandTests(unittest.TestCase):
@@ -151,6 +165,20 @@ class RunJsonCommandTests(unittest.TestCase):
         runner.assert_called_once()
         self.assertIsNone(error)
         self.assertEqual(payload, [1, 2])
+
+    def test_run_json_command_forwards_creationflags(self) -> None:
+        seen: dict[str, Any] = {}
+
+        def fake(command, **kwargs) -> Any:
+            seen.update(kwargs)
+            return SimpleNamespace(stdout='{"ok": true}', returncode=0)
+
+        payload, error = run_json_command(
+            ["cmd"], runner=fake, creationflags=0x08000000
+        )
+        self.assertEqual(payload, {"ok": True})
+        self.assertIsNone(error)
+        self.assertEqual(seen.get("creationflags"), 0x08000000)
 
 
 if __name__ == "__main__":

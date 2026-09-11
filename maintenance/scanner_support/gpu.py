@@ -12,6 +12,7 @@ lookups on maintenance.scanner for existing monkeypatch seams.
 from __future__ import annotations
 
 import contextlib
+import os
 import threading
 from collections.abc import Callable
 
@@ -268,11 +269,17 @@ class GpuMixin:
             "Get-CimInstance Win32_VideoController | "
             "Select-Object Name,AdapterRAM,DriverVersion | ConvertTo-Json"
         )
+        creationflags = (
+            getattr(scanner_module.subprocess, "CREATE_NO_WINDOW", 0)
+            if os.name == "nt"
+            else 0
+        )
         controllers, error = run_json_command(
             ["powershell", "-NoProfile", "-Command", command],
             timeout_seconds=scanner_module.SystemScanner.GPU_COMMAND_TIMEOUT_SECONDS,
             runner=scanner_module.subprocess.run,
             empty_stdout_fallback="[]",
+            creationflags=creationflags,
         )
         if error is not None:
             return (), error
