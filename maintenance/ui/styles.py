@@ -70,6 +70,13 @@ SPACING: dict[str, int] = {
     "dialog_pad_y": 22,
     "button_gap": 8,
     "footer_gap": 16,
+    "scrollbar_gutter": 6,
+    "caption_gap": 2,
+    "header_desc_gap": 6,
+    "header_actions_gap": 20,
+    "heading_desc_gap": 4,
+    "section_body_top": 10,
+    "nav_button_gap": 16,
 }
 
 CONTROL: dict[str, int] = {
@@ -86,6 +93,12 @@ LAYOUT: dict[str, int] = {
     "dashboard_status_wrap": 280,
     "card_grid_gap": 7,
     "card_row_gap": 14,
+    "dashboard_header_wrap": 680,
+    "page_shell_wrap": 620,
+    "navigation_card_wrap": 560,
+    "section_description_wrap": 360,
+    "fit_wrap_margin": 36,
+    "fit_wrap_max": 560,
 }
 
 GRAPH: dict[str, int] = {

@@ -66,6 +66,26 @@ class DesignTokenParityTests(unittest.TestCase):
                 )
 
 
+class SpacingTokenParityTests(unittest.TestCase):
+    def test_spacing_tokens_match_historical_layout_literals(self) -> None:
+        self.assertEqual(ui_styles.SPACING["scrollbar_gutter"], 6)
+        self.assertEqual(ui_styles.SPACING["caption_gap"], 2)
+        self.assertEqual(ui_styles.SPACING["header_desc_gap"], 6)
+        self.assertEqual(ui_styles.SPACING["header_actions_gap"], 20)
+        self.assertEqual(ui_styles.SPACING["heading_desc_gap"], 4)
+        self.assertEqual(ui_styles.SPACING["section_body_top"], 10)
+        self.assertEqual(ui_styles.SPACING["nav_button_gap"], 16)
+        self.assertEqual(ui_styles.LAYOUT["dashboard_header_wrap"], 680)
+        self.assertEqual(ui_styles.LAYOUT["page_shell_wrap"], 620)
+        self.assertEqual(ui_styles.LAYOUT["navigation_card_wrap"], 560)
+        self.assertEqual(ui_styles.LAYOUT["section_description_wrap"], 360)
+        self.assertEqual(ui_styles.LAYOUT["fit_wrap_margin"], 36)
+        self.assertEqual(ui_styles.LAYOUT["fit_wrap_max"], 560)
+
+    def test_scrollbar_gutter_derives_from_spacing_token(self) -> None:
+        self.assertEqual(ui_layout.SCROLLBAR_GUTTER, ui_styles.SPACING["scrollbar_gutter"])
+
+
 class FakeStyle:
     def __init__(self) -> None:
         self.configured: dict[str, dict[str, Any]] = {}
