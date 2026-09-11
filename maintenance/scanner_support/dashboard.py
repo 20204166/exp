@@ -1091,6 +1091,10 @@ class DashboardMixin:
     def _temperature_scan(cls, psutil_module: Any) -> TemperatureScan:
         """Return normalised temperature samples plus the concise card lines."""
 
+        if not cls._temperature_sensors_supported(scanner_module.platform.system()):
+            now = scanner_module.datetime.now(scanner_module.timezone.utc).astimezone()
+            return TemperatureScan(now, scanner_module.time.monotonic(), (), ())
+
         sensors = cls._psutil_value(lambda: psutil_module.sensors_temperatures())
         if not isinstance(sensors, dict) or not sensors:
             now = scanner_module.datetime.now(scanner_module.timezone.utc).astimezone()
@@ -1144,6 +1148,19 @@ class DashboardMixin:
         return TemperatureScan(
             captured_at, captured_monotonic, tuple(lines), tuple(grouped)
         )
+
+    @staticmethod
+    def _temperature_sensors_supported(system: str | None) -> bool:
+        """Return whether the OS exposes psutil's ``sensors_temperatures`` API.
+
+        psutil only implements ``sensors_temperatures`` on Linux; macOS and
+        Windows raise ``NotImplementedError``. Gating on the platform means
+        the scan never probes system sensors on an OS that cannot provide
+        them, so the thermals card degrades to no-data without a misleading
+        sensor-read warning.
+        """
+
+        return system == "Linux"
 
     @classmethod
     def _temperature_lines(cls, psutil_module: Any) -> list[str]:

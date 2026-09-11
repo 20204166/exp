@@ -213,12 +213,14 @@ class TemperatureTelemetry:
             self._record_samples(telemetry, samples)
             telemetry.state = TemperatureState.VALID
             telemetry.current = samples[-1]
-        elif summary.capability == CapabilityState.UNSUPPORTED:
-            telemetry.state = TemperatureState.UNSUPPORTED
-        elif summary.failed:
-            telemetry.state = TemperatureState.ERROR
         else:
-            telemetry.state = TemperatureState.NO_DATA
+            self._settle_inactive_event(telemetry)
+            if summary.capability == CapabilityState.UNSUPPORTED:
+                telemetry.state = TemperatureState.UNSUPPORTED
+            elif summary.failed:
+                telemetry.state = TemperatureState.ERROR
+            else:
+                telemetry.state = TemperatureState.NO_DATA
         return TemperatureTelemetryUpdate(
             component=component,
             snapshot=self.series_snapshot(component, title=summary.title),
@@ -289,6 +291,37 @@ class TemperatureTelemetry:
             self._components[component] = telemetry
         return telemetry
 
+    def _settle_inactive_event(self, telemetry: _ComponentTelemetry) -> None:
+        """Finalize an open heat event when data stops arriving.
+
+        Without this, a hot sample that resumes after a no-data gap would
+        append to the stale open episode and fabricate one long event spanning
+        the gap. The open event is left surfaced (ended at the last known
+        sample) rather than silently dropped.
+        """
+
+        if telemetry.active_event is None:
+            return
+        last_sample = telemetry.history[-1] if telemetry.history else None
+        self._replace_tail_event(
+            telemetry,
+            self._finalize_event(
+                telemetry.active_event,
+                ended_at=(
+                    last_sample.sampled_at
+                    if last_sample is not None
+                    else datetime.now(timezone.utc).astimezone()
+                ),
+                ended_monotonic=(
+                    last_sample.sampled_monotonic
+                    if last_sample is not None
+                    else time.monotonic()
+                ),
+            ),
+        )
+        telemetry.active_event = None
+        telemetry.consecutive_hot = 0
+
     def _record_samples(
         self,
         telemetry: _ComponentTelemetry,
@@ -328,6 +361,39 @@ class TemperatureTelemetry:
             if not history:
                 telemetry.sensor_histories.pop(sensor_id, None)
 
+    def _finalize_event(
+        self,
+        event: dict[str, Any],
+        *,
+        ended_at: datetime | None,
+        ended_monotonic: float | None,
+    ) -> TemperatureEvent:
+        """Build the immutable event record from active-event state."""
+
+        return TemperatureEvent(
+            component=event["component"],
+            sensor_id=event["sensor_id"],
+            sensor_name=event["sensor_name"],
+            started_at=event["started_at"],
+            started_monotonic=event["started_monotonic"],
+            peak_celsius=event["peak"],
+            baseline_celsius=event["baseline"],
+            severity=event["severity"],
+            samples=tuple(event["samples"]),
+            ended_at=ended_at,
+            ended_monotonic=ended_monotonic,
+        )
+
+    def _replace_tail_event(
+        self,
+        telemetry: _ComponentTelemetry,
+        event: TemperatureEvent,
+    ) -> None:
+        """Replace the newest (open) event in place; it is always the tail."""
+
+        if telemetry.events:
+            telemetry.events[-1] = event
+
     def _update_event_state(
         self,
         telemetry: _ComponentTelemetry,
@@ -351,25 +417,25 @@ class TemperatureTelemetry:
                 else warning - 5.0
             )
             if sample.value_celsius <= recovery:
-                telemetry.events.append(
-                    TemperatureEvent(
-                        component=event["component"],
-                        sensor_id=event["sensor_id"],
-                        sensor_name=event["sensor_name"],
-                        started_at=event["started_at"],
-                        started_monotonic=event["started_monotonic"],
-                        peak_celsius=event["peak"],
-                        baseline_celsius=event["baseline"],
-                        severity=event["severity"],
-                        samples=tuple(event["samples"]),
+                self._replace_tail_event(
+                    telemetry,
+                    self._finalize_event(
+                        event,
                         ended_at=sample.sampled_at,
                         ended_monotonic=sample.sampled_monotonic,
-                    )
+                    ),
                 )
                 telemetry.active_event = None
                 telemetry.consecutive_hot = 0
                 telemetry.cooldown_until = (
                     sample.sampled_monotonic + policy.cooldown_seconds
+                )
+            else:
+                self._replace_tail_event(
+                    telemetry,
+                    self._finalize_event(
+                        event, ended_at=None, ended_monotonic=None
+                    ),
                 )
             return
 
@@ -418,6 +484,11 @@ class TemperatureTelemetry:
                     ]
                 ),
             }
+            telemetry.events.append(
+                self._finalize_event(
+                    telemetry.active_event, ended_at=None, ended_monotonic=None
+                )
+            )
 
     @staticmethod
     def _baseline(history: tuple[TemperatureSample, ...], window: int) -> float | None:
