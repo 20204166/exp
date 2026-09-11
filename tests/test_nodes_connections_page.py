@@ -91,6 +91,33 @@ def make_page(
     return page, parent, recorder
 
 
+def _discovered_spec(
+    node_id: str = "peer-a", *, compatible: bool = True
+) -> DiscoveredPeerSpec:
+    return DiscoveredPeerSpec(
+        node_id,
+        f"{node_id}-host",
+        "1.2.4.0",
+        compatible,
+        True,
+        5000,
+    )
+
+
+def _trusted_spec(
+    node_id: str = "peer-a", *, selectable: bool = True, status: str = "online"
+) -> TrustedNodeSpec:
+    return TrustedNodeSpec(
+        node_id,
+        f"Peer {node_id}",
+        f"{node_id}-host",
+        None,
+        status,
+        f"192.168.1.{len(node_id)}0",
+        5000,
+        selectable,
+    )
+
 
 class NodesConnectionsPageTests(unittest.TestCase):
     @unittest.skipUnless(DISPLAY_AVAILABLE, "Tk display unavailable")
@@ -316,6 +343,56 @@ class NodesConnectionsPageTests(unittest.TestCase):
         self.assertIn("No peers discovered yet.", recorder.label_texts())
         self.assertIn("No trusted nodes yet.", recorder.label_texts())
         self.assertIn("No manual hosts configured.", recorder.label_texts())
+
+    @unittest.skipUnless(DISPLAY_AVAILABLE, "Tk display unavailable")
+    def test_trusted_retained_buttons_stay_registered_exactly_once(self) -> None:
+        root = tk.Tk()
+        coordinator = ButtonCoordinator()
+        page = NodesConnectionsPage(
+            root,
+            callbacks=make_callbacks(),
+            discovery_enabled=False,
+            discovered=[],
+            trusted=[_trusted_spec("peer-a", selectable=True)],
+            manual=[],
+            button_coordinator=coordinator,
+        )
+        try:
+            prior = coordinator._actions["nodes:trusted:peer-a:open"].widgets[0]
+            for _ in range(30):
+                page.refresh_trusted([_trusted_spec("peer-a", selectable=True)])
+                self.assertTrue(prior.winfo_exists())
+                widgets = coordinator._actions["nodes:trusted:peer-a:open"].widgets
+                self.assertEqual(len(widgets), 1)
+                self.assertIs(widgets[0], prior)
+            page.refresh_trusted([])
+            self.assertNotIn("nodes:trusted:peer-a:open", coordinator.registered_ids())
+            self.assertFalse(coordinator.dispatch("nodes:trusted:peer-a:open"))
+        finally:
+            root.destroy()
+
+    @unittest.skipUnless(DISPLAY_AVAILABLE, "Tk display unavailable")
+    def test_discovered_row_retained_across_identical_refresh(self) -> None:
+        root = tk.Tk()
+        coordinator = ButtonCoordinator()
+        page = NodesConnectionsPage(
+            root,
+            callbacks=make_callbacks(),
+            discovery_enabled=False,
+            discovered=[_discovered_spec("peer-a")],
+            trusted=[],
+            manual=[],
+            button_coordinator=coordinator,
+        )
+        try:
+            prior = coordinator._actions["nodes:peer:peer-a:pair"].widgets[0]
+            page.refresh_discovered([_discovered_spec("peer-a")])
+            self.assertTrue(prior.winfo_exists())
+            self.assertIs(
+                coordinator._actions["nodes:peer:peer-a:pair"].widgets[0], prior
+            )
+        finally:
+            root.destroy()
 
 
 if __name__ == "__main__":

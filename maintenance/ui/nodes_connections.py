@@ -143,6 +143,12 @@ class NodesConnectionsPage:
         self._discovered = {spec.node_id: spec for spec in discovered}
         self._trusted = {spec.node_id: spec for spec in trusted}
         self._manual = {spec.node_id: spec for spec in manual}
+        self._discovered_rows: dict[str, Any] = {}
+        self._trusted_rows: dict[str, Any] = {}
+        self._manual_rows: dict[str, Any] = {}
+        self._discovered_empty_label: Any | None = None
+        self._trusted_empty_label: Any | None = None
+        self._manual_empty_label: Any | None = None
         self._updating = False
 
         self._build(parent, discovery_enabled)
@@ -244,55 +250,134 @@ class NodesConnectionsPage:
         self._discovered_body = body
         self.refresh_discovered(list(self._discovered.values()))
 
+    _DISCOVERED_STRUCTURAL = (
+        "compatible",
+        "connectable",
+        "port",
+        "pairing_state",
+        "identity_fingerprint",
+    )
+
     def refresh_discovered(self, specs: list[DiscoveredPeerSpec]) -> None:
-        self._discovered = {spec.node_id: spec for spec in specs}
-        self._clear_actions("nodes:peer:")
-        ui_layout.clear_children(self._discovered_body)
-        if not specs:
-            self._empty_hint(self._discovered_body, "No peers discovered yet.")
-            self._set_discovery_state(self._discovery_var.get(), has_peers=False)
-            return
+        incoming = {spec.node_id: spec for spec in specs}
+        for node_id in [key for key in self._discovered_rows if key not in incoming]:
+            self._remove_discovered_row(node_id)
         for spec in specs:
-            self._peer_row(self._discovered_body, spec)
-        self._set_discovery_state(self._discovery_var.get(), has_peers=True)
+            previous = self._discovered.get(spec.node_id)
+            if spec.node_id not in self._discovered_rows:
+                self._discovered_rows[spec.node_id] = self._peer_row(
+                    self._discovered_body, spec
+                )
+            elif previous is not None and not self._same_discovered_row(previous, spec):
+                self._remove_discovered_row(spec.node_id)
+                self._discovered_rows[spec.node_id] = self._peer_row(
+                    self._discovered_body, spec
+                )
+            else:
+                self._update_discovered_row(spec)
+        self._discovered = incoming
+        self._repack_discovered(specs)
+        self._update_discovered_empty_state(specs)
+        self._set_discovery_state(self._discovery_var.get(), has_peers=bool(specs))
+
+    @staticmethod
+    def _same_discovered_row(
+        previous: DiscoveredPeerSpec, current: DiscoveredPeerSpec
+    ) -> bool:
+        return all(
+            getattr(previous, name) == getattr(current, name)
+            for name in NodesConnectionsPage._DISCOVERED_STRUCTURAL
+        )
+
+    def _remove_discovered_row(self, node_id: str) -> None:
+        coordinator = self._button_coordinator
+        if coordinator is not None:
+            coordinator.clear_prefix(f"nodes:peer:{node_id}:")
+        row = self._discovered_rows.pop(node_id, None)
+        if row is not None:
+            row.destroy()
+
+    def _repack_discovered(self, specs: list[DiscoveredPeerSpec]) -> None:
+        for spec in specs:
+            row = self._discovered_rows.get(spec.node_id)
+            if row is not None:
+                row.pack(fill="x", pady=(0, 8))
+
+    def _update_discovered_empty_state(
+        self, specs: list[DiscoveredPeerSpec]
+    ) -> None:
+        if specs:
+            if self._discovered_empty_label is not None:
+                self._discovered_empty_label.destroy()
+                self._discovered_empty_label = None
+        elif self._discovered_empty_label is None:
+            self._discovered_empty_label = self._empty_hint(
+                self._discovered_body, "No peers discovered yet."
+            )
+
+    def _update_discovered_row(self, spec: DiscoveredPeerSpec) -> None:
+        row = self._discovered_rows.get(spec.node_id)
+        if row is None:
+            return
+        name = getattr(row, "_name_label", None)
+        if name is not None:
+            name.config(text=spec.hostname)
+        address = getattr(row, "_address_label", None)
+        if address is not None:
+            address.config(text=self._discovered_address_text(spec))
+        details = getattr(row, "_details_label", None)
+        if details is not None:
+            details.config(text=self._discovered_details_text(spec))
+
+    def _discovered_address_text(self, spec: DiscoveredPeerSpec) -> str:
+        address = f"Discovered · {spec.hostname}"
+        if spec.port is not None:
+            address += f" · port {spec.port}"
+        if not spec.compatible:
+            address += " · Incompatible version"
+        return address
+
+    def _discovered_details_text(self, spec: DiscoveredPeerSpec) -> str:
+        details = f"Node ID: {node_presentation.technical_id(spec.node_id)}"
+        if spec.identity_fingerprint:
+            details += " · fingerprint available for pairing"
+        return details
 
     def _peer_row(self, body: Any, spec: DiscoveredPeerSpec) -> Any:
         row = self.frame_cls(body, bg=self.colors["card"])
         row.pack(fill="x", pady=(0, 8))
         identity = self.frame_cls(row, bg=self.colors["card"])
         identity.pack(fill="x")
-        self.label_cls(
+        name_label = self.label_cls(
             identity,
             text=spec.hostname,
             bg=self.colors["card"],
             fg=self.colors["text"],
             font=self.fonts["section"],
             anchor="w",
-        ).pack(anchor="w")
-        address = f"Discovered · {spec.hostname}"
-        if spec.port is not None:
-            address += f" · port {spec.port}"
-        if not spec.compatible:
-            address += " · Incompatible version"
-        self.label_cls(
+        )
+        name_label.pack(anchor="w")
+        row._name_label = name_label
+        address_label = self.label_cls(
             identity,
-            text=address,
+            text=self._discovered_address_text(spec),
             bg=self.colors["card"],
             fg=self.colors["secondary"],
             font=self.fonts["body"],
             anchor="w",
-        ).pack(anchor="w", pady=(2, 0))
-        details = f"Node ID: {node_presentation.technical_id(spec.node_id)}"
-        if spec.identity_fingerprint:
-            details += " · fingerprint available for pairing"
-        self.label_cls(
+        )
+        address_label.pack(anchor="w", pady=(2, 0))
+        row._address_label = address_label
+        details_label = self.label_cls(
             row,
-            text=details,
+            text=self._discovered_details_text(spec),
             bg=self.colors["card"],
             fg=self.colors["muted_text"],
             font=self.fonts["node"],
             anchor="w",
-        ).pack(fill="x", pady=(4, 0))
+        )
+        details_label.pack(fill="x", pady=(4, 0))
+        row._details_label = details_label
         actions = self.frame_cls(row, bg=self.colors["card"])
         actions.pack(fill="x", pady=(6, 0))
         pair_id = f"nodes:peer:{spec.node_id}:pair"
@@ -334,24 +419,131 @@ class NodesConnectionsPage:
         self._trusted_body = body
         self.refresh_trusted(list(self._trusted.values()))
 
+    _TRUSTED_STRUCTURAL = (
+        "permissions",
+        "roles",
+        "role_editable",
+        "paused",
+        "selectable",
+        "status",
+        "is_manual",
+        "identity_status",
+        "target_state",
+        "identity_fingerprint",
+    )
+
     def refresh_trusted(self, specs: list[TrustedNodeSpec]) -> None:
-        self._trusted = {spec.node_id: spec for spec in specs}
-        self._clear_actions("nodes:trusted:")
-        ui_layout.clear_children(self._trusted_body)
-        if not specs:
-            self._empty_hint(self._trusted_body, "No trusted nodes yet.")
-            return
+        incoming = {spec.node_id: spec for spec in specs}
+        for node_id in [key for key in self._trusted_rows if key not in incoming]:
+            self._remove_trusted_row(node_id)
         for spec in specs:
-            self._trusted_row(self._trusted_body, spec)
+            previous = self._trusted.get(spec.node_id)
+            if spec.node_id not in self._trusted_rows:
+                self._trusted_rows[spec.node_id] = self._trusted_row(
+                    self._trusted_body, spec
+                )
+            elif previous is not None and not self._same_trusted_row(previous, spec):
+                self._remove_trusted_row(spec.node_id)
+                self._trusted_rows[spec.node_id] = self._trusted_row(
+                    self._trusted_body, spec
+                )
+            else:
+                self._update_trusted_row(spec)
+        self._trusted = incoming
+        self._repack_trusted(specs)
+        self._update_trusted_empty_state(specs)
+
+    @staticmethod
+    def _same_trusted_row(
+        previous: TrustedNodeSpec, current: TrustedNodeSpec
+    ) -> bool:
+        return all(
+            getattr(previous, name) == getattr(current, name)
+            for name in NodesConnectionsPage._TRUSTED_STRUCTURAL
+        )
+
+    def _remove_trusted_row(self, node_id: str) -> None:
+        coordinator = self._button_coordinator
+        if coordinator is not None:
+            coordinator.clear_prefix(f"nodes:trusted:{node_id}:")
+        row = self._trusted_rows.pop(node_id, None)
+        if row is not None:
+            row.destroy()
+
+    def _repack_trusted(self, specs: list[TrustedNodeSpec]) -> None:
+        for spec in specs:
+            row = self._trusted_rows.get(spec.node_id)
+            if row is not None:
+                row.pack(fill="x", pady=(0, 10))
+
+    def _update_trusted_empty_state(self, specs: list[TrustedNodeSpec]) -> None:
+        if specs:
+            if self._trusted_empty_label is not None:
+                self._trusted_empty_label.destroy()
+                self._trusted_empty_label = None
+        elif self._trusted_empty_label is None:
+            self._trusted_empty_label = self._empty_hint(
+                self._trusted_body, "No trusted nodes yet."
+            )
+
+    def _update_trusted_row(self, spec: TrustedNodeSpec) -> None:
+        row = self._trusted_rows.get(spec.node_id)
+        if row is None:
+            return
+        name = getattr(row, "_name_label", None)
+        if name is not None:
+            name.config(text=spec.display_name)
+        meta = getattr(row, "_meta_label", None)
+        if meta is not None:
+            meta.config(
+                text=self._trusted_meta_text(spec),
+                fg=self.colors[self._trusted_meta_color(spec)],
+            )
+        endpoint = getattr(row, "_endpoint_label", None)
+        if endpoint is not None:
+            endpoint.config(text=self._trusted_endpoint_text(spec))
+        chip = getattr(row, "_chip_label", None)
+        if chip is not None:
+            chip.config(
+                bg=self._trusted_chip_color(spec),
+                fg=self._trusted_chip_color(spec),
+            )
+
+    def _trusted_meta_text(self, spec: TrustedNodeSpec) -> str:
+        role_status = (
+            f"{node_presentation.trust_label('trusted')} · "
+            f"{node_presentation.status_label(spec.status)}"
+        )
+        if spec.target_state != "Unknown":
+            role_status += f" · {spec.target_state}"
+        if spec.identity_status == "mismatch":
+            role_status += " · Identity mismatch"
+        return role_status
+
+    def _trusted_meta_color(self, spec: TrustedNodeSpec) -> str:
+        status_role = node_presentation.status_color_role(spec.status)
+        if (
+            spec.identity_status == "mismatch"
+            or spec.target_state == "Permission denied"
+        ):
+            status_role = "danger"
+        return status_role
+
+    def _trusted_endpoint_text(self, spec: TrustedNodeSpec) -> str:
+        endpoint = f"Host: {spec.host or spec.hostname}"
+        if spec.port is not None:
+            endpoint += f" · port {spec.port}"
+        return f"{endpoint} · Node ID: {node_presentation.technical_id(spec.node_id)}"
+
+    def _trusted_chip_color(self, spec: TrustedNodeSpec) -> str:
+        colour = spec.color or _DEFAULT_COLOR
+        return ui_styles.NODE_COLORS.get(colour, ui_styles.NODE_COLORS[_DEFAULT_COLOR])
 
     def _trusted_row(self, body: Any, spec: TrustedNodeSpec) -> Any:
         row = self.frame_cls(body, bg=self.colors["card"])
         row.pack(fill="x", pady=(0, 10))
 
-        colour = spec.color or _DEFAULT_COLOR
-        hex_colour = ui_styles.NODE_COLORS.get(
-            colour, ui_styles.NODE_COLORS[_DEFAULT_COLOR]
-        )
+        hex_colour = self._trusted_chip_color(spec)
         chip = self.label_cls(
             row,
             text=" ",
@@ -361,53 +553,40 @@ class NodesConnectionsPage:
             width=2,
         )
         chip.pack(side="left", padx=(0, 8), pady=(2, 0))
+        row._chip_label = chip
 
         identity = self.frame_cls(row, bg=self.colors["card"])
         identity.pack(fill="x")
-        self.label_cls(
+        name_label = self.label_cls(
             identity,
             text=spec.display_name,
             bg=self.colors["card"],
             fg=self.colors["text"],
             font=self.fonts["section"],
             anchor="w",
-        ).pack(anchor="w")
-        role_status = (
-            f"{node_presentation.trust_label('trusted')} · "
-            f"{node_presentation.status_label(spec.status)}"
         )
-        if spec.target_state != "Unknown":
-            role_status += f" · {spec.target_state}"
-        if spec.identity_status == "mismatch":
-            role_status += " · Identity mismatch"
-        status_role = node_presentation.status_color_role(spec.status)
-        if (
-            spec.identity_status == "mismatch"
-            or spec.target_state == "Permission denied"
-        ):
-            status_role = "danger"
-        self.label_cls(
+        name_label.pack(anchor="w")
+        row._name_label = name_label
+        meta_label = self.label_cls(
             identity,
-            text=role_status,
+            text=self._trusted_meta_text(spec),
             bg=self.colors["card"],
-            fg=self.colors[status_role],
+            fg=self.colors[self._trusted_meta_color(spec)],
             font=self.fonts["status"],
             anchor="w",
-        ).pack(anchor="w", pady=(2, 0))
-        endpoint = f"Host: {spec.host or spec.hostname}"
-        if spec.port is not None:
-            endpoint += f" · port {spec.port}"
-        technical = (
-            f"{endpoint} · Node ID: {node_presentation.technical_id(spec.node_id)}"
         )
-        self.label_cls(
+        meta_label.pack(anchor="w", pady=(2, 0))
+        row._meta_label = meta_label
+        endpoint_label = self.label_cls(
             row,
-            text=technical,
+            text=self._trusted_endpoint_text(spec),
             bg=self.colors["card"],
             fg=self.colors["muted_text"],
             font=self.fonts["node"],
             anchor="w",
-        ).pack(fill="x", pady=(4, 0))
+        )
+        endpoint_label.pack(fill="x", pady=(4, 0))
+        row._endpoint_label = endpoint_label
         if spec.identity_fingerprint:
             self.label_cls(
                 row,
@@ -428,7 +607,7 @@ class NodesConnectionsPage:
                 ).pack(fill="x")
 
         colour_var = self._var_factory()
-        colour_var.set(colour)
+        colour_var.set(spec.color or _DEFAULT_COLOR)
         appearance = self.frame_cls(row, bg=self.colors["card"])
         appearance.pack(fill="x", pady=(8, 0))
         self.label_cls(
@@ -696,66 +875,134 @@ class NodesConnectionsPage:
         )
         entry.pack(fill="x", pady=(2, 0))
 
+    _MANUAL_STRUCTURAL = ("port",)
+
     def refresh_manual(self, specs: list[TrustedNodeSpec]) -> None:
-        self._manual = {spec.node_id: spec for spec in specs}
-        self._clear_actions("nodes:manual:")
-        ui_layout.clear_children(self._manual_hosts_body)
-        if not specs:
-            self._empty_hint(self._manual_hosts_body, "No manual hosts configured.")
-            return
+        incoming = {spec.node_id: spec for spec in specs}
+        for node_id in [key for key in self._manual_rows if key not in incoming]:
+            self._remove_manual_row(node_id)
         for spec in specs:
-            row = self.frame_cls(self._manual_hosts_body, bg=self.colors["card"])
-            row.pack(fill="x", pady=(0, 8))
-            identity = self.frame_cls(row, bg=self.colors["card"])
-            identity.pack(fill="x")
-            self.label_cls(
-                identity,
-                text=spec.display_name,
-                bg=self.colors["card"],
-                fg=self.colors["text"],
-                font=self.fonts["section"],
-                anchor="w",
-            ).pack(anchor="w")
-            text = f"Manual host · {spec.host or spec.hostname}"
-            if spec.port is not None:
-                text += f" · port {spec.port}"
-            self.label_cls(
-                identity,
-                text=text,
-                bg=self.colors["card"],
-                fg=self.colors["secondary"],
-                font=self.fonts["body"],
-                anchor="w",
-            ).pack(anchor="w", pady=(2, 0))
-            self.label_cls(
-                row,
-                text=f"Node ID: {node_presentation.technical_id(spec.node_id)}",
-                bg=self.colors["card"],
-                fg=self.colors["muted_text"],
-                font=self.fonts["node"],
-                anchor="w",
-            ).pack(fill="x", pady=(4, 0))
+            previous = self._manual.get(spec.node_id)
+            if spec.node_id not in self._manual_rows:
+                self._manual_rows[spec.node_id] = self._manual_row(
+                    self._manual_hosts_body, spec
+                )
+            elif previous is not None and not self._same_manual_row(previous, spec):
+                self._remove_manual_row(spec.node_id)
+                self._manual_rows[spec.node_id] = self._manual_row(
+                    self._manual_hosts_body, spec
+                )
+            else:
+                self._update_manual_row(spec)
+        self._manual = incoming
+        self._repack_manual(specs)
+        self._update_manual_empty_state(specs)
 
-            actions = self.frame_cls(row, bg=self.colors["card"])
-            actions.pack(fill="x", pady=(6, 0))
+    @staticmethod
+    def _same_manual_row(
+        previous: TrustedNodeSpec, current: TrustedNodeSpec
+    ) -> bool:
+        return all(
+            getattr(previous, name) == getattr(current, name)
+            for name in NodesConnectionsPage._MANUAL_STRUCTURAL
+        )
 
-            def remove_manual(node_id: str = spec.node_id) -> None:
-                self.callbacks.on_remove_manual(node_id)
+    def _remove_manual_row(self, node_id: str) -> None:
+        coordinator = self._button_coordinator
+        if coordinator is not None:
+            coordinator.clear_prefix(f"nodes:manual:{node_id}:")
+        row = self._manual_rows.pop(node_id, None)
+        if row is not None:
+            row.destroy()
 
-            remove_button = self.button_cls(
-                actions,
-                text="Remove",
-                command=remove_manual,
-                style=ui_styles.STYLE_DANGER_BUTTON,
+    def _repack_manual(self, specs: list[TrustedNodeSpec]) -> None:
+        for spec in specs:
+            row = self._manual_rows.get(spec.node_id)
+            if row is not None:
+                row.pack(fill="x", pady=(0, 8))
+
+    def _update_manual_empty_state(self, specs: list[TrustedNodeSpec]) -> None:
+        if specs:
+            if self._manual_empty_label is not None:
+                self._manual_empty_label.destroy()
+                self._manual_empty_label = None
+        elif self._manual_empty_label is None:
+            self._manual_empty_label = self._empty_hint(
+                self._manual_hosts_body, "No manual hosts configured."
             )
-            remove_button.pack(side="right")
 
-            self._register_button(
-                f"nodes:manual:{spec.node_id}:remove",
-                remove_manual,
-                remove_button,
-                True,
-            )
+    def _update_manual_row(self, spec: TrustedNodeSpec) -> None:
+        row = self._manual_rows.get(spec.node_id)
+        if row is None:
+            return
+        name = getattr(row, "_name_label", None)
+        if name is not None:
+            name.config(text=spec.display_name)
+        meta = getattr(row, "_meta_label", None)
+        if meta is not None:
+            meta.config(text=self._manual_meta_text(spec))
+
+    def _manual_meta_text(self, spec: TrustedNodeSpec) -> str:
+        text = f"Manual host · {spec.host or spec.hostname}"
+        if spec.port is not None:
+            text += f" · port {spec.port}"
+        return text
+
+    def _manual_row(self, body: Any, spec: TrustedNodeSpec) -> Any:
+        row = self.frame_cls(body, bg=self.colors["card"])
+        row.pack(fill="x", pady=(0, 8))
+        identity = self.frame_cls(row, bg=self.colors["card"])
+        identity.pack(fill="x")
+        name_label = self.label_cls(
+            identity,
+            text=spec.display_name,
+            bg=self.colors["card"],
+            fg=self.colors["text"],
+            font=self.fonts["section"],
+            anchor="w",
+        )
+        name_label.pack(anchor="w")
+        row._name_label = name_label
+        meta_label = self.label_cls(
+            identity,
+            text=self._manual_meta_text(spec),
+            bg=self.colors["card"],
+            fg=self.colors["secondary"],
+            font=self.fonts["body"],
+            anchor="w",
+        )
+        meta_label.pack(anchor="w", pady=(2, 0))
+        row._meta_label = meta_label
+        self.label_cls(
+            row,
+            text=f"Node ID: {node_presentation.technical_id(spec.node_id)}",
+            bg=self.colors["card"],
+            fg=self.colors["muted_text"],
+            font=self.fonts["node"],
+            anchor="w",
+        ).pack(fill="x", pady=(4, 0))
+
+        actions = self.frame_cls(row, bg=self.colors["card"])
+        actions.pack(fill="x", pady=(6, 0))
+
+        def remove_manual(node_id: str = spec.node_id) -> None:
+            self.callbacks.on_remove_manual(node_id)
+
+        remove_button = self.button_cls(
+            actions,
+            text="Remove",
+            command=remove_manual,
+            style=ui_styles.STYLE_DANGER_BUTTON,
+        )
+        remove_button.pack(side="right")
+
+        self._register_button(
+            f"nodes:manual:{spec.node_id}:remove",
+            remove_manual,
+            remove_button,
+            True,
+        )
+        return row
 
     def _add_manual_host(self) -> None:
         name = self._manual_name_var.get().strip()
@@ -775,11 +1022,6 @@ class NodesConnectionsPage:
             self.show_error("Name and host are required for a manual host")
             return
         self.callbacks.on_add_manual_host(name, host, port)
-
-    def _clear_actions(self, prefix: str) -> None:
-        coordinator = self._button_coordinator
-        if coordinator is not None:
-            coordinator.clear_prefix(prefix)
 
     def _register_button(
         self,
@@ -822,15 +1064,17 @@ class NodesConnectionsPage:
         )
         return control
 
-    def _empty_hint(self, body: Any, text: str) -> None:
-        self.label_cls(
+    def _empty_hint(self, body: Any, text: str) -> Any:
+        label = self.label_cls(
             body,
             text=text,
             bg=self.colors["card"],
             fg=self.colors["muted_text"],
             font=self.fonts["body"],
             anchor="w",
-        ).pack(anchor="w", pady=(0, 4))
+        )
+        label.pack(anchor="w", pady=(0, 4))
+        return label
 
     def set_discovery_enabled(self, enabled: bool) -> None:
         self._updating = True
