@@ -378,7 +378,7 @@ def dashboard_header(
     description: str,
     frame_cls: Callable[..., Any],
     label_cls: Callable[..., Any],
-    wrap: int = 680,
+    wrap: int = ui_styles.LAYOUT["dashboard_header_wrap"],
     node_title: str | None = None,
 ) -> Any:
     """Render the dashboard header block and return the actions frame.
@@ -407,13 +407,13 @@ def dashboard_header(
             text=node_title.upper(),
             style="Node.TLabel",
         )
-        node_label.pack(anchor="w", pady=(2, 0))
+        node_label.pack(anchor="w", pady=(ui_styles.SPACING["caption_gap"], 0))
     label_cls(
         heading_frame,
         text=description,
         wraplength=wrap,
         style="Description.TLabel",
-    ).pack(anchor="w", pady=(6, 0))
+    ).pack(anchor="w", pady=(ui_styles.SPACING["header_desc_gap"], 0))
     discovery_label = label_cls(
         heading_frame,
         text="",
@@ -421,7 +421,7 @@ def dashboard_header(
     )
 
     actions = frame_cls(header_frame, style="App.TFrame")
-    actions.pack(side="right", padx=(20, 0))
+    actions.pack(side="right", padx=(ui_styles.SPACING["header_actions_gap"], 0))
     # Preserve the existing return contract while exposing the optional node
     # and discovery labels for the dashboard controller to update.
     actions._dashboard_node_label = node_label
@@ -459,7 +459,7 @@ def page_shell(
         description=description,
         frame_cls=style_frame_cls,
         label_cls=style_label_cls,
-        wrap=620,
+        wrap=ui_styles.LAYOUT["page_shell_wrap"],
     )
     back_button = button_cls(
         header_actions,
@@ -470,7 +470,7 @@ def page_shell(
     back_button.pack(anchor="e")
 
     body = style_frame_cls(parent, style="App.TFrame")
-    body.pack(fill="both", expand=True, pady=(14, 0))
+    body.pack(fill="both", expand=True, pady=(ui_styles.SPACING["section_gap"], 0))
 
     content_side = style_frame_cls(body, style="App.TFrame")
     content_side.pack(side="left", fill="both", expand=True)
@@ -514,7 +514,7 @@ def section_card(
         padx=ui_styles.SPACING["section_pad_x"],
         pady=ui_styles.SPACING["section_pad_y"],
     )
-    card.pack(fill="x", pady=(0, 14))
+    card.pack(fill="x", pady=(0, ui_styles.SPACING["section_gap"]))
     label_cls(
         card,
         text=title,
@@ -529,13 +529,13 @@ def section_card(
             bg=colors["card"],
             fg=colors["secondary"],
             font=fonts["body"],
-            wraplength=360,
+            wraplength=ui_styles.LAYOUT["section_description_wrap"],
             justify="left",
         )
-        description_label.pack(anchor="w", pady=(4, 0))
-        resize_aware(card, fit_wrap_to_width(description_label, 560, margin=36))
+        description_label.pack(anchor="w", pady=(ui_styles.SPACING["heading_desc_gap"], 0))
+        resize_aware(card, fit_wrap_to_width(description_label, ui_styles.LAYOUT["fit_wrap_max"], margin=ui_styles.LAYOUT["fit_wrap_margin"]))
     body = frame_cls(card, bg=colors["card"])
-    body.pack(fill="x", pady=(10, 0))
+    body.pack(fill="x", pady=(ui_styles.SPACING["section_body_top"], 0))
     return card, body
 
 
