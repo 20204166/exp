@@ -20,8 +20,6 @@ from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
 
-_CARD_WRAP = 560
-
 
 @dataclass(frozen=True, slots=True)
 class SettingsHomeCallbacks:
@@ -139,7 +137,7 @@ class SettingsHome:
             button_cls=self.button_cls,
             colors=self.colors,
             fonts=self.fonts,
-            wraplength=_CARD_WRAP,
+            wraplength=ui_styles.LAYOUT["navigation_card_wrap"],
             action_id=f"settings:category:{spec.key}",
             button_coordinator=self._button_coordinator,
         )

@@ -551,7 +551,7 @@ def navigation_card(
     button_cls: Callable[..., Any],
     colors: dict[str, str],
     fonts: dict[str, Font],
-    wraplength: int = 560,
+    wraplength: int = ui_styles.LAYOUT["navigation_card_wrap"],
     action_id: str | None = None,
     button_coordinator: ButtonCoordinator | None = None,
 ) -> tuple[Any, Any]:
@@ -566,7 +566,7 @@ def navigation_card(
         padx=ui_styles.SPACING["section_pad_x"],
         pady=ui_styles.SPACING["section_pad_y"],
     )
-    card.pack(fill="x", pady=(0, 14))
+    card.pack(fill="x", pady=(0, ui_styles.SPACING["section_gap"]))
     text_column = frame_cls(card, bg=colors["card"])
     text_column.pack(side="left", fill="x", expand=True)
     label_cls(
@@ -584,7 +584,7 @@ def navigation_card(
         font=fonts["body"],
         wraplength=wraplength,
         justify="left",
-    ).pack(anchor="w", pady=(4, 0))
+    ).pack(anchor="w", pady=(ui_styles.SPACING["heading_desc_gap"], 0))
     button = button_cls(
         card,
         text=button_text,
@@ -592,7 +592,7 @@ def navigation_card(
         style=ui_styles.STYLE_NEUTRAL_BUTTON,
         cursor="hand2",
     )
-    button.pack(side="right", padx=(16, 0), anchor="center")
+    button.pack(side="right", padx=(ui_styles.SPACING["nav_button_gap"], 0), anchor="center")
     if button_coordinator is not None and action_id is not None:
         button_coordinator.register(action_id, command, replace=True)
         button_coordinator.bind(button, action_id)
@@ -658,7 +658,7 @@ def event_row(
         command=command,
         style="Neutral.TButton",
     )
-    button.pack(side="right", padx=(12, 0))
+    button.pack(side="right", padx=(ui_styles.SPACING["control_gap"], 0))
     return row, button
 
 
@@ -683,7 +683,7 @@ def setting_row(
     """
 
     row = frame_cls(parent, bg=colors["card"])
-    row.pack(fill="x", pady=(0, 10))
+    row.pack(fill="x", pady=(0, ui_styles.SPACING["row_gap"]))
     label = label_cls(
         row,
         text=label_text,
@@ -696,7 +696,7 @@ def setting_row(
     )
     label.pack(side="left", fill="x", expand=True)
     control = control_factory(row)
-    control.pack(side="right", padx=(12, 0))
+    control.pack(side="right", padx=(ui_styles.SPACING["control_gap"], 0))
     if help_text is not None:
         help_label = label_cls(
             row,
@@ -708,7 +708,7 @@ def setting_row(
             wraplength=label_wrap,
             justify="left",
         )
-        help_label.pack(anchor="w", pady=(2, 0))
+        help_label.pack(anchor="w", pady=(ui_styles.SPACING["caption_gap"], 0))
     return row, label, control
 
 
