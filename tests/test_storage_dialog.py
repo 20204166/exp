@@ -16,7 +16,8 @@ from maintenance.dialogs import (
     run_in_thread,
     show_action_result,
 )
-from maintenance.models import FileActionResult, FileCandidate
+from maintenance.models import FileActionResult
+from tests.support.models import make_file_candidate
 from tests.support.scheduling import DeferredRunner
 from tests.support.widget_recording import (
     FailingAfterWidget,
@@ -134,18 +135,8 @@ class StorageDialogTests(unittest.TestCase):
         first = Path("first.zip")
         second = Path("second.zip")
         candidates = {
-            "0": FileCandidate(
-                first,
-                10,
-                datetime(2024, 1, 1, tzinfo=timezone.utc),
-                "Large file",
-            ),
-            "1": FileCandidate(
-                second,
-                20,
-                datetime(2024, 1, 1, tzinfo=timezone.utc),
-                "Verified duplicate",
-            ),
+            "0": make_file_candidate(first),
+            "1": make_file_candidate(second, size=20, reason="Verified duplicate"),
         }
         manager = FakeManager()
         dialog: Any = object.__new__(StorageDialog)
@@ -198,12 +189,7 @@ class StorageDialogTests(unittest.TestCase):
         self.assertEqual(dialog.trash_button.state, tk.DISABLED)
 
     def test_show_candidates_non_empty_state_is_unchanged(self) -> None:
-        candidate = FileCandidate(
-            Path("first.zip"),
-            10,
-            datetime(2024, 1, 1, tzinfo=timezone.utc),
-            "Large file",
-        )
+        candidate = make_file_candidate(Path("first.zip"))
         dialog: Any = object.__new__(StorageDialog)
         dialog.tree = RecordingTree()
         dialog.candidates = {}
@@ -255,12 +241,7 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         self.assertFalse(dialog._read_only)
 
     def test_read_only_dialog_keeps_trash_disabled(self) -> None:
-        candidate = FileCandidate(
-            Path("first.zip"),
-            10,
-            datetime(2024, 1, 1, tzinfo=timezone.utc),
-            "Large file",
-        )
+        candidate = make_file_candidate(Path("first.zip"))
         dialog: Any = object.__new__(StorageDialog)
         dialog.tree = RecordingTree()
         dialog.candidates = {}
@@ -407,11 +388,11 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         dialog.manager = Mock(move_to_trash=Mock(side_effect=RuntimeError("denied")))
         dialog.tree = RecordingTree(("0",))
         dialog.candidates = {
-            "0": FileCandidate(
+            "0": make_file_candidate(
                 Path("x"),
-                1,
-                datetime.now(timezone.utc),
-                "large",
+                size=1,
+                modified_at=datetime.now(timezone.utc),
+                reason="large",
             )
         }
         dialog._read_only = False
@@ -435,11 +416,11 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         dialog.destroy = Mock()
         dialog.tree = RecordingTree(("0",))
         dialog.candidates = {
-            "0": FileCandidate(
+            "0": make_file_candidate(
                 Path("x"),
-                1,
-                datetime.now(timezone.utc),
-                "large",
+                size=1,
+                modified_at=datetime.now(timezone.utc),
+                reason="large",
             )
         }
         dialog.manager = Mock(move_to_trash=lambda _paths: FileActionResult(1, (), ()))
@@ -477,11 +458,11 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         dialog.coordinator = AppCoordinator(runner=runner, deliver=deliver)
         dialog.tree = RecordingTree(("0",))
         dialog.candidates = {
-            "0": FileCandidate(
+            "0": make_file_candidate(
                 Path("x"),
-                1,
-                datetime.now(timezone.utc),
-                "large",
+                size=1,
+                modified_at=datetime.now(timezone.utc),
+                reason="large",
             )
         }
         dialog.manager = Mock(

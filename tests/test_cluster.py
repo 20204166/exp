@@ -35,7 +35,6 @@ from maintenance.components.temperature import (
 from maintenance.models import (
     CapabilityState,
     DashboardSnapshot,
-    FileCandidate,
     ProcessActionState,
     ProcessCandidate,
     ResourceSummary,
@@ -48,7 +47,7 @@ from maintenance.nodes import (
     NodeSnapshot,
     NodeStatus,
 )
-from tests.support.models import make_snapshot, make_summary
+from tests.support.models import make_file_candidate, make_snapshot, make_summary
 from tests.support.temperature import make_temperature_sample
 
 NOW = datetime.now(timezone.utc).astimezone()
@@ -293,7 +292,7 @@ class ProcessAndFileCodecTests(unittest.TestCase):
         self.assertEqual(decoded, original)
 
     def test_file_candidate_round_trip(self) -> None:
-        original = FileCandidate(Path("/tmp/x"), 10, NOW, "reason")
+        original = make_file_candidate(Path("/tmp/x"), modified_at=NOW, reason="reason")
         decoded = file_candidate_from_dict(file_candidate_to_dict(original))
         self.assertEqual(decoded, original)
 

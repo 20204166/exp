@@ -62,7 +62,7 @@ from maintenance.remote import (
     sign_response,
     verify_request,
 )
-from tests.support.models import make_snapshot, make_summary
+from tests.support.models import make_file_candidate, make_snapshot, make_summary
 from tests.support.temperature import make_temperature_sample
 
 SECRET = "a" * 64
@@ -164,7 +164,7 @@ class FakeProvider:
         progress_callback=None,
         cancel_event=None,
     ) -> list[FileCandidate]:
-        return [FileCandidate(Path("/tmp/x"), 10, _now(), "reason")]
+        return [make_file_candidate(Path("/tmp/x"), modified_at=_now(), reason="reason")]
 
 
 def _service(
