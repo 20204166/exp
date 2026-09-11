@@ -20,14 +20,16 @@ from maintenance.nodes import (
     local_node_descriptor,
 )
 
+_SENTINEL = object()
+
 
 def make_local_context(
     *,
-    provider: Any = object(),
-    process_manager: Any = object(),
-    file_manager: Any = object(),
-    scheduler: Any = object(),
-    coordinator: Any = object(),
+    provider: Any = _SENTINEL,
+    process_manager: Any = _SENTINEL,
+    file_manager: Any = _SENTINEL,
+    scheduler: Any = _SENTINEL,
+    coordinator: Any = _SENTINEL,
     **overrides: Any,
 ) -> NodeContext:
     """Build a local node context with explicit dependency overrides."""

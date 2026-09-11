@@ -11,14 +11,13 @@ from dataclasses import replace
 from tkinter import messagebox, simpledialog
 from typing import Any
 
-from maintenance.cluster import ClusterState, PeerGrantRecord, trusted_node_record
-from maintenance.components.coordinator import ComponentRefreshScheduler
+from maintenance.cluster import PeerGrantRecord, trusted_node_record
 from maintenance.components.cluster_roles import (
     ClusterRole,
-    RoleAssignment,
     RoleAuthorizationError,
     RoleState,
 )
+from maintenance.components.coordinator import ComponentRefreshScheduler
 from maintenance.nodes import (
     READ_PERMISSIONS,
     NodeCapability,

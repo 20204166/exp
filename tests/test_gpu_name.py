@@ -1,4 +1,5 @@
 from tests.support.scanner import make_scanner
+
 """Focused tests for the concise GPU display name on the overview card."""
 
 import unittest

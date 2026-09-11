@@ -19,14 +19,14 @@ from maintenance.cluster import (
 )
 from maintenance.components import (
     DOWNLOADS_SCAN_CANCELLED,  # noqa: F401 - retained scan patch seam
+    CoordinatorTimeline,
     DashboardScanLifecycle,
     NodeSelection,
     PeerConnectionManager,
-    CoordinatorTimeline,
-    StandbyBuffer,
-    StorageStatus,
     ResourceFeatureCatalog,
     ScanCoordinator,
+    StandbyBuffer,
+    StorageStatus,
     node_context,  # noqa: F401 - retained context patch seam
 )
 from maintenance.components.background_orchestration import (

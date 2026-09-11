@@ -113,12 +113,10 @@ class BuiltWheelTests(unittest.TestCase):
 
     def test_wheel_dependencies_match_pyproject_and_requirements(self) -> None:
         project_dependencies = load_project()["project"]["dependencies"]
-        requirements = [
-            line.strip()
-            for line in (REPO / "requirements.txt").read_text().splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        ]
-        self.assertEqual(requirements, project_dependencies)
+        runtime_requirements, dev_requirements = _requirements_sections()
+        self.assertEqual(runtime_requirements, project_dependencies)
+        dev_extras = load_project()["project"]["optional-dependencies"]["dev"]
+        self.assertEqual(dev_requirements, dev_extras)
 
         _, wheel_dependencies, _ = wheel_metadata(latest_wheel())
         self.assertEqual(wheel_dependencies, project_dependencies)
@@ -129,6 +127,28 @@ class BuiltWheelTests(unittest.TestCase):
 
         self.assertEqual(version, __version__)
         self.assertEqual(requires_python, load_project()["project"]["requires-python"])
+
+
+def _requirements_sections() -> tuple[list[str], list[str]]:
+    """Split requirements.txt into runtime and dev-tool requirements.
+
+    The dev-tool block is introduced by the ``# Dev-only`` comment; every
+    non-comment line after that marker belongs to the dev section.
+    """
+
+    runtime: list[str] = []
+    dev: list[str] = []
+    in_dev = False
+    for line in (REPO / "requirements.txt").read_text().splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.lstrip().startswith("#"):
+            if "Dev-only" in stripped:
+                in_dev = True
+            continue
+        (dev if in_dev else runtime).append(stripped)
+    return runtime, dev
 
 
 if __name__ == "__main__":

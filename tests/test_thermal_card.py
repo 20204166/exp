@@ -7,7 +7,11 @@ from unittest.mock import patch
 
 from maintenance.models import CapabilityState
 from maintenance.scanner import SystemScanner
-from tests.support.scanner import make_baseline_psutil, scanner_environment, make_scanner
+from tests.support.scanner import (
+    make_baseline_psutil,
+    make_scanner,
+    scanner_environment,
+)
 
 
 def _temp(current: float | None, label: str = "sensor") -> SimpleNamespace:
@@ -103,7 +107,10 @@ class TemperatureLinesTests(unittest.TestCase):
             with self.subTest(system=system):
                 probed: list[int] = []
                 fake = _thermal_psutil(
-                    lambda: (probed.append(1), {"coretemp": [_temp(45.0)]})[1]
+                    lambda probed=probed: (
+                        probed.append(1),
+                        {"coretemp": [_temp(45.0)]},
+                    )[1]
                 )
 
                 with patch(

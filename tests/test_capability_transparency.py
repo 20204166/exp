@@ -1,7 +1,7 @@
 import unittest
 
-from maintenance.components import ResourceFeatureCatalog
 from maintenance.cluster import resource_summary_from_dict, resource_summary_to_dict
+from maintenance.components import ResourceFeatureCatalog
 from maintenance.models import (
     CapabilityState,
     capability_label,

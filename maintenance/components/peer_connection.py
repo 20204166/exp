@@ -6,6 +6,15 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
+from maintenance.components.cluster_roles import (
+    CoordinatorEpoch,
+    FencingError,
+    PromotionDecision,
+    RoleState,
+    promote_subcoordinator,
+    rejoin_as_worker,
+    renew_lease,
+)
 from maintenance.nodes import (
     ConnectionState,
     NodeConnectionStatus,
@@ -17,15 +26,6 @@ from maintenance.nodes import (
     classify_peer_failure,
     is_trusted_descriptor,
     node_operation_key,
-)
-from maintenance.components.cluster_roles import (
-    CoordinatorEpoch,
-    FencingError,
-    PromotionDecision,
-    RoleState,
-    promote_subcoordinator,
-    rejoin_as_worker,
-    renew_lease,
 )
 
 

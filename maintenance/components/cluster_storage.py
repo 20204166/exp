@@ -48,7 +48,7 @@ class SnapshotBatch:
         if not math.isfinite(float(self.observed_at)):
             raise ValueError("snapshot batch timestamp must be finite")
         if not isinstance(self.cluster_id, str):
-            raise ValueError("snapshot batch cluster id must be text")
+            raise TypeError("snapshot batch cluster id must be text")
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,7 +107,7 @@ def snapshot_batch_to_dict(batch: SnapshotBatch) -> dict[str, object]:
 
 def snapshot_batch_from_dict(value: object) -> SnapshotBatch:
     if not isinstance(value, dict):
-        raise ValueError("snapshot batch must be an object")
+        raise TypeError("snapshot batch must be an object")
     required = {
         "batch_id", "source_node_id", "source_epoch", "sequence", "observed_at",
         "encoded_size", "payload",
@@ -120,7 +120,7 @@ def snapshot_batch_from_dict(value: object) -> SnapshotBatch:
     records: list[ResourceSnapshot] = []
     for item in payload:
         if not isinstance(item, dict):
-            raise ValueError("snapshot record is invalid")
+            raise TypeError("snapshot record is invalid")
         try:
             record = ResourceSnapshot(
                 NodeId(str(item["node_id"])),
@@ -440,15 +440,15 @@ class StandbyBuffer(_BatchStore):
 
 __all__ = [
     "COORDINATOR_MAX_BYTES",
+    "MAX_BATCH_PAYLOAD_BYTES",
+    "STANDBY_MAX_AGE_SECONDS",
+    "STANDBY_MAX_BYTES",
     "CoordinatorTimeline",
     "DataGap",
     "ResourceSnapshot",
     "SnapshotBatch",
     "StandbyBuffer",
-    "STANDBY_MAX_AGE_SECONDS",
-    "STANDBY_MAX_BYTES",
     "StorageStatus",
-    "MAX_BATCH_PAYLOAD_BYTES",
     "snapshot_batch_from_dict",
     "snapshot_batch_to_dict",
 ]

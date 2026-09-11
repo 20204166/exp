@@ -1,4 +1,5 @@
 from tests.support.scanner import make_scanner
+
 """Focused tests for the process tables: sorting, filtering, activity."""
 
 import getpass

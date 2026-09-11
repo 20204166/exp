@@ -5,7 +5,7 @@ from typing import Any
 from unittest.mock import Mock
 
 from maintenance.scanner import SystemScanner
-from tests.support.scanner import scanner_environment, make_scanner
+from tests.support.scanner import make_scanner, scanner_environment
 
 
 class TrashSizeCacheTests(unittest.TestCase):

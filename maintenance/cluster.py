@@ -25,16 +25,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from maintenance.components.temperature import (
-    temperature_sample_from_dict,
-    temperature_sample_to_dict,
-)
 from maintenance.components.cluster_roles import (
     ClusterRole,
     CoordinatorEpoch,
     RoleAssignment,
     hash_invite,
     new_fencing_token,
+)
+from maintenance.components.temperature import (
+    temperature_sample_from_dict,
+    temperature_sample_to_dict,
 )
 from maintenance.models import (
     CapabilityState,
@@ -199,11 +199,13 @@ def resource_summary_from_dict(data: Any) -> ResourceSummary:
     percent = data.get("percent")
     if percent is not None and not isinstance(percent, (int, float)):
         raise ClusterDataError("resource summary percent must be a number")
-    for field in ("title", "value", "subtitle"):
-        if not isinstance(data.get(field), str):
-            raise ClusterDataError(f"resource summary {field} must be a string")
-    for field in ("actionable", "failed"):
-        if not isinstance(data.get(field), bool):
+    for attribute in ("title", "value", "subtitle"):
+        if not isinstance(data.get(attribute), str):
+            raise ClusterDataError(
+                f"resource summary {attribute} must be a string"
+            )
+    for attribute in ("actionable", "failed"):
+        if not isinstance(data.get(attribute), bool):
             raise ClusterDataError(f"resource summary {field} must be a boolean")
     decoded_temperatures = []
     for item in temperatures:
@@ -336,9 +338,9 @@ def node_snapshot_from_dict(data: Any) -> NodeSnapshot:
     node_id = data.get("node_id")
     if not isinstance(node_id, str):
         raise ClusterDataError("node snapshot node_id must be a string")
-    for field in ("display_name", "hostname"):
-        if not isinstance(data.get(field), str):
-            raise ClusterDataError(f"node snapshot {field} must be a string")
+    for attribute in ("display_name", "hostname"):
+        if not isinstance(data.get(attribute), str):
+            raise ClusterDataError(f"node snapshot {attribute} must be a string")
     platform = data.get("platform")
     if platform is not None and not isinstance(platform, str):
         raise ClusterDataError("node snapshot platform must be a string or null")
@@ -412,11 +414,11 @@ def process_candidate_from_dict(data: Any) -> ProcessCandidate:
     pid = data.get("pid")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         raise ClusterDataError("process candidate pid must be an integer")
-    for field in ("name", "activity", "username"):
-        if not isinstance(data.get(field), str):
-            raise ClusterDataError(f"process candidate {field} must be a string")
-    for field in ("memory_bytes", "memory_percent", "cpu_percent"):
-        value = data.get(field)
+    for attribute in ("name", "activity", "username"):
+        if not isinstance(data.get(attribute), str):
+            raise ClusterDataError(f"process candidate {attribute} must be a string")
+    for attribute in ("memory_bytes", "memory_percent", "cpu_percent"):
+        value = data.get(attribute)
         if (
             not isinstance(value, (int, float))
             or isinstance(value, bool)
@@ -883,8 +885,8 @@ class ClusterStore:
         if not isinstance(node_id, str):
             LOGGER.warning("Ignoring trusted-node record without an id")
             return None
-        for field in ("display_name", "hostname"):
-            if not isinstance(item.get(field), str):
+        for attribute in ("display_name", "hostname"):
+            if not isinstance(item.get(attribute), str):
                 LOGGER.warning("Ignoring malformed trusted-node record %s", node_id)
                 return None
         host = item.get("host", "")

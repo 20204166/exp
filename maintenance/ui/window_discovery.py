@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import subprocess
 import threading
 import time
@@ -31,8 +31,8 @@ from maintenance.remote import (
     PairingRequest,
     PeerGrant,
     RemoteAuthError,
-    RemoteUnavailableError,
     RemoteRequest,
+    RemoteUnavailableError,
     build_trusted_transport,
 )
 from maintenance.remote_security import ensure_tls_material, server_context

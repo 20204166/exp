@@ -1,4 +1,3 @@
-from tests.support.scanner import make_scanner
 import hashlib
 import os
 import tempfile
@@ -35,10 +34,10 @@ from maintenance.components import (
     windows_windll,
 )
 from maintenance.components.coordinator import (
-    _make_monotonic_clock,
     AppCoordinator,
     ComponentRefreshScheduler,
     RefreshIntervals,
+    _make_monotonic_clock,
 )
 from maintenance.components.scan_support import (
     call_cancellable,
@@ -49,6 +48,7 @@ from maintenance.components.scan_support import (
     stat_fingerprint,
 )
 from maintenance.nodes import NodeCapability, NodeId
+from tests.support.scanner import make_scanner
 from tests.support.scheduling import DeferredRunner
 from tests.support.widget_recording import (
     FailingAfterWidget,
@@ -562,7 +562,6 @@ class ProcessSafetyPolicyParityTests(unittest.TestCase):
         self.assertEqual(set(ProcessManager.PROTECTED_NAMES), expected)
 
     def test_base_protected_pids_match_existing_defaults(self) -> None:
-        from maintenance.scanner import SystemScanner
 
         base = {0, 1, os.getpid()}
         self.assertLessEqual(base, ProcessSafetyPolicy().protected_pids())

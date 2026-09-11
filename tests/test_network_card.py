@@ -7,7 +7,11 @@ from unittest.mock import patch
 
 from maintenance.models import CapabilityState
 from maintenance.scanner import SystemScanner
-from tests.support.scanner import make_baseline_psutil, scanner_environment, make_scanner
+from tests.support.scanner import (
+    make_baseline_psutil,
+    make_scanner,
+    scanner_environment,
+)
 
 
 def _counters(sent: int, received: int) -> SimpleNamespace:

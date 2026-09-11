@@ -55,8 +55,7 @@ from maintenance.nodes import (
     ProcessTerminationRequest,
     node_identity_fingerprint,
 )
-
-from maintenance.remote_support.protocol import (  # noqa: F401 - public re-export surface
+from maintenance.remote_support.protocol import (
     DEFAULT_FRESHNESS_SECONDS,
     DEFAULT_MAX_ACTIVE_HANDLERS,
     DEFAULT_REPLAY_MAX_ENTRIES,
@@ -86,10 +85,10 @@ from maintenance.remote_support.protocol import (  # noqa: F401 - public re-expo
     verify_request,
     verify_response,
 )
-from maintenance.remote_support.server import (  # noqa: F401 - public re-export surface
+from maintenance.remote_support.server import (
     RemoteSocketServer,
 )
-from maintenance.remote_support.transport import (  # noqa: F401 - public re-export surface
+from maintenance.remote_support.transport import (
     MemoryRemoteTransport,
     SocketRemoteTransport,
     TLSRemoteTransport,
@@ -99,48 +98,48 @@ from maintenance.remote_support.transport import (  # noqa: F401 - public re-exp
 LOGGER = logging.getLogger(__name__)
 
 __all__ = [
-    # protocol envelope constants
-    "REMOTE_PROTOCOL_VERSION",
-    "MAX_ENVELOPE_BYTES",
     "DEFAULT_FRESHNESS_SECONDS",
-    "DEFAULT_REPLAY_TTL_SECONDS",
-    "DEFAULT_REPLAY_MAX_ENTRIES",
     "DEFAULT_MAX_ACTIVE_HANDLERS",
-    "READ_CAPABILITIES",
+    "DEFAULT_REPLAY_MAX_ENTRIES",
+    "DEFAULT_REPLAY_TTL_SECONDS",
+    "MAX_ENVELOPE_BYTES",
     "OP_REQUIRED_CAPABILITY",
     "OP_REQUIRED_PERMISSION",
+    "READ_CAPABILITIES",
+    # protocol envelope constants
+    "REMOTE_PROTOCOL_VERSION",
     "ROLE_OPERATIONS",
-    # protocol envelope errors
-    "RemoteProtocolError",
+    "AuthenticatedNodeProvider",
+    # transports
+    "MemoryRemoteTransport",
+    "PairingRequest",
+    # protocol models and helpers
+    "PeerGrant",
     "RemoteAuthError",
     "RemoteAuthorizationError",
     "RemoteExecutionError",
-    "RemoteTransportError",
-    "RemoteUnavailableError",
-    # protocol models and helpers
-    "PeerGrant",
-    "PairingRequest",
+    "RemoteProcessActionBackend",
+    # protocol envelope errors
+    "RemoteProtocolError",
     "RemoteRequest",
     "RemoteResponse",
+    # high-level remote surface
+    "RemoteService",
+    # listening server
+    "RemoteSocketServer",
+    "RemoteTransportError",
+    "RemoteUnavailableError",
     "ReplayCache",
-    "sign_request",
-    "sign_response",
-    "verify_request",
-    "verify_response",
-    "parse_hello_capabilities",
-    "validate_hello_payload",
-    "validate_operation_params",
-    # transports
-    "MemoryRemoteTransport",
     "SocketRemoteTransport",
     "TLSRemoteTransport",
     "build_trusted_transport",
-    # listening server
-    "RemoteSocketServer",
-    # high-level remote surface
-    "RemoteService",
-    "AuthenticatedNodeProvider",
-    "RemoteProcessActionBackend",
+    "parse_hello_capabilities",
+    "sign_request",
+    "sign_response",
+    "validate_hello_payload",
+    "validate_operation_params",
+    "verify_request",
+    "verify_response",
 ]
 
 

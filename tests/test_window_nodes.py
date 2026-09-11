@@ -37,8 +37,8 @@ from maintenance.nodes import (
     node_operation_key,
 )
 from maintenance.remote import RemoteAuthError
-from maintenance.ui import window_node_actions
 from maintenance.ui import window_discovery as ui_window_discovery
+from maintenance.ui import window_node_actions
 from maintenance.ui.render_coordinator import UICoordinator
 from maintenance.ui.window_supports import node_specs
 from tests.support.models import make_snapshot, make_summary

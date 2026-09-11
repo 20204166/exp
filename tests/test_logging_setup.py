@@ -1,4 +1,5 @@
 from tests.support.scanner import make_scanner
+
 """Focused tests for per-user logging setup and error-path diagnostics."""
 
 import logging

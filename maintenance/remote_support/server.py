@@ -15,7 +15,6 @@ from collections.abc import Callable
 from typing import Any
 
 from maintenance.nodes import NodeId, NodePermission
-
 from maintenance.remote_support.protocol import (
     DEFAULT_MAX_ACTIVE_HANDLERS,
     MAX_ENVELOPE_BYTES,

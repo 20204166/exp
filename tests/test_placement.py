@@ -279,16 +279,14 @@ class PlacementPolicyTests(unittest.TestCase):
     def test_target_bound_operations_select_only_their_explicit_target(self) -> None:
         local = _view(
             "local",
-            **{
-                "capabilities": frozenset(
+            capabilities=frozenset(
                     {
                         NodeCapability.COMPONENT_READ,
                         NodeCapability.PROCESS_REVIEW,
                         NodeCapability.STORAGE_REVIEW,
                         NodeCapability.PROCESS_TERMINATION,
                     }
-                ),
-                "permissions": frozenset(
+                ), permissions=frozenset(
                     {
                         NodePermission.COMPONENT_READ,
                         NodePermission.PROCESS_REVIEW,
@@ -296,7 +294,6 @@ class PlacementPolicyTests(unittest.TestCase):
                         NodePermission.PROCESS_TERMINATION,
                     }
                 ),
-            },
         )
         node_b = replace(local, node_id=NodeId("node-b"), is_local=False)
         node_c = replace(local, node_id=NodeId("node-c"), is_local=False)

@@ -153,12 +153,11 @@ class RoleState:
         roles: frozenset[ClusterRole],
         now: float = 0.0,
     ) -> tuple[RoleState, RoleChange]:
-        if self is None:
-            self = RoleState()
+        state = self if self is not None else RoleState()
         if ClusterRole.COORDINATOR not in actor.roles or actor.paused or actor.revoked:
             raise RoleAuthorizationError("only an active Coordinator may assign roles")
         assignment = RoleAssignment(roles, node_id=target)
-        current = self.assignment_for(target)
+        current = state.assignment_for(target)
         if current is not None and current.revoked:
             raise RoleAuthorizationError("revoked node requires a new pairing invite")
         if ClusterRole.COORDINATOR in assignment.roles:
@@ -166,7 +165,7 @@ class RoleState:
         other_sub = next(
             (
                 item
-                for item in self.assignments
+                for item in state.assignments
                 if item.node_id != target
                 and ClusterRole.SUBCOORDINATOR in item.roles
                 and not item.revoked
@@ -176,12 +175,12 @@ class RoleState:
         if ClusterRole.SUBCOORDINATOR in assignment.roles and other_sub is not None:
             raise RoleAuthorizationError("only one active Subcoordinator is allowed")
         updated = tuple(
-            assignment if item.node_id == target else item for item in self.assignments
+            assignment if item.node_id == target else item for item in state.assignments
         )
-        if not any(item.node_id == target for item in self.assignments):
+        if not any(item.node_id == target for item in state.assignments):
             updated += (assignment,)
         change = RoleChange(target, assignment, now, actor.node_id or NodeId("local"))
-        return replace(self, assignments=updated), change
+        return replace(state, assignments=updated), change
 
     def pause(self, *, actor: RoleAssignment, target: NodeId) -> RoleState:
         self._assert_control(actor)
@@ -340,11 +339,11 @@ def hash_invite(token: str) -> str:
 
 
 __all__ = [
+    "HEARTBEAT_TIMEOUT_SECONDS",
     "ClusterRole",
     "CoordinatorEpoch",
     "CoordinatorLease",
     "FencingError",
-    "HEARTBEAT_TIMEOUT_SECONDS",
     "PromotionDecision",
     "RoleAssignment",
     "RoleAuthorizationError",

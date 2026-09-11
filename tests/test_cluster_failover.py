@@ -4,14 +4,18 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from maintenance.cluster import ClusterState, ClusterStore
-from maintenance.components.cluster_roles import ClusterRole, CoordinatorEpoch, RoleAssignment
-from maintenance.components.coordinator import AppCoordinator
-from maintenance.components.peer_connection import PeerConnectionManager
+from maintenance.components.cluster_roles import (
+    ClusterRole,
+    CoordinatorEpoch,
+    RoleAssignment,
+)
 from maintenance.components.cluster_storage import (
     CoordinatorTimeline,
     ResourceSnapshot,
     SnapshotBatch,
 )
+from maintenance.components.coordinator import AppCoordinator
+from maintenance.components.peer_connection import PeerConnectionManager
 from maintenance.nodes import (
     ConnectionState,
     NodeId,

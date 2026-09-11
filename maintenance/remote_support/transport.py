@@ -17,7 +17,6 @@ from typing import Any
 
 from maintenance.cluster import TrustedNodeRecord
 from maintenance.remote_security import certificate_fingerprint
-
 from maintenance.remote_support.protocol import (
     MAX_ENVELOPE_BYTES,
     RemoteAuthError,
