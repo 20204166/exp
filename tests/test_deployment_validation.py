@@ -119,7 +119,9 @@ class BuiltWheelTests(unittest.TestCase):
         self.assertEqual(dev_requirements, dev_extras)
 
         _, wheel_dependencies, _ = wheel_metadata(latest_wheel())
-        self.assertEqual(wheel_dependencies, project_dependencies)
+        runtime_wheel, dev_wheel = _split_wheel_dependencies(wheel_dependencies)
+        self.assertEqual(runtime_wheel, project_dependencies)
+        self.assertEqual(dev_wheel, dev_extras)
 
     def test_wheel_metadata_matches_declared_version_and_python_floor(self) -> None:
         version, _, requires_python = wheel_metadata(latest_wheel())
@@ -148,6 +150,26 @@ def _requirements_sections() -> tuple[list[str], list[str]]:
                 in_dev = True
             continue
         (dev if in_dev else runtime).append(stripped)
+    return runtime, dev
+
+
+def _split_wheel_dependencies(
+    requires_dist: list[str],
+) -> tuple[list[str], list[str]]:
+    """Split a wheel's ``Requires-Dist`` into runtime and ``dev`` extras.
+
+    Optional-dependency extras are declared in the wheel metadata with a
+    conditional marker such as ``ruff==0.16.6; extra == "dev"``; runtime
+    requirements carry no marker.
+    """
+
+    runtime: list[str] = []
+    dev: list[str] = []
+    for requirement in requires_dist:
+        if "; extra == \"dev\"" in requirement:
+            dev.append(requirement.split(";", 1)[0].strip())
+        else:
+            runtime.append(requirement)
     return runtime, dev
 
 
