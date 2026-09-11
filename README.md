@@ -316,6 +316,21 @@ rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/system-analyzer.desktop
 python -m unittest discover -s tests -v
 ```
 
+Targeted run for a single module while iterating:
+
+```sh
+python -m unittest tests.test_thermal_card -v
+```
+
+Quick non-verbose pass over the whole suite plus sanity checks, run before
+committing:
+
+```sh
+python -m unittest discover -s tests -q
+python -m compileall -q maintenance tests
+git diff --check
+```
+
 For the declared Python 3.10 floor, install the test compatibility dependency
 before running the suite:
 
@@ -332,6 +347,44 @@ ruff format --check .
 pyright
 mypy --ignore-missing-imports .
 ```
+
+## Merge and push
+
+Before pushing, verify the change and rebuild the wheel so `dist/` and
+`maintenance/_version.py` stay consistent with the release:
+
+```sh
+# 1. Test + sanity checks (see "Tests")
+python -m unittest discover -s tests -q
+python -m compileall -q maintenance tests
+git diff --check
+
+# 2. Rebuild and verify the wheel
+SA_VERSION_BUMP=auto ./install/build.sh
+./install/verify.sh <new-version>      # e.g. ./install/verify.sh 1.5.0.2
+
+# 3. Commit in logical groups (e.g. fix / test / release), then push
+git add maintenance/ tests/
+git commit -m "fix: ..."
+git push origin main
+
+# 4. Confirm local and remote are in sync
+git fetch origin
+git rev-parse HEAD origin/main          # both print the same commit
+git rev-list --left-right --count HEAD...origin/main   # "0 0" = in sync
+```
+
+Version bump notes:
+
+- `build.sh` auto-bumps (`patch`/`feature`/`minor`) only when the source inputs
+  differ from the newest wheel, so a rebuild of unchanged content is a no-op.
+- If the wheel content already matches but the version should still move (e.g.
+  fixes were previously shipped without a bump), force the level explicitly,
+  e.g. `SA_VERSION_BUMP=patch ./install/build.sh`.
+- Use `SA_VERSION_BUMP=none` only to rebuild identical content without a new
+  version.
+- `verify.sh` takes the version to verify and checks wheel contents (no
+  forbidden paths) plus the `SHA256SUMS` entry.
 
 ## Further reading
 
