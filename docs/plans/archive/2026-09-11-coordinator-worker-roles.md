@@ -671,3 +671,7 @@ BugGuard subagent review; identify the fallback evidence instead.
 - **Security boundary:** Placement, role, and Coordinator control never replace target-side authorization. Epoch, token, identity, replay, cluster, and permission checks are required before mutation.
 - **Edge-case coverage:** Expiry, replay, stale epoch, split-brain return, revocation, offline state, duplicate data, missing final snapshot, storage caps, disk pressure, low capability, UI stale callbacks, and unavailable static/reviewer tooling are explicit.
 - **Scope:** This is one coordinated cluster-role/failover subsystem. Future movable computation remains explicitly out of scope.
+
+## Closure Follow-Up
+
+Implementation work and final review follow-up continue in `docs/plans/2026-09-11-coordinator-worker-roles-closure.md`. The closure plan narrows the remaining work to logical storage-cap wording, closure regressions, final BugGuard evidence, release validation, and documentation of unavailable tooling. The final full-A4 adversarial evidence is recorded in `docs/bug_hunts/patch_reviews/PATCH-20260911-002-review.md` (decision: `safe`; the two confirmed closure findings were resolved in-patch with guarded regressions).
