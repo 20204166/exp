@@ -14,8 +14,11 @@ from maintenance.models import (
 )
 from maintenance.nodes import NodeId
 from maintenance.preferences import AppPreferences, PreferencesSaveError
+from maintenance.ui.action_coordinator import ButtonCoordinator
+from maintenance.ui.render_coordinator import RenderIntent, UICoordinator
 from tests.support.models import FIXED_SCANNED_AT, make_snapshot, make_summary
 from tests.support.scheduling import FailingMaster, TimerMaster
+from tests.support.widget_recording import RecordingWidget
 from tests.support.window import make_window as make_bare_window
 from window import AppWindow
 
@@ -790,6 +793,75 @@ class AppWindowTests(unittest.TestCase):
 
         window._set_busy(False)
         window.cancel_button.config.assert_called_with(state=tk.DISABLED)
+
+    def test_request_render_applies_directly_without_coordinator(self) -> None:
+        window = self.make_window()
+        applied: list[object] = []
+
+        accepted = window._request_render(
+            RenderIntent(target="scan-status", payload="done", payload_set=True),
+            lambda intent: applied.append(intent.payload),
+        )
+
+        self.assertTrue(accepted)
+        self.assertEqual(applied, ["done"])
+
+    def test_request_render_defers_hidden_target_through_coordinator(self) -> None:
+        window = self.make_window()
+        window._ui_coordinator = UICoordinator()
+        window._ui_coordinator.set_visible("scan-status", False)
+        applied: list[object] = []
+
+        window._request_render(
+            RenderIntent(target="scan-status", payload="queued", payload_set=True),
+            lambda intent: applied.append(intent.payload),
+        )
+
+        self.assertEqual(applied, [])
+        self.assertEqual(window._ui_coordinator.pending_count, 1)
+
+        window._ui_coordinator.set_visible("scan-status", True)
+
+        self.assertEqual(applied, ["queued"])
+        self.assertEqual(window._ui_coordinator.pending_count, 0)
+
+    def test_set_busy_toggles_button_coordinator_buttons(self) -> None:
+        window = self.make_window()
+        coordinator = ButtonCoordinator()
+        scan_button = RecordingWidget()
+        cancel_button = RecordingWidget()
+        coordinator.register("preferences:scan", Mock())
+        coordinator.register("preferences:cancel-scan", Mock(), enabled=False)
+        coordinator.bind(scan_button, "preferences:scan")
+        coordinator.bind(cancel_button, "preferences:cancel-scan")
+        window._button_coordinator = coordinator
+
+        window._set_busy(True)
+        self.assertEqual(scan_button.config_options["state"], tk.DISABLED)
+        self.assertEqual(cancel_button.config_options["state"], tk.NORMAL)
+        self.assertFalse(coordinator.is_enabled("preferences:scan"))
+        self.assertTrue(coordinator.is_enabled("preferences:cancel-scan"))
+
+        window._set_busy(False)
+        self.assertEqual(scan_button.config_options["state"], tk.NORMAL)
+        self.assertEqual(cancel_button.config_options["state"], tk.DISABLED)
+        self.assertTrue(coordinator.is_enabled("preferences:scan"))
+        self.assertFalse(coordinator.is_enabled("preferences:cancel-scan"))
+
+    def test_cancel_analysis_disables_button_coordinator_cancel(self) -> None:
+        window = self.make_window()
+        window._analysis_cancel_event = threading.Event()
+        coordinator = ButtonCoordinator()
+        cancel_button = RecordingWidget()
+        coordinator.register("preferences:cancel-scan", Mock())
+        coordinator.bind(cancel_button, "preferences:cancel-scan")
+        window._button_coordinator = coordinator
+
+        window._cancel_analysis()
+
+        self.assertTrue(window._analysis_cancel_event.is_set())
+        self.assertEqual(cancel_button.config_options["state"], tk.DISABLED)
+        self.assertFalse(coordinator.is_enabled("preferences:cancel-scan"))
 
     def test_show_progress_updates_status(self) -> None:
         window = self.make_window()

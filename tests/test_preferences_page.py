@@ -265,6 +265,19 @@ class PreferencesPageTests(unittest.TestCase):
         )
         self.assertEqual(page.cancel_button.config_options["state"], tk.DISABLED)
 
+    def test_page_scan_button_dispatch_is_gated_by_coordinator(self) -> None:
+        callbacks = make_callbacks()
+        coordinator = ButtonCoordinator()
+        page, _parent, _recorder = make_page(callbacks, button_coordinator=coordinator)
+
+        page.analyze_button.config_options["command"]()
+        callbacks.on_scan.assert_called_once_with()
+
+        coordinator.set_enabled("preferences:scan", False)
+        page.analyze_button.config_options["command"]()
+        callbacks.on_scan.assert_called_once_with()
+        self.assertEqual(page.analyze_button.config_options["state"], tk.DISABLED)
+
     def test_category_rail_is_removed(self) -> None:
         page, _parent, _recorder = make_page()
 
