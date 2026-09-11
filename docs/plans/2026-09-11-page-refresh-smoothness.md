@@ -33,6 +33,15 @@
 
 After the fix, re-run the same harness and record the new numbers for unchanged-spec and text-only-change refreshes.
 
+**After (committed `1564a6f` + `bd9e2de`, structurally-identical refreshes, median):**
+
+| Operation | 5 | 20 | 50 |
+|---|---|---|---|
+| `cluster_page.refresh_nodes` | 0.16ms | 0.63ms | 1.54ms |
+| `nodes_connections.refresh_trusted` | 0.20ms | 0.89ms | 1.79ms |
+
+~10x faster cluster page (16.4→1.54ms) and ~46x faster trusted list (83.1→1.79ms) at 50 nodes. Full suite 1353 OK; `tests/dump_ui` render structure unchanged; `test_live_tk_resize` OK.
+
 ---
 
 ### Task 1: ClusterPage incremental refresh
