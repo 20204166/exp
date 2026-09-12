@@ -104,8 +104,6 @@ class TemperatureLinesTests(unittest.TestCase):
         self.assertFalse(SystemScanner._temperature_sensors_supported("FreeBSD"))
 
     def test_temperature_scan_uses_smc_on_macos(self) -> None:
-        from maintenance.scanner_support import dashboard as dashboard_module
-
         captured: dict[str, object] = {}
 
         def fake_read(is_valid=None):
@@ -116,7 +114,10 @@ class TemperatureLinesTests(unittest.TestCase):
             }
 
         with (
-            patch.object(dashboard_module, "read_smc_temperatures", fake_read),
+            patch(
+                "maintenance.scanner_support.temperature_platform.read_smc_temperatures",
+                fake_read,
+            ),
             patch("maintenance.scanner.platform.system", return_value="Darwin"),
         ):
             scan = SystemScanner._temperature_scan(_thermal_psutil(dict))

@@ -12,7 +12,6 @@ lookups on maintenance.scanner for existing monkeypatch seams.
 from __future__ import annotations
 
 import contextlib
-import os
 import re
 import threading
 from collections.abc import Callable
@@ -25,9 +24,8 @@ from maintenance.components.temperature import (
     TemperatureScan,
     is_valid_temperature_value,
 )
-from maintenance.external_commands import run_json_command
 from maintenance.models import CapabilityState, ResourceSummary, unavailable_summary
-from maintenance.scanner_support.smc import COMPONENT_LABELS, read_smc_temperatures
+from maintenance.scanner_support import temperature_platform
 
 from ._compat import scanner_module
 
@@ -1099,9 +1097,11 @@ class DashboardMixin:
             now = scanner_module.datetime.now(scanner_module.timezone.utc).astimezone()
             return TemperatureScan(now, scanner_module.time.monotonic(), (), ())
         if system == "Darwin":
-            return cls._temperature_scan_smc()
+            return temperature_platform.macos_temperature_scan()
         if system == "Windows":
-            return cls._temperature_scan_windows()
+            return temperature_platform.windows_temperature_scan(
+                runner=scanner_module.subprocess.run
+            )
 
         sensors = cls._psutil_value(lambda: psutil_module.sensors_temperatures())
         if not isinstance(sensors, dict) or not sensors:
@@ -1155,109 +1155,6 @@ class DashboardMixin:
 
         return TemperatureScan(
             captured_at, captured_monotonic, tuple(lines), tuple(grouped)
-        )
-
-    @classmethod
-    def _temperature_scan_smc(cls) -> TemperatureScan:
-        """Return SMC temperature samples on Intel Macs (empty on failure).
-
-        ``read_smc_temperatures`` already fails closed to no data when IOKit
-        is unavailable or the machine is Apple Silicon, so this path can never
-        raise for platform reasons.
-        """
-
-        captured_at = scanner_module.datetime.now(
-            scanner_module.timezone.utc
-        ).astimezone()
-        captured_monotonic = scanner_module.time.monotonic()
-        readings = read_smc_temperatures(is_valid=cls._sensible_temperature)
-        lines: list[str] = []
-        grouped: list[tuple[str, tuple[TemperatureSample, ...]]] = []
-        for component, entries in readings.items():
-            samples = tuple(
-                TemperatureSample(
-                    component=component,
-                    sensor_id=sensor_id,
-                    sensor_name=sensor_name,
-                    value_celsius=celsius,
-                    sampled_at=captured_at,
-                    sampled_monotonic=captured_monotonic,
-                )
-                for sensor_id, sensor_name, celsius in entries
-            )
-            if not samples:
-                continue
-            grouped.append((component, samples))
-            label = COMPONENT_LABELS.get(component, component)
-            lines.append(
-                f"{label}: {max(sample.value_celsius for sample in samples):.0f}°C"
-            )
-        return TemperatureScan(
-            captured_at, captured_monotonic, tuple(lines), tuple(grouped)
-        )
-
-    @classmethod
-    def _temperature_scan_windows(cls) -> TemperatureScan:
-        """Return ACPI thermal-zone temperatures on Windows (empty on failure).
-
-        Reads ``MSAcpi_ThermalZoneTemperature`` (tenths of Kelvin) through the
-        same PowerShell + JSON path used by the Windows GPU probe, converting
-        to Celsius. The ACPI thermal zone generally reflects the CPU/package,
-        so samples are grouped under the ``cpu`` component. Missing or bogus
-        zones fail closed to no data.
-        """
-
-        command = (
-            "Get-CimInstance -Namespace root/WMI -ClassName "
-            "MSAcpi_ThermalZoneTemperature | Select-Object "
-            "InstanceName,CurrentTemperature | ConvertTo-Json"
-        )
-        creationflags = (
-            getattr(scanner_module.subprocess, "CREATE_NO_WINDOW", 0)
-            if os.name == "nt"
-            else 0
-        )
-        payload, error = run_json_command(
-            ["powershell", "-NoProfile", "-Command", command],
-            runner=scanner_module.subprocess.run,
-            empty_stdout_fallback="[]",
-            creationflags=creationflags,
-        )
-        captured_at = scanner_module.datetime.now(
-            scanner_module.timezone.utc
-        ).astimezone()
-        captured_monotonic = scanner_module.time.monotonic()
-        if error is not None or not isinstance(payload, (dict, list)):
-            return TemperatureScan(captured_at, captured_monotonic, (), ())
-        zones = [payload] if isinstance(payload, dict) else payload
-        samples: list[TemperatureSample] = []
-        for zone in zones:
-            if not isinstance(zone, dict):
-                continue
-            raw = zone.get("CurrentTemperature")
-            if not isinstance(raw, (int, float)) or isinstance(raw, bool):
-                continue
-            celsius = raw / 10.0 - 273.15
-            if not is_valid_temperature_value(celsius):
-                continue
-            name = str(zone.get("InstanceName") or "ThermalZone")
-            samples.append(
-                TemperatureSample(
-                    component="cpu",
-                    sensor_id=f"acpi:{name}",
-                    sensor_name=name,
-                    value_celsius=celsius,
-                    sampled_at=captured_at,
-                    sampled_monotonic=captured_monotonic,
-                )
-            )
-        if not samples:
-            return TemperatureScan(captured_at, captured_monotonic, (), ())
-        return TemperatureScan(
-            captured_at,
-            captured_monotonic,
-            (f"CPU: {max(sample.value_celsius for sample in samples):.0f}°C",),
-            (("cpu", tuple(samples)),),
         )
 
     @staticmethod

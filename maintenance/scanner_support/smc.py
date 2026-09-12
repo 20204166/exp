@@ -258,7 +258,11 @@ def read_smc_temperatures(
                     continue
                 data_type, data = reading
                 value = decode_value(data_type, data)
-                if not is_valid(value):
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not is_valid(value)
+                ):
                     continue
                 result[component] = [(f"smc:{key_text}", key_text, float(value))]
                 break

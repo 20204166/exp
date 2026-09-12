@@ -61,7 +61,7 @@ classification.
 | `external_commands.py` shared command runner | SAFE CROSS-PLATFORM CODE | Text/JSON command execution is centralized and accepts caller-supplied creation flags. |
 | `remote_security.py`, `scanner.py`, `ui/window_discovery.py` subprocess use | NOT VERIFIED | Runtime behavior depends on host command availability; no native Windows/macOS execution evidence exists. Detailed subprocess review is scoped to Phase 6. |
 | `actions.py` `send2trash` | SAFE CROSS-PLATFORM CODE | Cleanup is dependency-gated and remains constrained by the action safety policy. |
-| `scanner_support/dashboard.py` sensor provider dispatch | SAFE CROSS-PLATFORM CODE | Linux, Darwin, and Windows acquisition paths fail soft; native non-Linux execution is not verified. |
+| `scanner_support/dashboard.py` and `scanner_support/temperature_platform.py` sensor provider dispatch | SAFE CROSS-PLATFORM CODE | Linux remains on `psutil`; Darwin uses SMC; Windows tries ACPI, LibreHardwareMonitor, and OpenHardwareMonitor in order, all failing soft; native non-Linux execution is not verified. |
 | `scanner_support/storage.py` Trash provider dispatch | NOT VERIFIED | Windows `SHQueryRecycleBinW` and macOS Trash paths have fixture/source evidence but no native host run. |
 
 No Phase 1 hit met the evidence threshold for an unsafe platform assumption. No
