@@ -47,7 +47,7 @@ function Get-RepoVenvPython {
 # commands, then common python.org install locations, then bare python.
 function Get-PythonCandidates {
     $candidates = [System.Collections.Generic.List[object]]::new()
-    foreach ($m in @("3.13", "3.12", "3.11", "3.10")) {
+    foreach ($m in @("3.14", "3.13", "3.12", "3.11", "3.10")) {
         if (Get-Command "py" -ErrorAction SilentlyContinue) {
             $candidates.Add(@("py", "-$m"))
         }
@@ -55,10 +55,11 @@ function Get-PythonCandidates {
     if (Get-Command "py" -ErrorAction SilentlyContinue) {
         $candidates.Add(@("py", "-3"))
     }
-    foreach ($name in @("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python")) {
+    foreach ($name in @("python3.14", "python3.13", "python3.12", "python3.11", "python3.10", "python3", "python")) {
         if (Get-Command $name -ErrorAction SilentlyContinue) { $candidates.Add(@($name)) }
     }
     foreach ($path in @(
+        "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe",
         "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
         "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
         "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",

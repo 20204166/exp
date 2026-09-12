@@ -26,15 +26,52 @@ try {
         return ($LASTEXITCODE -eq 0)
     }
 
+    # Candidate list mirrors install/_common.ps1 Get-PythonCandidates so the
+    # standalone online installer finds the same interpreters: py launcher
+    # with an explicit version, `py -3` (latest 3.x), versioned python3.x
+    # commands, plain python3/python, and the per-user python.org install
+    # locations under %LOCALAPPDATA%\Programs\Python.
+    function Get-PythonCandidates {
+        $candidates = [System.Collections.Generic.List[object]]::new()
+        foreach ($m in @("3.14", "3.13", "3.12", "3.11", "3.10")) {
+            if (Get-Command "py" -ErrorAction SilentlyContinue) {
+                $candidates.Add(@("py", "-$m"))
+            }
+        }
+        if (Get-Command "py" -ErrorAction SilentlyContinue) {
+            $candidates.Add(@("py", "-3"))
+        }
+        foreach ($name in @("python3.14", "python3.13", "python3.12", "python3.11", "python3.10", "python3", "python")) {
+            if (Get-Command $name -ErrorAction SilentlyContinue) { $candidates.Add(@($name)) }
+        }
+        foreach ($path in @(
+            "$env:LOCALAPPDATA\Programs\Python\Python314\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
+        )) {
+            if (Test-Path $path) { $candidates.Add(@($path)) }
+        }
+        return $candidates
+    }
+
     $py = $null
     $base = $null
-    foreach ($candidate in @(@("py", "-3.13"), @("py", "-3.12"), @("py", "-3.11"), @("py", "-3.10"), @("python3"), @("python"))) {
+    $reasons = [System.Collections.Generic.List[string]]::new()
+    foreach ($candidate in Get-PythonCandidates) {
         try {
             & $candidate -c "import sys; assert sys.version_info >= (3,10)" 2>$null
-            if ($LASTEXITCODE -ne 0) { continue }
+            if ($LASTEXITCODE -ne 0) {
+                $reasons.Add("'$($candidate -join ' ')' is not a Python 3.10+ interpreter")
+                continue
+            }
             if (-not (Test-VenvPython $candidate)) { $py = $candidate; break }
+            $reasons.Add("'$($candidate -join ' ')' is inside a virtual environment")
             if (-not $base) { $base = $candidate }
-        } catch {}
+        } catch {
+            $reasons.Add("'$($candidate -join ' ')' could not be launched")
+        }
     }
     # Every candidate was a venv: fall back to its base interpreter so a
     # per-user install works even while a venv is active.
@@ -42,9 +79,14 @@ try {
         $basePy = & $base -c "import sys; print(sys._base_executable)" 2>$null
         if ($basePy -and (Test-Path $basePy) -and -not (Test-VenvPython $basePy)) {
             $py = @($basePy)
+        } else {
+            $reasons.Add("virtual-environment base interpreter unavailable: $basePy")
         }
     }
     if (-not $py) {
+        Write-Host "No usable Python 3.10+ interpreter was found. Tried:"
+        $reasons | ForEach-Object { Write-Host "  - $_" }
+        Write-Host "Install Python 3.10 or newer from https://www.python.org/downloads/ (be sure to enable the 'py launcher' and 'Add python.exe to PATH'), or deactivate any active virtual environment and retry."
         throw "System Analyzer requires Python 3.10 or newer. Deactivate any active virtual environment (or run outside it) and retry."
     }
     if (Test-VenvPython $py) { throw "Cannot install: '$($py -join ' ')' is inside a virtual environment (pip disables '--user' inside venvs). Deactivate the venv and retry." }
