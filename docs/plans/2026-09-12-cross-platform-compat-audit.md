@@ -85,7 +85,7 @@ Every skill copied into `.claude/skills/` is accounted for below, either assigne
 
 **Skill:** `BugGuard` (Mode B setup — this is the A1/"before editing" discovery step, run once for the whole pass).
 
-- [ ] **Step 1: Record commit and tree state**
+- [x] **Step 1: Record commit and tree state** — captured in the baseline artifact; the only persistent untracked path is the pre-existing `.claude/` directory, which was not touched.
 
 ```bash
 git rev-parse HEAD
@@ -93,7 +93,7 @@ git status --short
 git log --oneline -10
 ```
 
-- [ ] **Step 2: Run the existing full validation suite as-is on this (Linux) environment and capture the baseline**
+- [x] **Step 2: Run the existing full validation suite as-is on this (Linux) environment and capture the baseline** — the documented bare `python` command is unavailable on this host; the equivalent `.venv/bin/python` command was run and its results are recorded, including the baseline static-check limitations.
 
 **Corrected this session — this repo does not use `pytest`.** The original draft used `python -m pytest tests/ -q` throughout the plan (Phases 0, 3, 12, 13). Verified three independent ways: (1) `AGENTS.md:11` explicitly states "Tests are `unittest` modules under the `tests` package ... via `python -m unittest discover -s tests -v` and via single-module invocation `python -m unittest tests.test_window -v`"; (2) `README.md:316,322,329,358` document the exact same `python -m unittest ...` invocations, never `pytest`; (3) `.venv/bin/python -m pytest --version` in this repo's own virtualenv fails with `No module named pytest` — it is not even installed, let alone declared in `pyproject.toml`/`requirements.txt`/`requirements-dev.txt` (checked all three this session — only `ruff`, `pyright`, `mypy` are pinned dev dependencies). Every `python -m pytest ...` command anywhere in this plan would fail outright at execution time. This phase's own commands are fixed below; **Phases 3, 12, and 13 still have the same defect and need the identical fix** — flagging here since Phase 0 establishes the baseline convention the rest of the plan must match.
 
@@ -109,11 +109,11 @@ mypy --ignore-missing-imports . 2>&1 | tee /tmp/baseline-mypy.log
 
 Record pass/fail counts verbatim in `docs/platform_audit/PLATFORM-MATRIX.md` under a "Baseline" heading. Any pre-existing failure found here is out of scope for this pass (per the spec's "do not attribute existing unrelated failures to this pass") — list it but do not fix it unless it blocks a thermal-pipeline task.
 
-- [ ] **Step 3: Re-verify the existing compatibility claims are still accurate**
+- [x] **Step 3: Re-verify the existing compatibility claims are still accurate** — the capability and remote-thermal documents were read and deltas are recorded in the matrix.
 
 Read `docs/CAPABILITY_TRANSPARENCY_2026-09-10.md` in full and `docs/plans/2026-09-10-remote-thermal-sample-validation.md` in full. Note any claim that current code no longer matches (e.g., if `_temperature_sensors_supported` or the SMC/Windows probes changed since that doc was written). Record deltas in `docs/platform_audit/PLATFORM-MATRIX.md`.
 
-- [ ] **Step 4: Commit the baseline artifact**
+- [x] **Step 4: Commit the baseline artifact** — baseline evidence is committed in the audit documentation history.
 
 ```bash
 git add docs/platform_audit/PLATFORM-MATRIX.md
@@ -126,7 +126,7 @@ git commit -m "docs: record cross-platform audit baseline"
 
 **Skills:** `BugGuard` (Mode B, standalone audit — no code changes) driving the workflow; `dispatching-parallel-agents` to run the independent greps/subsystem scans concurrently rather than serially.
 
-- [ ] **Step 1: Dispatch parallel, independent searches** (per `dispatching-parallel-agents` — these have no shared state and no ordering dependency). Already run once this session for real against the current tree — use these exact commands to re-run and diff against the counts/files recorded here, so drift between planning time and execution time is caught rather than assumed away:
+- [x] **Step 1: Dispatch parallel, independent searches** (per `dispatching-parallel-agents`) — the platform searches and corrected false-positive classifications were rerun against the current tree.
 
 ```bash
 grep -rn "sys\.platform" maintenance/ main.py window.py
@@ -148,13 +148,13 @@ Real results captured this session (re-run at execution time — this is startin
 - `/proc\|/sys/`: **1 genuine hit, 3 false positives.** The real one is `maintenance/scanner_support/dashboard.py:489` (`scanner_module.Path("/proc/swaps").read_text()`, Linux swap accounting). The other three matches (`maintenance/remote.py:18`, `maintenance/README.md:52`'s prose, `maintenance/components/network_discovery.py:11`) are substring false-positives — the pattern `/proc` also matches inside the English word "**/proc**ess" (e.g. "CPU/RAM/process"), not an actual filesystem path. Use a tighter pattern at execution time, e.g. `grep -rn '"/proc\|"/sys/'` (quoted-path-literal form) to avoid re-triggering this.
 - `send2trash`: **2 files** — `maintenance/actions.py` (real usage) and `maintenance/README.md` (doc mention).
 
-- [ ] **Step 2: Classify every hit** into one of: `CORRECT PLATFORM ADAPTER` / `SAFE CROSS-PLATFORM CODE` / `UNSAFE ASSUMPTION` / `DEAD/LEGACY PATH` / `NOT VERIFIED`, in a table in `docs/platform_audit/PLATFORM-MATRIX.md`. Known files to specifically re-examine (already skimmed this session, confirm classification with full read) — this list was corrected and expanded from the greps above, which surfaced three files the original draft omitted (`external_commands.py`, `remote_security.py`, `window_discovery.py`): `maintenance/scanner_support/dashboard.py`, `maintenance/scanner_support/smc.py`, `maintenance/scanner_support/gpu.py`, `maintenance/scanner_support/storage.py`, `maintenance/components/downloads.py`, `maintenance/components/node_context.py`, `maintenance/preferences.py`, `maintenance/external_commands.py`, `maintenance/remote_security.py`, `maintenance/ui/window_discovery.py`.
+- [x] **Step 2: Classify every hit** into the required platform categories — classifications and evidence are recorded in `docs/platform_audit/PLATFORM-MATRIX.md`.
 
-- [ ] **Step 3: For every `UNSAFE ASSUMPTION` found, open a BugGuard Mode B candidate**
+- [x] **Step 3: For every `UNSAFE ASSUMPTION` found, open a BugGuard Mode B candidate** — no unsafe assumption survived classification, so no new candidate was opened in this phase.
 
 Follow `BugGuard`'s `mode_b_main_auditor.md` threshold rules exactly: create the candidate in `docs/bug_hunts/bugs_found_N.md`, run the required opposition reviewers at the threshold the risk level demands (full B7 for anything touching auth/session/process/storage/TLS boundaries per BugGuard's own high-risk list), and do not fix anything in this phase — Mode B is audit-only.
 
-- [ ] **Step 4: Commit the inventory**
+- [x] **Step 4: Commit the inventory** — inventory evidence is included in the committed platform-audit documentation.
 
 ```bash
 git add docs/platform_audit/PLATFORM-MATRIX.md docs/bug_hunts/
@@ -266,7 +266,7 @@ git commit -m "test: prove thermal capability never resolves out of no_data (fai
 
 This phase only proceeds once Phase 2's failing test exists and the root cause is confirmed. Do not skip to this phase.
 
-- [ ] **Step 1: BugGuard Mode A declaration**
+- [x] **Step 1: BugGuard Mode A declaration** — high-risk full-A4 review was declared and recorded in the patch-review artifact.
 
 ```text
 BugGuard mode: Mode A - code-edit validation
@@ -276,7 +276,7 @@ Patch-review file: docs/bug_hunts/patch_reviews/PATCH-<today>-001-review.md
 Reason: fixes a proven perpetual-wait state without weakening fail-soft or event-detection contracts
 ```
 
-- [ ] **Step 2: Design the smallest correct fix** — give `TemperatureTelemetry` its own bounded "confirmed absent" signal, reusing the exact confirm-limit counting pattern already proven in `window_components.py:269-286` (`observe_capability`'s `_capability_counts`), rather than inventing a new mechanism (canonical reuse). This touches two real declarations, verified this session at their exact current lines — both are additive (new field with a default, appended after the last field), so no existing caller (`TemperaturePolicy()` is constructed with zero or keyword args everywhere in the repo — confirmed by grepping every call site in `maintenance/` and `tests/`) breaks:
+- [x] **Step 2: Design the smallest correct fix** — `TemperatureTelemetry` now owns a bounded `empty_reads` signal with `TemperaturePolicy.unsupported_confirm_samples`; the additive field and remote propagation were verified, and existing callers remain compatible.
 
 ```python
 # maintenance/components/temperature.py:57-68 — TemperaturePolicy gains a field
