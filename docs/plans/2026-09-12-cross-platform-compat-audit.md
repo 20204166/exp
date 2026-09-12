@@ -523,9 +523,9 @@ Add a row per capability to `docs/platform_audit/PLATFORM-MATRIX.md` using only 
 
 **Skill:** `consolidating-responsibilities`, run once against every fix produced by Phases 3–9 collectively (not per-phase) since its value is in catching duplication *across* the fixes just made.
 
-- [ ] **Step 1:** For every new helper/function introduced in Phases 3–9, search the repo first for an existing equivalent (platform detection, command execution, path resolution, temperature validation, capability-state transition) before accepting it as new code.
-- [ ] **Step 2:** Explicitly confirm no `windows_utils.py` / `mac_utils.py` / generic `platform_helpers.py` dumping-ground module was created — every platform-specific function must live in the existing owner (`scanner_support/*` for acquisition, `components/*` for normalization).
-- [ ] **Step 3:** Log any duplication found as a follow-up BugGuard candidate; do not refactor unrelated correct code just because a string path exists somewhere.
+- [x] **Step 1:** Audited every helper/function introduced or changed in Phases 3–9 against repository-wide owners. `TemperatureTelemetry` owns thermal-state normalization; `external_commands.run_text_command`/`run_json_command` own generic command execution and are reused by acquisition callers; `protected_process_pid_snapshot` extends the existing process-safety owner; identity and certificate fingerprint functions remain in `nodes.py`/`remote_security.py` where their trust semantics belong.
+- [x] **Step 2:** No `windows_utils.py`, `mac_utils.py`, or generic `platform_helpers.py` dumping-ground module was created. Platform acquisition remains in `scanner_support/*`; normalization remains in component owners.
+- [x] **Step 3:** No Phase 3–9 duplication justified a refactor or BugGuard candidate. The two `_hash_fingerprint` methods in `scanner.py` and `components/downloads.py` are pre-existing domain-specific implementations outside the audited fixes; remote TLS material generation intentionally remains separate from generic command execution because it owns certificate-file lifecycle and secret handling. No application code changed in Phase 10.
 
 ---
 

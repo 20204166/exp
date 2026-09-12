@@ -124,3 +124,14 @@ Agent 5 are complete. No Phase 8 vulnerability or app-code fix was identified.
 Phase 9 found no packaging defect and made no application or installer-code
 changes. Native Windows PowerShell execution and clean-install verification on
 Python 3.10/3.11 remain required evidence for a future native smoke run.
+
+## Phase 10 Canonical Reuse Audit
+
+The collective Phases 3–9 reuse audit found no new duplicated mechanism that
+should be consolidated. Generic subprocess execution remains owned by
+`maintenance/external_commands.py`; process ancestry safety remains owned by
+`maintenance/components/process_safety.py`; thermal state transitions remain
+owned by `maintenance/components/temperature.py`; platform acquisition stays
+under `maintenance/scanner_support/`. The separate certificate-generation
+subprocess is intentionally retained because it owns TLS material lifecycle
+and secret-file permissions. No Phase 10 code change was warranted.
