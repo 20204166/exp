@@ -82,3 +82,17 @@ BugGuard candidate was opened, and no application code or tests were changed.
 No Phase 4 production defect met the proof threshold for an in-phase fix. The
 CPU, VPN, memory, Downloads, and storage observations are recorded as scoped
 follow-ups rather than silently patched or promoted to validated bugs.
+
+## Phase 6 Config, Command, and Encoding Audit
+
+| Surface | Classification | Evidence / disposition |
+| --- | --- | --- |
+| Preferences and Downloads path ownership | VERIFIED | `preferences.py` owns platform-specific configuration paths; `scanner_support/paths.py` delegates Downloads resolution to `DownloadsPathResolver`. |
+| Application log path | VERIFIED | `main.default_log_path` selects Linux XDG state, macOS `~/Library/Logs`, and Windows `LOCALAPPDATA`/`APPDATA` fallbacks; deterministic regression coverage added. |
+| External command execution | VERIFIED | All scanner commands use the shared runner or preserve an explicit direct TLS boundary; no `shell=True` usage exists. Windows console suppression is forwarded for TLS generation. |
+| Subprocess decoding | VERIFIED | Shared command execution catches `UnicodeError` and preserves fail-soft `(empty, error)` behavior; malformed JSON remains a parser error. |
+| OpenSSL availability | IMPLEMENTED BUT NOT NATIVE-VERIFIED | Missing OpenSSL remains an explicit command failure at the discovery caller boundary; Windows native availability was not testable on this Linux host. |
+
+Phase 6 fixes are committed in `0fb9518`. Focused Phase 6 coverage passed
+27 tests; the full Linux suite passed 1375 tests. Native Windows and macOS
+execution remains unverified.

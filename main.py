@@ -43,10 +43,10 @@ def default_log_path(
 def setup_logging() -> Path | None:
     """Configure per-user file logging and return the log path (or None).
 
-    The log lives under the XDG state directory (``~/.local/state`` by
-    default) and is size-bounded so a disk-full situation cannot grow logs
-    without limit. If the state directory is unavailable, logging falls back
-    to stderr instead of failing the app.
+    The log uses the platform's per-user state/log convention and is
+    size-bounded so a disk-full situation cannot grow logs without limit. If
+    the state directory is unavailable, logging falls back to stderr instead
+    of failing the app.
     """
 
     path = default_log_path()
