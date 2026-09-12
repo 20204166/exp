@@ -167,7 +167,7 @@ git commit -m "docs: repository-wide platform assumption inventory"
 
 **Skill:** `systematic-debugging`, invoked directly (this is the canonical "before proposing fixes" root-cause tracing skill), with `BugGuard` Mode B owning the candidate/evidence ledger around it.
 
-- [ ] **Step 1: Declare BugGuard Mode B for the thermal candidate**
+- [x] **Step 1: Declare BugGuard Mode B for the thermal candidate**
 
 ```text
 BugGuard mode: Mode B - standalone bug-hunt
@@ -175,19 +175,26 @@ Candidate: BUG-<today>-001 "Thermals page stuck at Waiting for samples on non-Li
 Threshold: full B7 (high-risk: user-facing state that has survived multiple prior fix attempts)
 ```
 
-- [ ] **Step 2: Build the boundary table** in `docs/platform_audit/THERMAL-ROOT-CAUSE.md` using `systematic-debugging`'s root-cause-tracing method, covering every boundary A–P from the spec (sensor availability → acquisition → raw shape → classification → validation → `TemperatureSample` → `ResourceSummary.temperatures` → `TemperatureTelemetry.record_summary` → history → `TemperatureRenderState` → `ThermalsPage.render` → `_should_show` → `TelemetryMiniGraph`/`thermal_graph.py` draw). Use the file:line citations already gathered in this plan's Grounding section as the starting evidence. The two boundaries this plan previously flagged as "not yet fully traced" are now CONFIRMED (verified this session, not left as a hedge):
+- [x] **Step 2: Build the boundary table** in `docs/platform_audit/THERMAL-ROOT-CAUSE.md` using `systematic-debugging`'s root-cause-tracing method, covering every boundary A–P from the spec (sensor availability → acquisition → raw shape → classification → validation → `TemperatureSample` → `ResourceSummary.temperatures` → `TemperatureTelemetry.record_summary` → history → `TemperatureRenderState` → `ThermalsPage.render` → `_should_show` → `TelemetryMiniGraph`/`thermal_graph.py` draw). Use the file:line citations already gathered in this plan's Grounding section as the starting evidence. The two boundaries this plan previously flagged as "not yet fully traced" are now CONFIRMED (verified this session, not left as a hedge):
 
   - **`maintenance/components/coordinator.py` does not intercept/transform the thermal render path.** Grepped the full 848-line file for `temperature`/`thermal`/`render`: exactly two hits, both irrelevant — a comment on GPU refresh cadence (`coordinator.py:49`, "GPU usage/temperature moderate (3s)") and an unrelated docstring note about cache replay (`coordinator.py:322`, "`last_result` / `store`, so a reopened surface renders immediately"). No thermal-specific logic exists in this file at all.
   - **`context.capabilities` and `controller._capabilities` are confirmed the same dict object, not a copy.** `maintenance/ui/window_node_runtime.py:226-238` (`sync_selected_context_mirrors`) does `controller._capabilities = context.capabilities` (line 232) — a reference assignment. `maintenance/ui/window_components.py:269-286` (`observe_capability`) then reads/mutates it via `controller.__dict__.setdefault("_capabilities", {})` (line 273) — since `window.py:223` declares `self._capabilities: dict[str, CapabilityState] = {}` as a plain instance attribute (no property indirection), `setdefault` returns the exact dict `sync_selected_context_mirrors` just pointed at `context.capabilities`, so `observe_capability`'s in-place mutations (`capabilities[key] = state`, line 278/285) are visible through `context.capabilities` too. This holds precisely because `sync_selected_context_mirrors` runs at node-selection time (confirmed call sites: `maintenance/ui/window_node_actions.py:194` and `:589`, both inside node-switch/removal flows) strictly before any subsequent scan's `observe_capability` call for that node — selection always precedes data arrival, never the reverse, in both call sites read this session.
 
   This closes the boundary-table gap: the root-cause hypothesis's step 4 (in this plan's Grounding section) is now proven, not merely asserted.
 
-- [ ] **Step 3: Write a failing test that reproduces the hypothesis without any platform mocking of `sys.platform`** (per the spec's ban on treating mocked-platform tests as proof) — construct the scenario directly against real classes. Every symbol below was verified this session against the real source it targets, not guessed:
+- [x] **Step 3: Write a failing test that reproduces the hypothesis without any platform mocking of `sys.platform`** (per the spec's ban on treating mocked-platform tests as proof) — construct the scenario directly against real classes. Every symbol below was verified this session against the real source it targets, not guessed:
 
 **Corrected this session — this test must be a `unittest.TestCase`, not bare pytest-style functions.** The original draft used module-level `def test_...():` functions with plain `assert`. This repo has no `pytest` (see Phase 0's correction note) and its actual runner, `python -m unittest discover -s tests`, only discovers test *methods on `unittest.TestCase` subclasses* — a bare module-level function named `test_*` is never collected and would silently never run. Every real test file in `tests/` (e.g. `tests/test_temperature_telemetry.py:41`, `class TemperatureTelemetryTests(unittest.TestCase):`) follows the class-based form; this test now matches it exactly, including reusing the existing `tests.support.models.make_summary` builder instead of constructing `ResourceSummary` by hand (`temperature_telemetry.py`'s own tests do the same):
 
+**Execution correction approved during design review:** the intentional RED proof
+uses `tests/thermal_capability_gap_red.py`, which is explicitly runnable but is
+not collected by `python3 -m unittest discover -s tests`. Run it with
+`python3 -m unittest tests.thermal_capability_gap_red -v`. After Phase 3 turns
+the proof green, rename it to `tests/test_thermal_capability_gap.py` so it is a
+permanent discovered regression test.
+
 ```python
-# tests/test_thermal_capability_gap.py
+# tests/thermal_capability_gap_red.py
 """Proves TemperatureTelemetry's thermal state resolves out of NO_DATA when a
 card is genuinely supported but a sensor never yields a sample (the root
 cause of "Waiting for the first sample" persisting forever on platforms with
@@ -240,14 +247,14 @@ else:
 
 — there is no counter, no timeout, nothing that ever transitions `NO_DATA` to `UNSUPPORTED` purely from repetition; confirmed by reading the full `_ComponentTelemetry` dataclass (`temperature.py:162-178`, `@dataclass(slots=True)`) end to end — its fields are exactly `policy, state, current, history, sensor_histories, events, active_event, last_error, consecutive_hot, cooldown_until`, and grepping the whole file for `empty_reads` (the field Step 2 below adds) returns zero hits today. This is the proof step BugGuard requires before any fix is written.
 
-- [ ] **Step 4: Root-cause report**
+- [x] **Step 4: Root-cause report**
 
 Write the answer to spec Section 59's 11 questions into `docs/platform_audit/THERMAL-ROOT-CAUSE.md`: what caused it (capability-signal conflation between card-level and thermal-level `CapabilityState`, described above), which boundary (`window_components.py:269-286` writing card capability into the only capability map the Thermals page ever sees, combined with `temperature.py` having no self-terminating no-data state), why prior attempts missed it (all touched acquisition or platform-gating, never the UI capability-signal boundary), and what remains to change (Phase 3).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
-git add docs/platform_audit/THERMAL-ROOT-CAUSE.md tests/test_thermal_capability_gap.py
+git add docs/platform_audit/THERMAL-ROOT-CAUSE.md tests/thermal_capability_gap_red.py
 git commit -m "test: prove thermal capability never resolves out of no_data (failing, root cause documented)"
 ```
 
@@ -544,7 +551,8 @@ Add a row per capability to `docs/platform_audit/PLATFORM-MATRIX.md` using only 
 
 - [ ] **Step 1: First-sample-transition and confirm-limit-to-`UNSUPPORTED` — already written in Phase 2/3, verify only**
 
-`tests/test_thermal_capability_gap.py` (Phase 2 Step 3 / Phase 3 Step 3) already is this RED test:
+`tests/test_thermal_capability_gap.py` (renamed from the Phase 2 RED module after
+Phase 3 turns it green) is this permanent regression test:
 
 ```python
 class ThermalCapabilityGapTests(unittest.TestCase):

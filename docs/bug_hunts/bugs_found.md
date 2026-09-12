@@ -1,5 +1,17 @@
 # BugGuard Findings
 
+## BUG-20260912-001 - Thermals page stuck at waiting for samples
+
+- Status: Validated downgraded bug
+- Severity: P2 user-facing cross-platform thermal state defect
+- Created: 2026-09-12
+- Scope: Thermal acquisition-to-render state for local and remote node summaries.
+- Opposition: full B7 completed; temporary opposition artifact removed after synthesis.
+- PoC folder: `docs/bug_hunts/poc/BUG-20260912-001/`
+- Initial evidence: `tests/thermal_capability_gap_red.py` fails after 1000 empty supported summaries because the state remains `NO_DATA`.
+- Candidate decision: Full B7 confirmed a deterministic state/presentation defect;
+  severity downgraded from P1 to P2. Phase 3 fix-forward is approved.
+
 ## BUG-20260910-001 - Full application release and extraction wiring audit
 
 - Status: Validated downgraded bug for H2; H1 not a bug on current evidence
