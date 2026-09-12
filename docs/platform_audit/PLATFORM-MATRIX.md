@@ -145,3 +145,11 @@ subprocess change is the Windows `CREATE_NO_WINDOW` flag on an existing TLS
 material command, so no performance benchmark was warranted. Existing tests
 cover coordinator cancellation/shutdown, discovery teardown, stale callbacks
 after close, and window finalization. No Phase 11 code change was required.
+
+## Phase 12 Behavior Regression Tests
+
+The permanent test `tests/test_thermal_node_isolation.py` proves that the
+selection path renders each node's own telemetry history. Its false-positive
+check was executed by temporarily forcing the renderer to use the local
+context; the test failed on the remote-history assertion, then the production
+function was restored. Focused thermal and isolation coverage passed `23/23`.

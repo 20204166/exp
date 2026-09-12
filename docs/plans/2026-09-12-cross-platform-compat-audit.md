@@ -543,7 +543,7 @@ Add a row per capability to `docs/platform_audit/PLATFORM-MATRIX.md` using only 
 
 **Skill:** `test-driven-development` (these are pure behavior tests, platform-independent, written directly against the normalized contract — no `sys.platform` mocking, per the spec's explicit ban on treating that as proof). Every RED test below must be run and confirmed failing for the stated reason before Phase 3 (or the relevant Phase 4–9 fix) makes it GREEN — do not write these and mark them done without watching them fail first.
 
-- [ ] **Step 1: First-sample-transition and confirm-limit-to-`UNSUPPORTED` — already written in Phase 2/3, verify only**
+- [x] **Step 1: First-sample-transition and confirm-limit-to-`UNSUPPORTED` — already written in Phase 2/3, verified**
 
 `tests/test_thermal_capability_gap.py` (renamed from the Phase 2 RED module after
 Phase 3 turns it green) is this permanent regression test:
@@ -560,11 +560,11 @@ No new test needed here for this case. Re-run it explicitly at Phase 12 time to 
 python -m unittest tests.test_thermal_capability_gap -v
 ```
 
-- [ ] **Step 2: Immediate-`UNSUPPORTED` path — already GREEN, characterization only, no RED cycle needed**
+- [x] **Step 2: Immediate-`UNSUPPORTED` path — already GREEN, characterization only, no RED cycle needed**
 
 Confirmed this session: `tests/test_temperature_telemetry.py:190-196` already asserts `summary.capability == CapabilityState.UNSUPPORTED` → `snapshot.state == TemperatureState.UNSUPPORTED` immediately (no confirm-limit wait needed when a provider *authoritatively* declares absence, e.g. no-battery desktop, GPU probe returning `UNSUPPORTED`). This is existing, already-passing coverage — spec Section 51's requirement is already met for this path. Do not duplicate it. Only add a fixture-driven variant if a Phase 4–9 audit finds a provider (e.g. `gpu.py`'s `_mac_gpu_probe`) that can return "no GPU" without setting `capability=CapabilityState.UNSUPPORTED` on the resource — that would be a genuine new finding, logged to `docs/bug_hunts/`, not silently patched here.
 
-- [ ] **Step 3: Node-isolation regression test — genuinely missing, write it as a real RED test**
+- [x] **Step 3: Node-isolation regression test — added and verified**
 
 Confirmed by reading `maintenance/nodes.py:675` (`NodeContext.telemetry: TemperatureTelemetry = field(default_factory=TemperatureTelemetry)`): each node context gets its own telemetry instance by construction, so isolation should already hold — but nothing in `tests/test_window_nodes.py` or `tests/test_node_selection.py` (grepped this session — neither references `telemetry` or asserts cross-node isolation) actually proves it, and `thermal_render_state`/`refresh_thermals_page` in `maintenance/ui/window_components.py:220-242` read whatever `controller._selected_context()` currently returns. A future refactor that hoists `telemetry` onto the controller instead of the context would silently reintroduce cross-node leakage with no test catching it. Write this as a real RED test now, using the existing `tests/support/nodes.py` builders:
 
@@ -638,13 +638,13 @@ class ThermalNodeIsolationTests(unittest.TestCase):
 
 Verified this session against real source, not guessed (and, per the earlier `unittest` correction, rewritten from a bare pytest-style function into a `unittest.TestCase` method, matching this repo's actual test runner): `NodeContext` is a plain mutable `@dataclass` (`maintenance/nodes.py:656`); `NodeRegistry.register_context`/`.select`/`.selected_id`/`.context` are the exact methods `tests/test_window_nodes.py`'s own `_make_window` helper uses (confirmed at `tests/test_window_nodes.py:117-123`); `window._selected_context()` (`window.py:271-272`) resolves through `ui_node_runtime.selected_context` → `NodeSelection.selected_context()` (`maintenance/components/node_selection.py:39-45`), which only reads `self._registry.context(self._selected_id())` — the other callables `NodeSelection` takes (`cancel_active_scan`, `sync_selected_context`, etc.) are captured as lazy lambdas at construction and never invoked by a plain read, so `make_bare_window()` needs no extra mocking for this test; `TemperatureSample`'s exact fields are `component, sensor_id, sensor_name, value_celsius, sampled_at, sampled_monotonic` (`maintenance/components/temperature.py:47-53`); `make_summary`'s exact keyword names are confirmed at `tests/support/models.py:40-52`. This is real, checked code — run it as written, not adapted, and if it fails on an import or attribute name at execution time (APIs can drift between when this plan was written and when it's executed), fix the plan's citation, don't paper over it in the test.
 
-If this test passes immediately, that is expected here (unlike Phase 2/3's bug-proving test) — this is a **characterization test** locking in already-correct isolation-by-construction, not a bug hunt. To confirm it isn't a false-positive pass (asserting something trivially true regardless of the code under test), temporarily hardcode `thermal_render_state` to ignore its `context` argument and always read `local_ctx.telemetry` — confirm the test then fails with the "must be empty/absent" assertion — then revert the hardcode. That substitutes for the RED step per this skill's own guidance on characterization tests, and is mandatory before trusting the test as a regression guard.
+If this test passes immediately, that is expected here (unlike Phase 2/3's bug-proving test) — this is a **characterization test** locking in already-correct isolation-by-construction, not a bug hunt. The required false-positive check was performed by temporarily hardcoding `thermal_render_state` to always read the local node; the test failed with the remote-history assertion, and the production function was restored unchanged.
 
 ```bash
 python -m unittest tests.test_thermal_node_isolation -v
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/test_thermal_node_isolation.py
