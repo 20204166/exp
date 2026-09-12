@@ -167,6 +167,16 @@ class VpnDetectionTests(unittest.TestCase):
 
         self.assertEqual(SystemScanner._vpn_interface(fake), "tun0")
 
+    def test_vpn_interface_detects_macos_utun_prefix(self) -> None:
+        fake = SimpleNamespace(
+            net_if_stats=lambda: {
+                "en0": SimpleNamespace(isup=True),
+                "utun3": SimpleNamespace(isup=True),
+            },
+        )
+
+        self.assertEqual(SystemScanner._vpn_interface(fake), "utun3")
+
     def test_vpn_interface_ignores_down_tunnel(self) -> None:
         fake = SimpleNamespace(
             net_if_stats=lambda: {

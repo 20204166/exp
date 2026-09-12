@@ -66,3 +66,19 @@ classification.
 
 No Phase 1 hit met the evidence threshold for an unsafe platform assumption. No
 BugGuard candidate was opened, and no application code or tests were changed.
+
+## Phase 4 Subsystem Audit
+
+| Subsystem | Classification | Evidence / disposition |
+| --- | --- | --- |
+| CPU | PARTIAL | Core-count unavailability can be cached; reproduced as a P2 needs-more-evidence follow-up. Existing usage/frequency paths passed. |
+| Memory | VERIFIED | Linux `/proc/swaps` is gated correctly; Windows/macOS use psutil aggregate swap fields. Decode-failure fallback is a P3 hardening candidate, not validated. |
+| Storage / Trash | IMPLEMENTED BUT NOT NATIVE-VERIFIED | Provider branches and containment tests pass. Windows native Recycle Bin and a narrow cleanup race remain unverified. |
+| GPU | VERIFIED | Identity and optional metrics remain independent; malformed injectable empty detail tuple raises, but current providers normalize it before rendering. |
+| Network | VERIFIED | Added and validated macOS `utun` coverage; provider-specific VPN names remain a P2 needs-more-evidence follow-up. |
+| Battery | VERIFIED | No-battery, permission-limited, and no-sensor paths remain fail-soft; Phase 3 thermal state is shared without fabricated data. |
+| Downloads / cleanup | IMPLEMENTED BUT NOT NATIVE-VERIFIED | OneDrive and containment behavior are covered; permission-denied sentinel existence loop needs native Windows evidence. |
+
+No Phase 4 production defect met the proof threshold for an in-phase fix. The
+CPU, VPN, memory, Downloads, and storage observations are recorded as scoped
+follow-ups rather than silently patched or promoted to validated bugs.
