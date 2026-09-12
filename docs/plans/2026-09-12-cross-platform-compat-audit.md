@@ -657,10 +657,10 @@ git commit -m "test: lock in per-node thermal telemetry isolation"
 
 **Skill:** `verifying-before-completion` — mandatory before any platform is marked `VERIFIED` rather than `IMPLEMENTED BUT NOT NATIVE-VERIFIED`.
 
-- [ ] **Step 1: If a Windows machine/VM is available**, run the full smoke matrix from the original spec (Section 45): install/import, launch, initial scan, all six cards, Manual Scan, CPU/Memory/Storage/GPU/Network/Battery detail, Thermals (record exactly which sensors produce real samples vs. resolve to the new `UNSUPPORTED` state from Phase 3), process dialog + one safe disposable-process action, Downloads review, settings persistence, discovery, graceful shutdown. Paste real terminal/screenshot evidence — do not write "verified" without it.
-- [ ] **Step 2: If a macOS machine is available**, run the equivalent matrix (Section 46), explicitly reproducing the pre-fix "Waiting for samples" state first (on an Apple Silicon Mac, this should now resolve to "Temperature not supported" after the confirm-limit window instead of waiting forever), then confirming post-fix behavior.
-- [ ] **Step 3: If neither is available**, do not claim native verification. Mark those matrix cells `IMPLEMENTED BUT NOT NATIVE-VERIFIED` and say so plainly in the final report — this matches the existing honest precedent already set in `docs/CAPABILITY_TRANSPARENCY_2026-09-10.md`.
-- [ ] **Step 4: Linux regression, mandatory regardless of Windows/macOS availability**
+- [x] **Step 1: Windows native smoke matrix** — unavailable; no Windows machine/VM or PowerShell executable exists in this environment. No native verification is claimed.
+- [x] **Step 2: macOS native smoke matrix** — unavailable; no macOS host exists in this environment. No native verification is claimed.
+- [x] **Step 3: Native evidence classification** — Windows/macOS and clean Python 3.10/3.11 installation cells remain `IMPLEMENTED BUT NOT NATIVE-VERIFIED`, consistent with the existing capability-transparency vocabulary.
+- [x] **Step 4: Linux regression, mandatory regardless of Windows/macOS availability** — `1377/1377` tests passed; `ruff check .` passed. Repository-wide format, Pyright, and Mypy findings remain documented baseline/tooling issues and are not represented as passes.
 
 ```bash
 python -m unittest discover -s tests -q

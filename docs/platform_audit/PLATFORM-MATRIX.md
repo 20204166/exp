@@ -146,6 +146,18 @@ material command, so no performance benchmark was warranted. Existing tests
 cover coordinator cancellation/shutdown, discovery teardown, stale callbacks
 after close, and window finalization. No Phase 11 code change was required.
 
+## Phase 13 Native Smoke and Linux Regression
+
+Native Windows and macOS smoke execution was unavailable: no Windows/macOS
+host, PowerShell executable, or Python 3.10/3.11 executable is present. Those
+matrix cells remain `IMPLEMENTED BUT NOT NATIVE-VERIFIED`; no native pass is
+claimed. The mandatory Linux regression passed `1377/1377`, and `ruff check .`
+passed. Repository-wide `ruff format --check .` reports 44 pre-existing
+Markdown/Python formatting findings, Pyright reports 41 pre-existing typing
+findings, and whole-repository Mypy is blocked by duplicate module names in
+versioned PoC directories. These gates are recorded as unavailable/baseline
+failures, not successes.
+
 ## Phase 12 Behavior Regression Tests
 
 The permanent test `tests/test_thermal_node_isolation.py` proves that the
