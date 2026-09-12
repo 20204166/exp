@@ -134,6 +134,18 @@ print(f"  window: {window.__file__}")
         $scheme = if ($env:OS -eq "Windows_NT") { "nt_user" } else { "posix_user" }
         $bin = & $py -c "import sysconfig;print(sysconfig.get_path('scripts', scheme='$scheme'))"
     }
-    Write-Host "Installed $wheel. Console scripts: $bin"
-    Write-Host "Add this directory to PATH if needed, then run: system-analyzer"
+    if ($env:OS -eq "Windows_NT" -and $bin -and (Test-Path $bin)) {
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        $already = ($userPath -split ";") | Where-Object { $_.TrimEnd("\") -eq $bin.TrimEnd("\") }
+        if (-not $already) {
+            $updated = if ($userPath) { "$bin;$userPath" } else { $bin }
+            [Environment]::SetEnvironmentVariable("Path", $updated, "User")
+            Write-Host "Added '$bin' to your user PATH. Open a new terminal, then run: system-analyzer"
+        } else {
+            Write-Host "Installed $wheel. Console scripts: $bin (already on PATH). Run: system-analyzer"
+        }
+    } else {
+        Write-Host "Installed $wheel. Console scripts: $bin"
+        Write-Host "Add this directory to PATH if needed, then run: system-analyzer"
+    }
 } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
