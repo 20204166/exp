@@ -135,3 +135,13 @@ owned by `maintenance/components/temperature.py`; platform acquisition stays
 under `maintenance/scanner_support/`. The separate certificate-generation
 subprocess is intentionally retained because it owns TLS material lifecycle
 and secret-file permissions. No Phase 10 code change was warranted.
+
+## Phase 11 Fail-Soft, Performance, and Shutdown Audit
+
+The Phases 3–9 diff introduced no new worker thread, timer loop, render-path
+subprocess, or uncached acquisition cadence. Thermal absence confirmation uses
+the existing telemetry update path and bounded per-component state. The only
+subprocess change is the Windows `CREATE_NO_WINDOW` flag on an existing TLS
+material command, so no performance benchmark was warranted. Existing tests
+cover coordinator cancellation/shutdown, discovery teardown, stale callbacks
+after close, and window finalization. No Phase 11 code change was required.

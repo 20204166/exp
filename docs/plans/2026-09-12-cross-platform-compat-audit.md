@@ -533,9 +533,9 @@ Add a row per capability to `docs/platform_audit/PLATFORM-MATRIX.md` using only 
 
 **Skills:** `BugGuard` Mode C only if a genuine performance regression is found; `investigating-performance` as the generic diagnostic method for confirming or ruling one out.
 
-- [ ] **Step 1:** Confirm Phase 3's fix and any other Phases 3–9 fix did not introduce a new thread-per-sensor, timer-per-graph, or per-render subprocess spawn — grep the diff for new `threading.Thread(`, `after(` polling loops, or `subprocess.run` calls inside a render path.
-- [ ] **Step 2:** If any new external-command cost was introduced (e.g., a new PowerShell/`system_profiler` call), invoke `investigating-performance` to measure it against the existing `TEMPERATURE_REFRESH_SECONDS` cache window — verified this session, citation accurate: `_cached_temperature_lines` (`dashboard.py:1075`) delegates to `_cached_temperature_scan` (`:1084-1090`), which wraps `_temperature_scan` in `self._ttl_cached_value(..., ttl_seconds=self.TEMPERATURE_REFRESH_SECONDS, ...)` — confirm any new acquisition path reuses this same cache rather than adding a second polling cadence.
-- [ ] **Step 3:** Confirm every new/changed platform acquisition path shuts down cleanly (no orphan subprocess, no lingering thread, no Tk callback firing after `destroy()`).
+- [x] **Step 1:** Diff audit found no new `threading.Thread`, `after` polling loop, timer-per-graph, or render-path subprocess spawn in Phases 3–9. Thermal confirmation is a bounded counter in existing telemetry state; UI threshold styling is draw-time geometry only.
+- [x] **Step 2:** No new external-command cost or acquisition path was introduced. Phase 6 only forwards Windows `CREATE_NO_WINDOW` to existing commands, including the existing TLS-material command; the existing temperature cache cadence is unchanged. `investigating-performance` was therefore not required.
+- [x] **Step 3:** Existing lifecycle coverage confirms cancellation, coordinator shutdown, discovery close/cancel, stale callback rejection after close, and window shutdown. No changed Phase 3–9 path creates an orphan subprocess/thread or an unguarded Tk callback.
 
 ---
 
