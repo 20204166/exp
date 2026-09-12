@@ -96,3 +96,17 @@ follow-ups rather than silently patched or promoted to validated bugs.
 Phase 6 fixes are committed in `0fb9518`. Focused Phase 6 coverage passed
 27 tests; the full Linux suite passed 1375 tests. Native Windows and macOS
 execution remains unverified.
+
+## Phase 8 Discovery, Remote TLS, and Identity Audit
+
+| Surface | Classification | Evidence / disposition |
+| --- | --- | --- |
+| Discovery lifecycle and trust boundary | VERIFIED by Linux tests | Full D7 evidence confirms locked callback mutation, lifecycle-generation gating, untrusted/non-selectable candidates, explicit read-only pairing, and no capability escalation. |
+| TLS transport and certificate pinning | VERIFIED by Linux loopback tests | Full D7 confirms TLS 1.2 minimum, DER fingerprint pinning, wrong-pin rejection, and mandatory pins for trusted transport construction. |
+| HMAC, freshness, replay, capability, and permission checks | VERIFIED by tests | Full D7 confirms malformed, stale, replayed, misbound, unknown, and unauthorized requests fail closed, including destructive request-ID reuse. |
+| Stable peer identity | VERIFIED by tests | Stable IDs survive metadata/address changes; identity fingerprint mismatch deselects the peer. |
+| Native discovery/TLS behavior | IMPLEMENTED BUT NOT NATIVE-VERIFIED | Windows/macOS execution is unavailable in this environment; Python/OpenSSL and protocol standards were checked, but native smoke evidence is still required. |
+
+Phase 8 full D7 review is recorded at
+`docs/security_reviews/SEC-20260912-002-review.md`; all four reviewer legs and
+Agent 5 are complete. No Phase 8 vulnerability or app-code fix was identified.
