@@ -196,9 +196,15 @@ print(f"Installed system-analyzer {actual}")
 print(f"  maintenance: {maintenance.__file__}")
 print(f"  window: {window.__file__}")
 '@
-    Push-Location ([System.IO.Path]::GetPathRoot((Get-PackageDir)))
-    try { & $Py -c $script $ExpectedVersion } finally { Pop-Location }
-    if ($LASTEXITCODE -ne 0) { throw "installed wheel verification failed" }
+    $verifyPath = Join-Path ([System.IO.Path]::GetTempPath()) ("system-analyzer-verify-" + [guid]::NewGuid() + ".py")
+    try {
+        [System.IO.File]::WriteAllText($verifyPath, $script)
+        Push-Location ([System.IO.Path]::GetPathRoot((Get-PackageDir)))
+        try { & $Py $verifyPath $ExpectedVersion } finally { Pop-Location }
+        if ($LASTEXITCODE -ne 0) { throw "installed wheel verification failed" }
+    } finally {
+        Remove-Item $verifyPath -ErrorAction SilentlyContinue
+    }
 }
 
 # Install one wheel per-user, handling old pip that lacks the flag. The

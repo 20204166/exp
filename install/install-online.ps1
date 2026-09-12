@@ -113,9 +113,11 @@ print(f"Installed system-analyzer {actual}")
 print(f"  maintenance: {maintenance.__file__}")
 print(f"  window: {window.__file__}")
 '@
+    $verifyPath = Join-Path $tmp "verify_installed.py"
+    [System.IO.File]::WriteAllText($verifyPath, $verify)
     $driveRoot = [System.IO.Path]::GetPathRoot((Get-Location).Path)
     Push-Location $driveRoot
-    try { & $py -c $verify $expectedVersion } finally { Pop-Location }
+    try { & $py $verifyPath $expectedVersion } finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { throw "installed wheel verification failed" }
 
     if ($System) {
