@@ -44,6 +44,29 @@ class TelemetryGraphTests(unittest.TestCase):
             "No temperature data", graph._state_label.config.call_args.kwargs["text"]
         )
 
+    def test_unsupported_state_draws_truthful_placeholder(self) -> None:
+        graph = self._graph()
+        graph._snapshot = TemperatureSeriesSnapshot(
+            component="cpu",
+            title="CPU Temperature",
+            state=TemperatureState.UNSUPPORTED,
+            current_celsius=None,
+            minimum_celsius=None,
+            maximum_celsius=None,
+            warning_celsius=90.0,
+            critical_celsius=95.0,
+            samples=(),
+            events=(),
+        )
+
+        graph._redraw()
+
+        graph._canvas.create_text.assert_called()
+        self.assertEqual(
+            graph._state_label.config.call_args.kwargs["text"],
+            "Temperature not supported",
+        )
+
     def test_valid_series_draws_line_and_current_label(self) -> None:
         graph = self._graph()
         graph._snapshot = TemperatureSeriesSnapshot(

@@ -66,6 +66,7 @@ class TemperaturePolicy:
     rapid_rise_window: int = 4
     history_limit: int = 600
     event_limit: int = 8
+    unsupported_confirm_samples: int = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +172,7 @@ class _ComponentTelemetry:
     last_error: str | None = None
     consecutive_hot: int = 0
     cooldown_until: float = 0.0
+    empty_reads: int = 0
 
     def __post_init__(self) -> None:
         self.history = deque(maxlen=self.policy.history_limit)
@@ -213,6 +215,7 @@ class TemperatureTelemetry:
             self._record_samples(telemetry, samples)
             telemetry.state = TemperatureState.VALID
             telemetry.current = samples[-1]
+            telemetry.empty_reads = 0
         else:
             self._settle_inactive_event(telemetry)
             if summary.capability == CapabilityState.UNSUPPORTED:
@@ -220,7 +223,13 @@ class TemperatureTelemetry:
             elif summary.failed:
                 telemetry.state = TemperatureState.ERROR
             else:
-                telemetry.state = TemperatureState.NO_DATA
+                telemetry.empty_reads += 1
+                telemetry.state = (
+                    TemperatureState.UNSUPPORTED
+                    if telemetry.empty_reads
+                    >= telemetry.policy.unsupported_confirm_samples
+                    else TemperatureState.NO_DATA
+                )
         return TemperatureTelemetryUpdate(
             component=component,
             snapshot=self.series_snapshot(component, title=summary.title),

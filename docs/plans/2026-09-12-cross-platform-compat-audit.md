@@ -353,7 +353,7 @@ def record_summary(
 
 Everything after `telemetry.last_error = None` down to the final `return` is unchanged from the current method except the three lines marked above (`telemetry.empty_reads = 0` in the samples branch; the `empty_reads` increment-and-check replacing the bare `telemetry.state = TemperatureState.NO_DATA` in the no-samples branch). This keeps the card-level `CapabilityState.SUPPORTED` semantics completely untouched (CPU usage really is supported) while giving the *thermal* series its own authoritative terminal state, without adding a parallel capability map or touching `window_components.py`'s existing per-card logic at all — the smallest boundary fix, made at the one place (`TemperatureTelemetry`) that already owns thermal state transitions.
 
-- [ ] **Step 3: Turn Phase 2's failing test green**, then add the adjacent case that must NOT regress — a genuinely slow-but-working sensor must still show "Waiting for the first sample" before the confirm limit:
+- [x] **Step 3: Turn Phase 2's failing test green**, then add the adjacent case that must NOT regress — a genuinely slow-but-working sensor must still show "Waiting for the first sample" before the confirm limit:
 
 ```python
     # same class as above, ThermalCapabilityGapTests(unittest.TestCase)
@@ -370,7 +370,7 @@ Everything after `telemetry.last_error = None` down to the final `return` is unc
 
 Run: `python -m unittest tests.test_thermal_capability_gap -v` — expect both PASS. (Corrected from an earlier `pytest` invocation this plan mistakenly used throughout — this repo has no `pytest` installed; see Phase 0's correction note.)
 
-- [ ] **Step 4: Lock in that the empty-state copy is already truthful once this state is reachable** (per `designing-user-experience`) — confirmed this session at `maintenance/ui/thermal_graph.py:175`: `if snapshot.state is TemperatureState.UNSUPPORTED: self._draw_empty(canvas, width, height, "Temperature not supported")`. This is real, already-correct behavior — Step 2 makes it *reachable* for a permanently-empty-but-supported card; it does not need to be built. `tests/test_thermal_card.py` is the wrong target for this (it tests `SystemScanner`-level psutil-mocked acquisition, not `TelemetryMiniGraph` rendering — confirmed by reading its imports this session: `from maintenance.scanner import SystemScanner`, no `TelemetryMiniGraph`/`temperature.py` import at all). The correct, already-existing home for this is `tests/test_telemetry_graph.py`, which already tests `TelemetryMiniGraph._redraw()` directly against hand-built `TemperatureSeriesSnapshot` objects (see its `test_valid_series_draws_line_and_current_label`, lines 47-70) but has no case for `TemperatureState.UNSUPPORTED` today (grepped this session — zero hits). Add one, following the file's own established pattern exactly:
+- [x] **Step 4: Lock in that the empty-state copy is already truthful once this state is reachable** (per `designing-user-experience`) — confirmed this session at `maintenance/ui/thermal_graph.py:175`: `if snapshot.state is TemperatureState.UNSUPPORTED: self._draw_empty(canvas, width, height, "Temperature not supported")`. This is user-visible for supported battery telemetry; CPU/GPU/Storage unsupported series are removed by the existing `_should_show` gate and use the page-level no-supported-sensors message. `tests/test_telemetry_graph.py` now covers the unsupported rendering path:
 
 ```python
 # tests/test_telemetry_graph.py — new test, same class as the others
@@ -398,20 +398,20 @@ def test_unsupported_state_draws_truthful_placeholder(self) -> None:
     )
 ```
 
-Verified this session, not inferred: `_draw_empty` (`thermal_graph.py:269-290`) does both `self._state_label.config(text=message)` (line 276) and `canvas.create_text(..., text=message, ...)` (line 284-290) — so asserting on `_state_label.config` matches `test_empty_graph_draws_placeholder`'s exact existing pattern (`tests/test_telemetry_graph.py:37-43`) precisely, with `create_text.assert_called()` as a secondary check that the canvas placeholder box was actually drawn (not just the label). This is a characterization test — the behavior already exists and this test should pass immediately. Per `test-driven-development`'s guidance for locking in already-correct behavior (not a bug hunt), confirm it isn't a false-positive by temporarily changing `thermal_graph.py:175`'s string and checking the test then fails for the right reason, before trusting it as a permanent regression guard.
+Verified this session, not inferred: `_draw_empty` updates both the state label and canvas text. The characterization test passed, then temporarily changing the message made it fail for the expected copy mismatch; the production string was restored. This locks the truthful battery-visible placeholder without changing rendering behavior.
 
-- [ ] **Step 5: Check remote-node propagation** (per `evolving-apis-and-schemas`) — traced this session, not assumed; the earlier draft of this plan cited the wrong files (`remote_support/protocol.py` / `components/node_context.py` — grepped both this session for `telemetry`/`record_summary`/`ResourceSummary`/`temperatures`, zero hits in either). The real path is:
+- [x] **Step 5: Check remote-node propagation** (per `evolving-apis-and-schemas`) — traced this session, not assumed; the earlier draft of this plan cited the wrong files (`remote_support/protocol.py` / `components/node_context.py` — grepped both this session for `telemetry`/`record_summary`/`ResourceSummary`/`temperatures`, zero hits in either). The real path is:
   1. `maintenance/cluster.py:178-219` (`resource_summary_from_dict`) decodes a remote wire payload back into a real `ResourceSummary`, including `capability` (via `CapabilityState(...)`, line 188) and `temperatures` (via `temperature_sample_from_dict`, defined at `maintenance/components/temperature.py:560`, called per-item at `cluster.py:212-217`) — this is the same `ResourceSummary`/`TemperatureSample` classes the local scan path produces, not a parallel shape.
   2. `maintenance/ui/window_presentation.py:13-33` (`show_snapshot`) is the single application point for any full snapshot — local or remote — and its `for resource in snapshot.resources: controller._observe_capability(resource.key, resource); controller._record_thermal_summary(resource.key, resource)` loop (lines 31-33) is unconditional on node origin.
   3. `controller._record_thermal_summary` → `record_thermal_summary` (`maintenance/ui/window_components.py:212-217`) → `context.telemetry.record_summary(key, resource)`, where `context = controller._selected_context()` — the exact same `TemperatureTelemetry.record_summary` this phase is patching.
 
   So the fix in Step 2 already covers remote nodes with zero additional code — a remote peer's decoded `ResourceSummary` flows through the identical `record_summary` call. No second implementation is needed. If a future audit finds a decode path that bypasses `resource_summary_from_dict`/`show_snapshot` (e.g. a partial/incremental update path not yet checked this session), that is a new finding for `docs/bug_hunts/`, not something to silently patch here.
 
-- [ ] **Step 6: A4 adversarial review**
+- [x] **Step 6: A4 adversarial review**
 
 Run BugGuard's full A4 (or the portable independent-review fallback per `BugGuard`'s own fallback rules) against this patch. Required checks: does the confirm-limit fix ever suppress a real, valid late-arriving sample (no — `empty_reads` resets to 0 the moment `samples` is non-empty, confirmed in Step 2's snippet); does it change behavior for any platform where sensors already work today, i.e., Linux (no — `empty_reads` only increments on the *no-samples* branch, which a working Linux sensor never takes); does it interact with `_settle_inactive_event`/event detection (no — that call is unchanged, made before the new counter logic).
 
-- [ ] **Step 7: Linux regression check**
+- [x] **Step 7: Linux regression check**
 
 ```bash
 python -m unittest tests.test_thermal_card tests.test_thermals_page tests.test_temperature_telemetry tests.test_telemetry_graph -v
@@ -419,7 +419,7 @@ python -m unittest tests.test_thermal_card tests.test_thermals_page tests.test_t
 
 All must pass unchanged in behavior (same assertions, same outcomes) — if any Linux-path assertion needs to change, that is a regression and must be treated as a new BugGuard finding, not silently accepted.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add maintenance/components/temperature.py tests/test_thermal_capability_gap.py tests/test_telemetry_graph.py docs/bug_hunts/patch_reviews/

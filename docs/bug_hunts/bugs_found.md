@@ -8,6 +8,7 @@
 - Scope: Thermal acquisition-to-render state for local and remote node summaries.
 - Opposition: full B7 completed; temporary opposition artifact removed after synthesis.
 - PoC folder: `docs/bug_hunts/poc/BUG-20260912-001/`
+- Mode A patch review: `docs/bug_hunts/patch_reviews/PATCH-20260912-001-review.md`
 - Initial evidence: `tests/thermal_capability_gap_red.py` fails after 1000 empty supported summaries because the state remains `NO_DATA`.
 - Candidate decision: Full B7 confirmed a deterministic state/presentation defect;
   severity downgraded from P1 to P2. Phase 3 fix-forward is approved.
