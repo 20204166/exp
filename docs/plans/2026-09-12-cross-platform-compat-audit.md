@@ -6,7 +6,7 @@
 
 **Architecture:** Platform-specific acquisition (`maintenance/scanner_support/*`) stays specialized per OS; a shared normalized contract (`maintenance/models.py::ResourceSummary`/`CapabilityState`, `maintenance/components/temperature.py::TemperatureSample`/`TemperatureTelemetry`) carries results into platform-neutral application/UI code (`maintenance/ui/*`). This plan does not change that architecture — it audits whether every boundary actually honors the contract, and repairs the boundary where it doesn't.
 
-**Tech Stack:** Python 3.10+, Tkinter/ttk, psutil, ctypes/IOKit (macOS SMC), PowerShell/WMI (Windows), pytest/unittest, ruff, pyright, mypy.
+**Tech Stack:** Python 3.10+, Tkinter/ttk, psutil, ctypes/IOKit (macOS SMC), PowerShell/WMI (Windows), `unittest` (not pytest — verified absent from this repo, see the Phase 0 correction note below), ruff, pyright, mypy.
 
 **No implementation happens as part of writing this plan.** This document is the deliverable. Every code snippet below is illustrative of the intended fix and must still go through failing-test-first + adversarial review at execution time, per the named skills.
 
@@ -52,7 +52,7 @@ Every skill copied into `.claude/skills/` is accounted for below, either assigne
 | `systematic-debugging` | Governs Phase 2 (thermal pipeline trace) — root-cause tracing before any fix is proposed, per its own trigger ("before proposing fixes"). |
 | `test-driven-development` | Governs the failing-test-first step inside every Fix task in Phases 3–9. |
 | `consolidating-responsibilities` | Governs Phase 10 — search-before-create audit of any new platform helper, reuse over extraction. |
-| `evolving-apis-and-schemas` | Governs any change to the `ResourceSummary`/`TemperatureRenderState` contract in Phase 3 (verified real propagation path: `maintenance/cluster.py`'s `resource_summary_from_dict`/`temperature_sample_from_dict`, not `remote_support/protocol.py` — see Phase 3 Step 5) and any remote wire-shape change in Phase 8 (`maintenance/remote_support/protocol.py`, not yet audited). |
+| `evolving-apis-and-schemas` | Governs any change to the `ResourceSummary`/`TemperatureRenderState` contract in Phase 3 (verified real propagation path: `maintenance/cluster.py`'s `resource_summary_from_dict`/`temperature_sample_from_dict`, not `remote_support/protocol.py` — see Phase 3 Step 5) and any remote wire-shape change in Phase 8. Verified this session: `maintenance/remote_support/protocol.py` genuinely is the right file for that role — its module docstring and content confirm it owns the signed request/response envelope (`sign_request`/`verify_request`, etc.), the replay cache, freshness window, and the operation/role/capability metadata tables shared by both `RemoteService` (server) and `AuthenticatedNodeProvider` (client); any Phase 8 change to what capabilities/operations a node can advertise or request must preserve this envelope's versioning (`REMOTE_PROTOCOL_VERSION`). |
 | `investigating-performance` | Governs Phase 11 — proving no new polling thread/timer/subprocess-per-render was introduced. |
 | `dispatching-parallel-agents` | Governs Phase 1 and Phase 4 — the per-subsystem audits (CPU/Memory/Storage/GPU/Network/Battery/Downloads) are independent with no shared state and should be dispatched in parallel rather than serially. |
 | `designing-user-experience` | Governs the empty/error/no-sensor state wording work in Phase 3 and Phase 4 (truthful capability copy, not just "Waiting..."). |
@@ -95,8 +95,12 @@ git log --oneline -10
 
 - [ ] **Step 2: Run the existing full validation suite as-is on this (Linux) environment and capture the baseline**
 
+**Corrected this session — this repo does not use `pytest`.** The original draft used `python -m pytest tests/ -q` throughout the plan (Phases 0, 3, 12, 13). Verified three independent ways: (1) `AGENTS.md:11` explicitly states "Tests are `unittest` modules under the `tests` package ... via `python -m unittest discover -s tests -v` and via single-module invocation `python -m unittest tests.test_window -v`"; (2) `README.md:316,322,329,358` document the exact same `python -m unittest ...` invocations, never `pytest`; (3) `.venv/bin/python -m pytest --version` in this repo's own virtualenv fails with `No module named pytest` — it is not even installed, let alone declared in `pyproject.toml`/`requirements.txt`/`requirements-dev.txt` (checked all three this session — only `ruff`, `pyright`, `mypy` are pinned dev dependencies). Every `python -m pytest ...` command anywhere in this plan would fail outright at execution time. This phase's own commands are fixed below; **Phases 3, 12, and 13 still have the same defect and need the identical fix** — flagging here since Phase 0 establishes the baseline convention the rest of the plan must match.
+
+The exact command set is independently confirmed twice over: `pyproject.toml:21` documents it verbatim in a comment ("the `ruff check .`, `ruff format --check .`, `pyright`, and `mypy --ignore-missing-imports` gates") and `pyrightconfig.json`'s `include` list (`maintenance`, `window.py`, `main.py`, `algo.py`, `tests`) confirms `pyright`'s scope matches what's below:
+
 ```bash
-python -m pytest tests/ -q 2>&1 | tee /tmp/baseline-pytest.log
+python -m unittest discover -s tests -q 2>&1 | tee /tmp/baseline-unittest.log
 ruff check . 2>&1 | tee /tmp/baseline-ruff.log
 ruff format --check . 2>&1 | tee /tmp/baseline-format.log
 pyright 2>&1 | tee /tmp/baseline-pyright.log
@@ -122,7 +126,7 @@ git commit -m "docs: record cross-platform audit baseline"
 
 **Skills:** `BugGuard` (Mode B, standalone audit — no code changes) driving the workflow; `dispatching-parallel-agents` to run the independent greps/subsystem scans concurrently rather than serially.
 
-- [ ] **Step 1: Dispatch parallel, independent searches** (per `dispatching-parallel-agents` — these have no shared state and no ordering dependency):
+- [ ] **Step 1: Dispatch parallel, independent searches** (per `dispatching-parallel-agents` — these have no shared state and no ordering dependency). Already run once this session for real against the current tree — use these exact commands to re-run and diff against the counts/files recorded here, so drift between planning time and execution time is caught rather than assumed away:
 
 ```bash
 grep -rn "sys\.platform" maintenance/ main.py window.py
@@ -134,7 +138,17 @@ grep -rn "/proc\|/sys/" maintenance/
 grep -rn "send2trash" maintenance/
 ```
 
-- [ ] **Step 2: Classify every hit** into one of: `CORRECT PLATFORM ADAPTER` / `SAFE CROSS-PLATFORM CODE` / `UNSAFE ASSUMPTION` / `DEAD/LEGACY PATH` / `NOT VERIFIED`, in a table in `docs/platform_audit/PLATFORM-MATRIX.md`. Known files to specifically re-examine (already skimmed this session, confirm classification with full read): `maintenance/scanner_support/dashboard.py`, `maintenance/scanner_support/smc.py`, `maintenance/scanner_support/gpu.py`, `maintenance/scanner_support/storage.py`, `maintenance/components/downloads.py`, `maintenance/components/node_context.py`, `maintenance/preferences.py`.
+Real results captured this session (re-run at execution time — this is starting evidence, not a substitute for re-verifying):
+
+- `sys\.platform`: **1 hit** — `maintenance/scanner_support/smc.py:148` (`if sys.platform != "darwin":`).
+- `platform\.system()`: **7 hits across 6 files** — `maintenance/preferences.py:169`, `maintenance/components/downloads.py:63`, `maintenance/components/node_context.py:44`, `maintenance/scanner_support/dashboard.py:277,485,1097`, `maintenance/scanner_support/storage.py:25,81`.
+- `os\.name`: **2 hits** — `maintenance/scanner_support/gpu.py:274`, `maintenance/scanner_support/dashboard.py:1217` (both `if os.name == "nt"`).
+- `subprocess` (files, not line count): **9 files** — `maintenance/external_commands.py`, `maintenance/remote_security.py`, `maintenance/scanner.py`, `maintenance/ui/window_discovery.py`, `maintenance/components/gpu.py`, `maintenance/scanner_support/gpu.py`, `maintenance/scanner_support/dashboard.py`, plus `maintenance/README.md` and `maintenance/components/README.md` (docs mentions, not code — exclude from the code audit). `maintenance/external_commands.py` is very likely the canonical subprocess-runner this plan's Phase 6 should hold every other subprocess call site to (per Section 40's canonical-reuse rule) — confirm this at Phase 6 time, not assumed here.
+- `wmic\|powershell\|system_profiler\|ioreg\|nvidia-smi\|lspci\|sensors_temperatures`: **2 files** — `maintenance/scanner_support/gpu.py`, `maintenance/scanner_support/dashboard.py`.
+- `/proc\|/sys/`: **1 genuine hit, 3 false positives.** The real one is `maintenance/scanner_support/dashboard.py:489` (`scanner_module.Path("/proc/swaps").read_text()`, Linux swap accounting). The other three matches (`maintenance/remote.py:18`, `maintenance/README.md:52`'s prose, `maintenance/components/network_discovery.py:11`) are substring false-positives — the pattern `/proc` also matches inside the English word "**/proc**ess" (e.g. "CPU/RAM/process"), not an actual filesystem path. Use a tighter pattern at execution time, e.g. `grep -rn '"/proc\|"/sys/'` (quoted-path-literal form) to avoid re-triggering this.
+- `send2trash`: **2 files** — `maintenance/actions.py` (real usage) and `maintenance/README.md` (doc mention).
+
+- [ ] **Step 2: Classify every hit** into one of: `CORRECT PLATFORM ADAPTER` / `SAFE CROSS-PLATFORM CODE` / `UNSAFE ASSUMPTION` / `DEAD/LEGACY PATH` / `NOT VERIFIED`, in a table in `docs/platform_audit/PLATFORM-MATRIX.md`. Known files to specifically re-examine (already skimmed this session, confirm classification with full read) — this list was corrected and expanded from the greps above, which surfaced three files the original draft omitted (`external_commands.py`, `remote_security.py`, `window_discovery.py`): `maintenance/scanner_support/dashboard.py`, `maintenance/scanner_support/smc.py`, `maintenance/scanner_support/gpu.py`, `maintenance/scanner_support/storage.py`, `maintenance/components/downloads.py`, `maintenance/components/node_context.py`, `maintenance/preferences.py`, `maintenance/external_commands.py`, `maintenance/remote_security.py`, `maintenance/ui/window_discovery.py`.
 
 - [ ] **Step 3: For every `UNSAFE ASSUMPTION` found, open a BugGuard Mode B candidate**
 
@@ -161,36 +175,55 @@ Candidate: BUG-<today>-001 "Thermals page stuck at Waiting for samples on non-Li
 Threshold: full B7 (high-risk: user-facing state that has survived multiple prior fix attempts)
 ```
 
-- [ ] **Step 2: Build the boundary table** in `docs/platform_audit/THERMAL-ROOT-CAUSE.md` using `systematic-debugging`'s root-cause-tracing method, covering every boundary A–P from the spec (sensor availability → acquisition → raw shape → classification → validation → `TemperatureSample` → `ResourceSummary.temperatures` → `TemperatureTelemetry.record_summary` → history → `TemperatureRenderState` → `ThermalsPage.render` → `_should_show` → `TelemetryMiniGraph`/`thermal_graph.py` draw). Use the file:line citations already gathered in this plan's Grounding section as the starting evidence, and read the two boundaries not yet fully traced this session end-to-end: `maintenance/components/coordinator.py` (confirm it does not intercept/transform the render path) and `maintenance/ui/window_node_runtime.py:186-253` (confirm `context.capabilities` really is the same dict `observe_capability` writes to, with no remapping in between).
+- [ ] **Step 2: Build the boundary table** in `docs/platform_audit/THERMAL-ROOT-CAUSE.md` using `systematic-debugging`'s root-cause-tracing method, covering every boundary A–P from the spec (sensor availability → acquisition → raw shape → classification → validation → `TemperatureSample` → `ResourceSummary.temperatures` → `TemperatureTelemetry.record_summary` → history → `TemperatureRenderState` → `ThermalsPage.render` → `_should_show` → `TelemetryMiniGraph`/`thermal_graph.py` draw). Use the file:line citations already gathered in this plan's Grounding section as the starting evidence. The two boundaries this plan previously flagged as "not yet fully traced" are now CONFIRMED (verified this session, not left as a hedge):
+
+  - **`maintenance/components/coordinator.py` does not intercept/transform the thermal render path.** Grepped the full 848-line file for `temperature`/`thermal`/`render`: exactly two hits, both irrelevant — a comment on GPU refresh cadence (`coordinator.py:49`, "GPU usage/temperature moderate (3s)") and an unrelated docstring note about cache replay (`coordinator.py:322`, "`last_result` / `store`, so a reopened surface renders immediately"). No thermal-specific logic exists in this file at all.
+  - **`context.capabilities` and `controller._capabilities` are confirmed the same dict object, not a copy.** `maintenance/ui/window_node_runtime.py:226-238` (`sync_selected_context_mirrors`) does `controller._capabilities = context.capabilities` (line 232) — a reference assignment. `maintenance/ui/window_components.py:269-286` (`observe_capability`) then reads/mutates it via `controller.__dict__.setdefault("_capabilities", {})` (line 273) — since `window.py:223` declares `self._capabilities: dict[str, CapabilityState] = {}` as a plain instance attribute (no property indirection), `setdefault` returns the exact dict `sync_selected_context_mirrors` just pointed at `context.capabilities`, so `observe_capability`'s in-place mutations (`capabilities[key] = state`, line 278/285) are visible through `context.capabilities` too. This holds precisely because `sync_selected_context_mirrors` runs at node-selection time (confirmed call sites: `maintenance/ui/window_node_actions.py:194` and `:589`, both inside node-switch/removal flows) strictly before any subsequent scan's `observe_capability` call for that node — selection always precedes data arrival, never the reverse, in both call sites read this session.
+
+  This closes the boundary-table gap: the root-cause hypothesis's step 4 (in this plan's Grounding section) is now proven, not merely asserted.
 
 - [ ] **Step 3: Write a failing test that reproduces the hypothesis without any platform mocking of `sys.platform`** (per the spec's ban on treating mocked-platform tests as proof) — construct the scenario directly against real classes. Every symbol below was verified this session against the real source it targets, not guessed:
 
+**Corrected this session — this test must be a `unittest.TestCase`, not bare pytest-style functions.** The original draft used module-level `def test_...():` functions with plain `assert`. This repo has no `pytest` (see Phase 0's correction note) and its actual runner, `python -m unittest discover -s tests`, only discovers test *methods on `unittest.TestCase` subclasses* — a bare module-level function named `test_*` is never collected and would silently never run. Every real test file in `tests/` (e.g. `tests/test_temperature_telemetry.py:41`, `class TemperatureTelemetryTests(unittest.TestCase):`) follows the class-based form; this test now matches it exactly, including reusing the existing `tests.support.models.make_summary` builder instead of constructing `ResourceSummary` by hand (`temperature_telemetry.py`'s own tests do the same):
+
 ```python
 # tests/test_thermal_capability_gap.py
-from maintenance.components.temperature import TemperatureTelemetry
-from maintenance.models import CapabilityState, ResourceSummary
-from maintenance.components.temperature import TemperatureState
+"""Proves TemperatureTelemetry's thermal state resolves out of NO_DATA when a
+card is genuinely supported but a sensor never yields a sample (the root
+cause of "Waiting for the first sample" persisting forever on platforms with
+no exposed sensor, e.g. Apple Silicon SMC or an ACPI-less Windows box)."""
+
+from __future__ import annotations
+
+import unittest
+
+from maintenance.components.temperature import TemperatureState, TemperatureTelemetry
+from maintenance.models import CapabilityState
+from tests.support.models import make_summary
 
 
-def test_permanently_empty_temperature_samples_never_report_unsupported():
-    """A card that is SUPPORTED but never yields a temperature sample must
-    eventually surface as thermally UNSUPPORTED, not wait forever."""
-    telemetry = TemperatureTelemetry()
-    cpu_card = ResourceSummary(
-        key="cpu", title="CPU", value="12.0%", subtitle="",
-        percent=12.0, details=(), capability=CapabilityState.SUPPORTED,
-        temperatures=(),
-    )
-    for _ in range(1000):  # far beyond any reasonable "still waiting" window
-        telemetry.record_summary("cpu", cpu_card)
-    snapshot = telemetry.series_snapshot("cpu")
-    assert snapshot.state != TemperatureState.NO_DATA, (
-        "thermal state must resolve to a terminal state (unsupported/error), "
-        "not remain no_data forever when the card itself is fine"
-    )
+class ThermalCapabilityGapTests(unittest.TestCase):
+    def test_permanently_empty_temperature_samples_never_report_unsupported(
+        self,
+    ) -> None:
+        """A card that is SUPPORTED but never yields a temperature sample must
+        eventually surface as thermally UNSUPPORTED, not wait forever."""
+        telemetry = TemperatureTelemetry()
+        cpu_card = make_summary(
+            "cpu", "CPU", capability=CapabilityState.SUPPORTED, temperatures=()
+        )
+        for _ in range(1000):  # far beyond any reasonable "still waiting" window
+            telemetry.record_summary("cpu", cpu_card)
+        snapshot = telemetry.series_snapshot("cpu")
+        self.assertNotEqual(
+            snapshot.state,
+            TemperatureState.NO_DATA,
+            "thermal state must resolve to a terminal state (unsupported/error), "
+            "not remain no_data forever when the card itself is fine",
+        )
 ```
 
-Verified against real source, not guessed: `ResourceSummary`'s exact field names/order/defaults are `maintenance/models.py:43-53` (`key, title, value, subtitle, percent, details, actionable=False, failed=False, capability=CapabilityState.UNKNOWN, temperatures=()`) — the constructor call above matches it field-for-field; `TemperatureTelemetry.series_snapshot(component, *, title=None)` (`maintenance/components/temperature.py:243-245`) accepts a bare `"cpu"` call, defaulting `title` to `component.upper()`, and returns a `TemperatureSeriesSnapshot` whose `.state` field is the real `TemperatureState` enum instance (`maintenance/components/temperature.py:254`), so comparing directly against the enum (not `.value`/a string) matches this repo's own test convention (`tests/test_temperature_telemetry.py:196` does the same). `TemperatureState` is a `str, Enum` with members `VALID/NO_DATA/UNSUPPORTED/ERROR` (`maintenance/components/temperature.py:39-43`).
+Verified against real source, not guessed: `tests/support/models.py:40-52`'s `make_summary(key, title, *, ..., capability=CapabilityState.UNKNOWN, temperatures=())` builds a real `ResourceSummary` (`maintenance/models.py:43-53`) with explicit overrides, matching the call above field-for-field; `TemperatureTelemetry.series_snapshot(component, *, title=None)` (`maintenance/components/temperature.py:243-245`) accepts a bare `"cpu"` call, defaulting `title` to `component.upper()`, and returns a `TemperatureSeriesSnapshot` whose `.state` field is the real `TemperatureState` enum instance (`maintenance/components/temperature.py:254`), so comparing directly against the enum (not `.value`/a string) matches this repo's own test convention (`tests/test_temperature_telemetry.py:196` does the same, via `self.assertEqual`). `TemperatureState` is a `str, Enum` with members `VALID/NO_DATA/UNSUPPORTED/ERROR` (`maintenance/components/temperature.py:39-43`).
 
 Run it and confirm it **fails** against current code. Read `temperature.py:202-227` (`TemperatureTelemetry.record_summary`) to see exactly why it must fail: the no-samples branch is
 
@@ -316,18 +349,19 @@ Everything after `telemetry.last_error = None` down to the final `return` is unc
 - [ ] **Step 3: Turn Phase 2's failing test green**, then add the adjacent case that must NOT regress — a genuinely slow-but-working sensor must still show "Waiting for the first sample" before the confirm limit:
 
 ```python
-def test_temporarily_slow_sensor_still_waits_before_confirm_limit():
-    telemetry = TemperatureTelemetry()
-    cpu_card = ResourceSummary(
-        key="cpu", title="CPU", value="12.0%", subtitle="",
-        percent=12.0, details=(), capability=CapabilityState.SUPPORTED,
-        temperatures=(),
-    )
-    telemetry.record_summary("cpu", cpu_card)
-    assert telemetry.series_snapshot("cpu").state == TemperatureState.NO_DATA
+    # same class as above, ThermalCapabilityGapTests(unittest.TestCase)
+    def test_temporarily_slow_sensor_still_waits_before_confirm_limit(self) -> None:
+        telemetry = TemperatureTelemetry()
+        cpu_card = make_summary(
+            "cpu", "CPU", capability=CapabilityState.SUPPORTED, temperatures=()
+        )
+        telemetry.record_summary("cpu", cpu_card)
+        self.assertEqual(
+            telemetry.series_snapshot("cpu").state, TemperatureState.NO_DATA
+        )
 ```
 
-Run: `python -m pytest tests/test_thermal_capability_gap.py -v` — expect both PASS.
+Run: `python -m unittest tests.test_thermal_capability_gap -v` — expect both PASS. (Corrected from an earlier `pytest` invocation this plan mistakenly used throughout — this repo has no `pytest` installed; see Phase 0's correction note.)
 
 - [ ] **Step 4: Lock in that the empty-state copy is already truthful once this state is reachable** (per `designing-user-experience`) — confirmed this session at `maintenance/ui/thermal_graph.py:175`: `if snapshot.state is TemperatureState.UNSUPPORTED: self._draw_empty(canvas, width, height, "Temperature not supported")`. This is real, already-correct behavior — Step 2 makes it *reachable* for a permanently-empty-but-supported card; it does not need to be built. `tests/test_thermal_card.py` is the wrong target for this (it tests `SystemScanner`-level psutil-mocked acquisition, not `TelemetryMiniGraph` rendering — confirmed by reading its imports this session: `from maintenance.scanner import SystemScanner`, no `TelemetryMiniGraph`/`temperature.py` import at all). The correct, already-existing home for this is `tests/test_telemetry_graph.py`, which already tests `TelemetryMiniGraph._redraw()` directly against hand-built `TemperatureSeriesSnapshot` objects (see its `test_valid_series_draws_line_and_current_label`, lines 47-70) but has no case for `TemperatureState.UNSUPPORTED` today (grepped this session — zero hits). Add one, following the file's own established pattern exactly:
 
@@ -373,7 +407,7 @@ Run BugGuard's full A4 (or the portable independent-review fallback per `BugGuar
 - [ ] **Step 7: Linux regression check**
 
 ```bash
-python -m pytest tests/test_thermal_card.py tests/test_thermals_page.py tests/test_temperature_telemetry.py tests/test_telemetry_graph.py -v
+python -m unittest tests.test_thermal_card tests.test_thermals_page tests.test_temperature_telemetry tests.test_telemetry_graph -v
 ```
 
 All must pass unchanged in behavior (same assertions, same outcomes) — if any Linux-path assertion needs to change, that is a regression and must be treated as a new BugGuard finding, not silently accepted.
@@ -391,16 +425,32 @@ git commit -m "fix: resolve thermal telemetry out of permanent no_data when a ca
 
 **Skills:** `BugGuard` Mode B for each subsystem audit; `dispatching-parallel-agents` because these seven audits share no state and can run concurrently; `designing-user-experience` for any empty/unsupported-state copy fixes found along the way; `evolving-apis-and-schemas` only if a fix changes `ResourceSummary` shape.
 
-- [ ] **Step 1: Dispatch one independent audit per subsystem**, each following the same BugGuard Mode B checklist (read the real acquisition code for all three platforms, classify per capability state, do not use "supported" for a bare conditional branch):
-  - CPU: `dashboard.py` CPU frequency/core-count paths (confirm they fail soft when `psutil.cpu_freq()` returns `None`, which it does on some ARM/VM/macOS configs).
-  - Memory: swap/zram accounting (`dashboard.py` memory builder) — confirm Linux zram reporting is untouched and Windows/macOS swap semantics are labeled, not equated.
-  - Storage: `storage.py` (already read this session — Trash size branches are real; re-verify `_windows_trash_size` against a Windows fixture, since `SHQueryRecycleBinW` requires `windows_windll()` from `maintenance/components/scan_support.py` to actually resolve on Windows, which cannot be proven from Linux — mark `NOT_VERIFIED_ON_NATIVE_PLATFORM` until Phase 13).
-  - GPU: `gpu.py` (already confirmed real per-platform probes exist) — verify `_windows_gpu_probe`/`_mac_gpu_probe` utilization/memory fields are never fabricated when the provider can't supply them (spec Section 20/42's "one unavailable GPU metric must not break identity/detail rendering").
-  - Network: confirm no Linux-only interface-name assumption (`eth0`, `enp*`, `tun0`) leaks into VPN/tunnel classification used for non-Linux interface names.
-  - Battery: confirm desktops with no battery produce `CapabilityState.UNSUPPORTED` (not an error), and that battery *temperature* absence doesn't hit the same perpetual-wait bug just fixed in Phase 3 — this is the direct analog, verify the Phase 3 fix already covers it since `battery` shares `TemperaturePolicy`/`TemperatureTelemetry`.
-  - Downloads/Trash: `downloads.py`'s `DownloadsPathResolver` — verify the OneDrive-redirect and sentinel-fallback paths (already read this session) against Windows path-length/permission edge cases; confirm cleanup never widens beyond the resolved root (`os.path` containment check).
+- [ ] **Step 1: Dispatch one independent audit per subsystem**, each following the same BugGuard Mode B checklist (read the real acquisition code for all three platforms, classify per capability state, do not use "supported" for a bare conditional branch). Every citation below was re-verified this session against real source — two were corrected from the earlier draft (marked below):
 
-- [ ] **Step 2: Log every proven defect** to `docs/bug_hunts/bugs_found_N.md` per BugGuard's ledger format; do not fix inside this phase's audit sub-tasks — split any fix into its own Mode A task following Phase 3's pattern (declaration → failing test → smallest fix → A4 review → Linux regression → commit).
+  - **CPU** — *corrected citation*: `psutil.cpu_freq()` is called in `maintenance/scanner.py:312` (`SystemScanner.scan_component`), not `dashboard.py` as the earlier draft said. The fail-soft handling of a `None`/zero/reversed reading lives in `maintenance/scanner_support/dashboard.py:432-451` (`_frequency_detail`, a `@staticmethod` whose own docstring states "Missing, zero, or reversed min/max fields are tolerated"). This is **already fully tested** — `tests/test_maintenance.py:878-914` covers all four cases (`test_frequency_detail_shows_current_and_max`, `_omits_zero_or_missing_max`, `_reports_unavailable_for_missing_current`, `_tolerates_reversed_max`). No new test needed; Step 1's job here is to confirm this coverage still exists and still passes, not to write it.
+  - **Memory** — swap/zram accounting confirmed real at `maintenance/scanner_support/dashboard.py:453` (`_memory_resource`) and `:507-532` (`_is_zram_device`/`_swap_details`, zram detected by `name.startswith("/dev/zram")`) — Linux-specific by design (zram is a Linux kernel feature), not something Windows/macOS should be made to emulate; confirm Windows/macOS swap is reported through the same `swap_memory()` fields without a fabricated "zram" label.
+  - **Storage** — `storage.py` (already read this session — Trash size branches are real; re-verify `_windows_trash_size` against a Windows fixture, since `SHQueryRecycleBinW` requires `windows_windll()` from `maintenance/components/scan_support.py:57` to actually resolve on Windows (confirmed defined there; also imported at `storage.py:16` and `downloads.py:31`), which cannot be proven from Linux — mark `NOT_VERIFIED_ON_NATIVE_PLATFORM` until Phase 13).
+  - **GPU** — `gpu.py` probe function names confirmed exactly: `_mac_gpu_probe` (line 263), `_windows_gpu_probe` (line 308), `_linux_gpu_probe` (line 335), dispatched via `mac_loader`/`windows_loader`/`linux_loader` at lines 158-162 — verify their utilization/memory fields are never fabricated when the provider can't supply them (spec Section 20/42's "one unavailable GPU metric must not break identity/detail rendering").
+  - **Network** — *already verified correct, not a suspected bug*: `TUNNEL_INTERFACE_PREFIXES` (`maintenance/scanner.py:138-140`) is `frozenset({"tun", "tap", "utun", "ppp", "ipsec", "wg"})` — `utun` (the actual macOS tunnel-interface prefix) is already included, so this is not a Linux-only assumption as the earlier draft speculated. The genuine gap is test coverage, not the classification logic: `tests/test_network_card.py:160-205` (`VpnDetectionTests`) tests `tun0`/`eth0`/`wlan0` thoroughly but has zero references to `utun` anywhere in the test suite (confirmed by grep). Add one test, following that class's exact existing pattern:
+
+    ```python
+    # tests/test_network_card.py — new case in VpnDetectionTests
+    def test_vpn_interface_detects_macos_utun_prefix(self) -> None:
+        fake = SimpleNamespace(
+            net_if_stats=lambda: {
+                "en0": SimpleNamespace(isup=True),
+                "utun3": SimpleNamespace(isup=True),
+            },
+        )
+
+        self.assertEqual(SystemScanner._vpn_interface(fake), "utun3")
+    ```
+
+    This is a characterization test locking in already-correct behavior (should pass immediately) — per `test-driven-development`'s guidance for this case, confirm it isn't a false-positive by temporarily removing `"utun"` from `TUNNEL_INTERFACE_PREFIXES` and checking the test then fails, before trusting it as a permanent regression guard.
+  - **Battery** — confirmed real at `maintenance/scanner_support/dashboard.py:771,1016,1026`: a no-battery machine (`psutil.sensors_battery()` returning `None`, documented at line 1064) produces `CapabilityState.UNSUPPORTED`, not an exception. Confirm that battery *temperature* absence is covered by the Phase 3 fix (`empty_reads` confirm-limit) since `battery` shares `TemperaturePolicy`/`TemperatureTelemetry` — this is a verification step, not new work, once Phase 3 lands.
+  - **Downloads/Trash**: `downloads.py`'s `DownloadsPathResolver` — verify the OneDrive-redirect and sentinel-fallback paths (already read this session) against Windows path-length/permission edge cases; confirm cleanup never widens beyond the resolved root (`os.path` containment check).
+
+- [ ] **Step 2: Log every proven defect** to `docs/bug_hunts/bugs_found_N.md` per BugGuard's ledger format; do not fix inside this phase's audit sub-tasks — split any fix into its own Mode A task following Phase 3's pattern (declaration → failing test → smallest fix → A4 review → Linux regression → commit). The `utun` test above is an exception (a pure characterization test with no fix attached) and may be added directly.
 
 - [ ] **Step 3: Update the platform matrix**
 
@@ -412,7 +462,7 @@ Add a row per capability to `docs/platform_audit/PLATFORM-MATRIX.md` using only 
 
 **Skills:** `BugGuard` Mode B for the audit, Mode D for anything touching the termination safety boundary (process kill/force-quit is exactly BugGuard's own "high-risk surface" list), Mode A only if a proven defect requires a scoped fix.
 
-- [ ] **Step 1: Audit `maintenance/components/process_safety.py`** for platform differences in: process username resolution, executable path resolution, permission-denied handling, protected/system process detection, termination semantics (graceful vs force, wait, already-exited, access-denied) across Linux/`psutil.Process.terminate()`/Windows job handling.
+- [ ] **Step 1: Audit two files with distinct responsibilities** — *corrected from the earlier draft, which cited only one*: `maintenance/components/process_safety.py` owns the *safety policy* (whether a process may be touched at all), not termination mechanics. Confirmed by reading it this session: `normalize_username`/`usernames_match` (lines 44-75) already strip Windows `DOMAIN\username` prefixes before comparing — genuinely cross-platform-aware, not a Linux assumption; `is_protected_process_name`/`protected_process_pids` (lines 52, 78) and `ProcessSafetyPolicy` (line 98) decide protection, but the file contains no `.terminate()`/`.kill()` call at all (confirmed by grep). The actual termination mechanics live in `maintenance/actions.py:28` (`ProcessManager` — this is the "canonical `ProcessManager` safety owner" the original spec's Section 24 refers to): `request_quit`/`terminate` call `process.terminate()` (line 44), `force_quit` calls `process.kill()` (line 78), both via `psutil.Process` methods. Audit both files together — platform differences in: process username resolution and executable path resolution (`process_safety.py`), protected/system process detection (`process_safety.py`), and termination semantics — graceful vs force, wait, already-exited, access-denied (`actions.py`'s `ProcessManager._run_process_action`, which this session's read shows delegates entirely to `psutil.Process.terminate()`/`.kill()` — confirm psutil's own Windows-vs-POSIX abstraction is trusted here rather than re-implemented, since no `sys.platform`/`os.name` branch exists in either file).
 - [ ] **Step 2: Declare BugGuard Mode D** for the termination-safety surface specifically (`docs/security_reviews/SEC-<today>-001-review.md`), per its own trigger ("auth/... admin" and process-safety surfaces qualify as full D7). Do not weaken protection to make a Windows/macOS path "pass."
 - [ ] **Step 3:** Log findings to the bug ledger; any fix goes through Mode A exactly as Phase 3.
 
@@ -422,10 +472,16 @@ Add a row per capability to `docs/platform_audit/PLATFORM-MATRIX.md` using only 
 
 **Skill:** `BugGuard` Mode B for the audit; `consolidating-responsibilities` before writing any new path-resolution helper (search `maintenance/preferences.py`, `maintenance/persistence.py`, `maintenance/scanner_support/paths.py` first — these likely already own this).
 
-- [ ] **Step 1: Read `maintenance/preferences.py` and `maintenance/scanner_support/paths.py` in full** and confirm XDG (Linux) / `Application Support` (macOS) / `APPDATA` (Windows) resolution is centralized in one place, not duplicated.
-- [ ] **Step 2: Audit every `subprocess.run`/`subprocess.Popen` call** in the repo (`grep -rn "subprocess\.\(run\|Popen\)" maintenance/`) for: availability check, timeout, decode error handling, `shell=True` usage (flag any use as a finding requiring justification, per the spec's explicit ban absent a proven security need), and Windows `CREATE_NO_WINDOW` flag presence (already confirmed present in `dashboard.py:1215-1219` and referenced for the GPU probe in commit `3fb8b95` — verify it's applied everywhere subprocess is invoked on Windows, not just the two spots read this session).
-- [ ] **Step 3: Audit decode/encoding** for every subprocess/text-parsing call — confirm non-UTF-8 output (a plausible Windows console-encoding issue) degrades to the existing fail-soft empty result rather than raising.
-- [ ] **Step 4:** Log findings; fix via Mode A if proven.
+- [ ] **Step 1: Read `maintenance/preferences.py` and `maintenance/scanner_support/paths.py` in full and confirm centralization** — corrected this session, the earlier draft's framing was wrong: `maintenance/scanner_support/paths.py` (`PathsMixin`) is NOT a config-path resolver at all — it's a thin Downloads-path delegation shim (`_default_downloads_path`, `_windows_downloads_path`, etc., all forwarding to `DownloadsPathResolver` in `maintenance/components/`), unrelated to XDG/Application Support/APPDATA. The real, correctly-centralized config-path resolver is `maintenance/preferences.py:153-185` (`default_preferences_path`) — it branches Windows (`APPDATA`, falling back to `~/AppData/Roaming`), Darwin (`~/Library/Application Support`), and XDG (`XDG_CONFIG_HOME`, falling back to `~/.config`), all under one function, environment/home/platform fully injectable for tests. **Genuine finding, not previously documented in this plan:** `main.py:13-41` (`setup_logging()`) does **not** use `default_preferences_path` or any platform branch at all — it unconditionally resolves `XDG_STATE_HOME` or `~/.local/state` on every platform, including Windows and macOS, per its own docstring ("The log lives under the XDG state directory"). This is a real, concrete cross-platform inconsistency: preferences correctly go to `%APPDATA%`/`~/Library/Application Support`, but logs go to a Linux-XDG-shaped path even on Windows/macOS. This is plausibly the exact issue spec Section 26 refers to ("previous review identified possible documentation/path inconsistency around logging") — log it as a real BugGuard Mode B candidate in this phase; do not silently note it, and do not fix it in this planning pass.
+- [ ] **Step 2: Audit every `subprocess.run`/`subprocess.Popen` call** — ran this session, real inventory (6 call sites, 4 files; the earlier draft only said "run the grep"):
+  - `maintenance/scanner_support/dashboard.py:1222` — Windows WMI thermal probe (PowerShell), via `run_json_command`. `CREATE_NO_WINDOW` applied at `dashboard.py:1215-1219` (verified, matches the earlier draft's citation exactly: `getattr(scanner_module.subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0`).
+  - `maintenance/scanner_support/gpu.py:280` — Windows GPU PowerShell probe (`_windows_gpu_read`), via `run_json_command`. Same `CREATE_NO_WINDOW` pattern applied immediately above it (confirmed) — this is the fix commit `3fb8b95` ("fix: suppress console window for Windows GPU PowerShell probe", confirmed present in `git log`) made permanent; still intact.
+  - `maintenance/scanner_support/gpu.py:240` (`_mac_gpu_read`, `system_profiler`) and `:316` (`_linux_gpu_read`, `lspci`) — non-Windows commands, `CREATE_NO_WINDOW` correctly not applicable.
+  - `maintenance/external_commands.py:39` — the shared `run_text_command` helper; takes `creationflags: int = 0` as a parameter (forwarded by callers), doesn't hardcode a flag itself. Correct by design.
+  - **Genuine finding, not previously documented:** `maintenance/remote_security.py:36` — `ensure_tls_material`'s `subprocess.run([...openssl req -x509...])` call is a **direct** `subprocess.run`, bypassing `run_text_command`/`run_json_command` entirely, and passes no `creationflags` at all. If TLS material generation (used by the remote listener, not Linux-specific) ever runs on Windows, this would flash a console window every time a peer certificate is generated — the exact defect `CREATE_NO_WINDOW` exists to prevent everywhere else in this codebase, missed here because this call site doesn't go through the shared runner. Also has no availability check for whether `openssl` exists on PATH (a `FileNotFoundError` risk on a Windows box without OpenSSL installed, which is not bundled with Windows). Log both as real BugGuard Mode B candidates.
+  - Also flag: **no `shell=True` usage found anywhere in this grep** — the spec's ban is not violated today; confirm this stays true after any Phase 6+ fix.
+- [ ] **Step 3: Audit decode/encoding** for every subprocess/text-parsing call — confirm non-UTF-8 output (a plausible Windows console-encoding issue) degrades to the existing fail-soft empty result rather than raising. `run_text_command`/`run_json_command` (`maintenance/external_commands.py`) are the shared decode points for 5 of the 6 call sites above — audit their decode-error handling once, centrally, rather than per call site; `remote_security.py:36`'s direct call is the one exception needing its own check.
+- [ ] **Step 4:** Log findings (the log-path inconsistency and the two `remote_security.py` gaps above, at minimum); fix via Mode A if proven.
 
 ---
 
@@ -434,7 +490,7 @@ Add a row per capability to `docs/platform_audit/PLATFORM-MATRIX.md` using only 
 **Skills:** `BugGuard` Mode B for correctness findings (hands them off, doesn't fix UI logic itself); `UI` for the rendered-widget audit (resize, DPI, ttk style properties, scrollbar/dialog/focus behavior across platforms); `building-accessible-interfaces` for keyboard/focus/contrast on the Thermals page and any dialog touched; `reviewing-interface-quality` as the closing gate.
 
 - [ ] **Step 1: Run the `UI` skill's surface-evidence pipeline** against `maintenance/ui/thermals_page.py`, `maintenance/ui/thermal_graph.py`, `maintenance/ui/dashboard_page.py`, and any dialog in `maintenance/dialogs.py`, specifically checking: ttk style properties not supported on all platforms, high-DPI scaling behavior, scrollbar/mouse-wheel direction differences (Windows/macOS wheel delta sign differs from X11), Command-vs-Control keyboard shortcut mapping.
-- [ ] **Step 2: Run `building-accessible-interfaces`** against the Thermals page's `back_button.focus_set()` (`thermals_page.py:99-100`) and the scrollable content area — confirm keyboard-only navigation reaches every interactive element and the graph canvas has a non-color-only way to convey warning/critical severity (check `thermal_graph.py`'s threshold-line drawing for a color-blind-safe cue, not just color).
+- [ ] **Step 2: Run `building-accessible-interfaces`** against the Thermals page's `back_button.focus_set()` (`thermals_page.py:99-100` — verified exact: `def focus_back(self) -> None: self.back_button.focus_set()`) and the scrollable content area — confirm keyboard-only navigation reaches every interactive element. **Confirmed real finding, not just "check for" — read `_draw_threshold_line` directly (`maintenance/ui/thermal_graph.py:292-300`):** `canvas.create_line(left, y, right, y, fill=color, dash=(4, 4))` — both the warning line (`colors["warning"]`, called at `thermal_graph.py:201-207`) and the critical line (`colors["accent"]`, called at `:209-215`) use the identical dash pattern `(4, 4)`; the *only* visual difference between "approaching warning" and "critical" threshold lines is fill color. This is a genuine, verified color-blind-accessibility gap, not a hypothetical — log it as a real finding (e.g. a distinct dash pattern or an inline text label per threshold line would resolve it; do not implement in this planning pass).
 - [ ] **Step 3: Re-run the exact Thermals behavioral matrix from the spec** (Section 31): supported sensors create graphs; unsupported sensors state clearly (now backed by Phase 3's fix); first sample transitions out of Waiting; history grows; page hide/show retains bounded history; switching node changes to that node's telemetry; returning to local node restores local history; no stale cross-node graph; resize works; no graph-specific polling was introduced (cross-check with Phase 11).
 - [ ] **Step 4: Run `reviewing-interface-quality`** as the closing gate before marking this phase done.
 - [ ] **Step 5:** Log any correctness finding to the BugGuard ledger (Phase 5-style Mode A fix); log any pure visual-polish finding directly per the `UI` skill's own artifact convention.
@@ -447,7 +503,7 @@ Add a row per capability to `docs/platform_audit/PLATFORM-MATRIX.md` using only 
 
 - [ ] **Step 1: Audit `maintenance/components/discovery_session.py` / `network_discovery.py`** for Zeroconf/mDNS lifecycle differences across platforms (interface/address selection, IPv4/IPv6, firewall failure, duplicate identity) — Linux/macOS/Windows Bonjour/mDNSResponder availability differs; confirm manual hostname/IP fallback remains and no subnet-scanning fallback was added.
 - [ ] **Step 2: Declare BugGuard Mode D** for `maintenance/remote_support/server.py`, `transport.py`, and `maintenance/remote_security.py` (TLS/certificate/fingerprint logic) — full D7, all three security packs mandatory, sequential four-opposer + Agent 5 spawn.
-- [ ] **Step 3: Confirm node identity stability** (`maintenance/nodes.py`) does not derive identity from hostname/MAC/serial in a way that breaks when a Windows/macOS peer's hostname or interface set differs from a Linux peer's — read the actual identity-generation code before asserting either way.
+- [ ] **Step 3: Node identity stability — confirmed this session, not just to-check.** `NodeId` (`maintenance/nodes.py:265-274`) is explicitly documented and designed for exactly this: *"Never derived from a display name, hostname, address, or selector position so a node's identity survives renames, DHCP churn, and multi-homing."* `local_node_descriptor` (`nodes.py:391-409`) assigns the local machine the fixed literal `NodeId("local")` (`LOCAL_NODE_ID = "local"`, `nodes.py:34`) — a platform-independent constant, not hostname/MAC/serial-derived. `node_identity_fingerprint` (`nodes.py:413-421`) is explicitly "a verification aid, not a credential" (a SHA-256 digest of the id, for display only); real authentication is the separate HMAC transport. This design is sound and OS-independent by construction — the remaining real risk for this phase isn't the local descriptor, it's whatever generates a *remote* peer's `NodeId` during pairing/discovery (not yet located this session — `local_node_descriptor` only covers the local case). Audit that path specifically before closing this step; do not assume it inherits the same guarantee just because the local case does.
 - [ ] **Step 4:** Any proven vulnerability transitions to Mode B per BugGuard's own D-audit → B rule; any approved hardening becomes a scope-frozen Mode A run.
 
 ---
@@ -457,7 +513,7 @@ Add a row per capability to `docs/platform_audit/PLATFORM-MATRIX.md` using only 
 **Skill:** `BugGuard` Mode B for the audit (this is explicitly "do not redesign distribution in this pass" per the original spec — audit and smallest-fix only).
 
 - [ ] **Step 1: Audit `pyproject.toml`** — already confirmed this session: `'nvidia-ml-py>=12.0; platform_system != "Darwin"'` is a real, correct conditional dependency; `requires-python = ">=3.10"` — verify this is actually achievable given any 3.10-incompatible syntax (`match` statements, `X | Y` unions are fine in 3.10; check for anything newer).
-- [ ] **Step 2: Audit `install/*.ps1` vs `install/*.sh`** (both sets exist: `build`, `install`, `install-online`, `install-user`, `rollback`, `uninstall`, `upgrade`, `verify`) — confirm the PowerShell and shell variants install the *same* application surface (console scripts `system-analyzer` and `system-analyzer-snapshot` from `pyproject.toml`'s `[project.scripts]`), not divergent subsets. Cross-check against the already-known prior fixes in this area (`3de3166` "make console scripts runnable immediately", `5511feb` "register user PATH... in online installer", `602a966` "run installed-wheel verification from a file to avoid PS 5.1 arg mangling") — confirm these fixes are still intact and weren't reverted.
+- [ ] **Step 2: Audit `install/*.ps1` vs `install/*.sh`** — verified this session, all claims accurate as written: both sets exist with exactly the named variants (`build`, `install`, `install-online`, `install-user`, `rollback`, `uninstall`, `upgrade`, `verify`), plus a `_common.ps1`/`_common.sh` pair not previously noted in this plan — check whether cross-platform-divergence findings should actually live in the shared `_common` files rather than being duplicated per-script. Confirm the PowerShell and shell variants install the *same* application surface (console scripts `system-analyzer = "main:main"` and `system-analyzer-snapshot = "maintenance.snapshot:main"`, confirmed verbatim in `pyproject.toml:29-31`'s `[project.scripts]`), not divergent subsets. Cross-check against the already-known prior fixes in this area — all three confirmed present in `git log` with the exact claimed messages: `3de3166` "fix: make console scripts runnable immediately in the current terminal", `5511feb` "fix: register user PATH for console scripts in online installer", `602a966` "fix: run installed-wheel verification from a file to avoid PS 5.1 arg mangling" — confirm these fixes are still intact and weren't reverted.
 - [ ] **Step 3:** Log findings; no packaging redesign.
 
 ---
@@ -477,7 +533,7 @@ Add a row per capability to `docs/platform_audit/PLATFORM-MATRIX.md` using only 
 **Skills:** `BugGuard` Mode C only if a genuine performance regression is found; `investigating-performance` as the generic diagnostic method for confirming or ruling one out.
 
 - [ ] **Step 1:** Confirm Phase 3's fix and any other Phases 3–9 fix did not introduce a new thread-per-sensor, timer-per-graph, or per-render subprocess spawn — grep the diff for new `threading.Thread(`, `after(` polling loops, or `subprocess.run` calls inside a render path.
-- [ ] **Step 2:** If any new external-command cost was introduced (e.g., a new PowerShell/`system_profiler` call), invoke `investigating-performance` to measure it against the existing `TEMPERATURE_REFRESH_SECONDS` cache window (`dashboard.py:1075-1091`) and confirm it reuses that cache rather than adding a second polling cadence.
+- [ ] **Step 2:** If any new external-command cost was introduced (e.g., a new PowerShell/`system_profiler` call), invoke `investigating-performance` to measure it against the existing `TEMPERATURE_REFRESH_SECONDS` cache window — verified this session, citation accurate: `_cached_temperature_lines` (`dashboard.py:1075`) delegates to `_cached_temperature_scan` (`:1084-1090`), which wraps `_temperature_scan` in `self._ttl_cached_value(..., ttl_seconds=self.TEMPERATURE_REFRESH_SECONDS, ...)` — confirm any new acquisition path reuses this same cache rather than adding a second polling cadence.
 - [ ] **Step 3:** Confirm every new/changed platform acquisition path shuts down cleanly (no orphan subprocess, no lingering thread, no Tk callback firing after `destroy()`).
 
 ---
@@ -491,14 +547,15 @@ Add a row per capability to `docs/platform_audit/PLATFORM-MATRIX.md` using only 
 `tests/test_thermal_capability_gap.py` (Phase 2 Step 3 / Phase 3 Step 3) already is this RED test:
 
 ```python
-def test_permanently_empty_temperature_samples_never_report_unsupported():
-    ...  # RED against current code, GREEN after Phase 3's empty_reads counter
+class ThermalCapabilityGapTests(unittest.TestCase):
+    def test_permanently_empty_temperature_samples_never_report_unsupported(self) -> None:
+        ...  # RED against current code, GREEN after Phase 3's empty_reads counter
 ```
 
 No new test needed here for this case. Re-run it explicitly at Phase 12 time to confirm it is still GREEN after Phase 4–9 touched other components:
 
 ```bash
-python -m pytest tests/test_thermal_capability_gap.py -v
+python -m unittest tests.test_thermal_capability_gap -v
 ```
 
 - [ ] **Step 2: Immediate-`UNSUPPORTED` path — already GREEN, characterization only, no RED cycle needed**
@@ -511,6 +568,16 @@ Confirmed by reading `maintenance/nodes.py:675` (`NodeContext.telemetry: Tempera
 
 ```python
 # tests/test_thermal_node_isolation.py
+"""Proves per-node thermal telemetry isolation survives the real selection
+path (window._selected_context() -> NodeSelection -> NodeRegistry.context()),
+not just object construction — a regression guard against a future refactor
+that hoists telemetry onto the controller instead of the per-node context."""
+
+from __future__ import annotations
+
+import unittest
+from datetime import datetime, timezone
+
 from maintenance.components.temperature import TemperatureSample
 from maintenance.models import CapabilityState
 from maintenance.nodes import NodeRegistry
@@ -518,67 +585,61 @@ from maintenance.ui.window_components import thermal_render_state
 from tests.support.models import make_summary
 from tests.support.nodes import make_local_context, make_remote_context
 from tests.support.window import make_window as make_bare_window
-from datetime import datetime, timezone
 
 
-def test_switching_selected_node_does_not_leak_thermal_history():
-    """Recording samples on one node's telemetry must never appear when a
-    different node is selected. Each NodeContext owns its own
-    TemperatureTelemetry by construction (maintenance/nodes.py:675), but
-    nothing previously exercised the real selection path
-    (window._selected_context() -> NodeSelection.selected_context() ->
-    NodeRegistry.context()) to prove that resolution — as opposed to object
-    identity — stays correct across a switch."""
+class ThermalNodeIsolationTests(unittest.TestCase):
+    def test_switching_selected_node_does_not_leak_thermal_history(self) -> None:
+        window = make_bare_window()
+        registry = NodeRegistry()
+        local_ctx = make_local_context()
+        remote_ctx = make_remote_context("peer-a")
+        registry.register_context(local_ctx)
+        registry.register_context(remote_ctx)
+        registry.select(local_ctx.node_id)
+        window._node_registry = registry
+        window._selected_node_id = registry.selected_id()
 
-    window = make_bare_window()
-    registry = NodeRegistry()
-    local_ctx = make_local_context()
-    remote_ctx = make_remote_context("peer-a")
-    registry.register_context(local_ctx)
-    registry.register_context(remote_ctx)
-    registry.select(local_ctx.node_id)
-    window._node_registry = registry
-    window._selected_node_id = registry.selected_id()
+        sample = TemperatureSample(
+            component="cpu", sensor_id="cpu0", sensor_name="cpu0",
+            value_celsius=55.0,
+            sampled_at=datetime.now(timezone.utc),
+            sampled_monotonic=0.0,
+        )
+        local_ctx.telemetry.record_summary(
+            "cpu",
+            make_summary("cpu", "CPU", capability=CapabilityState.SUPPORTED,
+                          temperatures=(sample,)),
+        )
 
-    sample = TemperatureSample(
-        component="cpu", sensor_id="cpu0", sensor_name="cpu0",
-        value_celsius=55.0,
-        sampled_at=datetime.now(timezone.utc),
-        sampled_monotonic=0.0,
-    )
-    local_ctx.telemetry.record_summary(
-        "cpu",
-        make_summary("cpu", "CPU", capability=CapabilityState.SUPPORTED,
-                      temperatures=(sample,)),
-    )
+        window._selected_node_id = remote_ctx.node_id
+        remote_context = window._selected_context()
+        self.assertIs(remote_context, remote_ctx)
+        remote_state = thermal_render_state(window, remote_context)
+        remote_cpu = remote_state.series_for("cpu")
+        self.assertTrue(
+            remote_cpu is None or not remote_cpu.samples,
+            "remote node's thermal series must be empty/absent, not inherit "
+            "the 55.0C sample just recorded against the local node's telemetry",
+        )
 
-    window._selected_node_id = remote_ctx.node_id
-    remote_context = window._selected_context()
-    assert remote_context is remote_ctx
-    remote_state = thermal_render_state(window, remote_context)
-    remote_cpu = remote_state.series_for("cpu")
-    assert remote_cpu is None or not remote_cpu.samples, (
-        "remote node's thermal series must be empty/absent, not inherit the "
-        "55.0C sample just recorded against the local node's telemetry"
-    )
-
-    window._selected_node_id = local_ctx.node_id
-    local_context = window._selected_context()
-    assert local_context is local_ctx
-    local_state = thermal_render_state(window, local_context)
-    local_cpu = local_state.series_for("cpu")
-    assert local_cpu is not None and local_cpu.samples, (
-        "switching back to the local node must restore its own history, "
-        "not show an empty/reset graph"
-    )
+        window._selected_node_id = local_ctx.node_id
+        local_context = window._selected_context()
+        self.assertIs(local_context, local_ctx)
+        local_state = thermal_render_state(window, local_context)
+        local_cpu = local_state.series_for("cpu")
+        self.assertTrue(
+            local_cpu is not None and local_cpu.samples,
+            "switching back to the local node must restore its own history, "
+            "not show an empty/reset graph",
+        )
 ```
 
-Verified this session against real source, not guessed: `NodeContext` is a plain mutable `@dataclass` (`maintenance/nodes.py:656`); `NodeRegistry.register_context`/`.select`/`.selected_id`/`.context` are the exact methods `tests/test_window_nodes.py`'s own `_make_window` helper uses (confirmed at `tests/test_window_nodes.py:117-123`); `window._selected_context()` (`window.py:271-272`) resolves through `ui_node_runtime.selected_context` → `NodeSelection.selected_context()` (`maintenance/components/node_selection.py:39-45`), which only reads `self._registry.context(self._selected_id())` — the other callables `NodeSelection` takes (`cancel_active_scan`, `sync_selected_context`, etc.) are captured as lazy lambdas at construction and never invoked by a plain read, so `make_bare_window()` needs no extra mocking for this test; `TemperatureSample`'s exact fields are `component, sensor_id, sensor_name, value_celsius, sampled_at, sampled_monotonic` (`maintenance/components/temperature.py:47-53`); `make_summary`'s exact keyword names are confirmed at `tests/support/models.py:40-52`. This is real, checked code — run it as written, not adapted, and if it fails on an import or attribute name at execution time (APIs can drift between when this plan was written and when it's executed), fix the plan's citation, don't paper over it in the test.
+Verified this session against real source, not guessed (and, per the earlier `unittest` correction, rewritten from a bare pytest-style function into a `unittest.TestCase` method, matching this repo's actual test runner): `NodeContext` is a plain mutable `@dataclass` (`maintenance/nodes.py:656`); `NodeRegistry.register_context`/`.select`/`.selected_id`/`.context` are the exact methods `tests/test_window_nodes.py`'s own `_make_window` helper uses (confirmed at `tests/test_window_nodes.py:117-123`); `window._selected_context()` (`window.py:271-272`) resolves through `ui_node_runtime.selected_context` → `NodeSelection.selected_context()` (`maintenance/components/node_selection.py:39-45`), which only reads `self._registry.context(self._selected_id())` — the other callables `NodeSelection` takes (`cancel_active_scan`, `sync_selected_context`, etc.) are captured as lazy lambdas at construction and never invoked by a plain read, so `make_bare_window()` needs no extra mocking for this test; `TemperatureSample`'s exact fields are `component, sensor_id, sensor_name, value_celsius, sampled_at, sampled_monotonic` (`maintenance/components/temperature.py:47-53`); `make_summary`'s exact keyword names are confirmed at `tests/support/models.py:40-52`. This is real, checked code — run it as written, not adapted, and if it fails on an import or attribute name at execution time (APIs can drift between when this plan was written and when it's executed), fix the plan's citation, don't paper over it in the test.
 
 If this test passes immediately, that is expected here (unlike Phase 2/3's bug-proving test) — this is a **characterization test** locking in already-correct isolation-by-construction, not a bug hunt. To confirm it isn't a false-positive pass (asserting something trivially true regardless of the code under test), temporarily hardcode `thermal_render_state` to ignore its `context` argument and always read `local_ctx.telemetry` — confirm the test then fails with the "must be empty/absent" assertion — then revert the hardcode. That substitutes for the RED step per this skill's own guidance on characterization tests, and is mandatory before trusting the test as a regression guard.
 
 ```bash
-python -m pytest tests/test_thermal_node_isolation.py -v
+python -m unittest tests.test_thermal_node_isolation -v
 ```
 
 - [ ] **Step 4: Commit**
@@ -600,7 +661,7 @@ git commit -m "test: lock in per-node thermal telemetry isolation"
 - [ ] **Step 4: Linux regression, mandatory regardless of Windows/macOS availability**
 
 ```bash
-python -m pytest tests/ -q
+python -m unittest discover -s tests -q
 ruff check . && ruff format --check . && pyright && mypy --ignore-missing-imports .
 ```
 
