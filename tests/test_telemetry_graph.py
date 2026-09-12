@@ -93,6 +93,33 @@ class TelemetryGraphTests(unittest.TestCase):
             "Current 46°C", graph._canvas.create_text.call_args_list[0].kwargs["text"]
         )
 
+    def test_warning_and_critical_thresholds_use_distinct_line_patterns(self) -> None:
+        graph = self._graph()
+        graph._snapshot = TemperatureSeriesSnapshot(
+            component="cpu",
+            title="CPU Temperature",
+            state=TemperatureState.VALID,
+            current_celsius=46.0,
+            minimum_celsius=42.0,
+            maximum_celsius=46.0,
+            warning_celsius=50.0,
+            critical_celsius=60.0,
+            samples=(make_temperature_sample("cpu", 46.0),),
+            events=(),
+        )
+
+        graph._redraw()
+
+        threshold_lines = [
+            call
+            for call in graph._canvas.create_line.call_args_list
+            if call.kwargs.get("dash") in {(4, 4), (8, 4)}
+        ]
+        self.assertEqual(
+            [call.kwargs["dash"] for call in threshold_lines],
+            [(4, 4), (8, 4)],
+        )
+
     def test_single_sample_draws_point_without_invalid_line(self) -> None:
         graph = self._graph()
         graph._snapshot = TemperatureSeriesSnapshot(

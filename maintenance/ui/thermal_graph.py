@@ -204,6 +204,7 @@ class TelemetryMiniGraph(tk.Frame):
                 layout.right,
                 layout.warning_y,
                 self.colors.get("warning", ui_styles.COLORS["warning"]),
+                dash=(4, 4),
             )
         if layout.critical_y is not None:
             self._draw_threshold_line(
@@ -212,6 +213,7 @@ class TelemetryMiniGraph(tk.Frame):
                 layout.right,
                 layout.critical_y,
                 self.colors["accent"],
+                dash=(8, 4),
             )
 
         points: list[float] = []
@@ -296,5 +298,6 @@ class TelemetryMiniGraph(tk.Frame):
         right: float,
         y: float,
         color: str,
+        dash: tuple[int, int],
     ) -> None:
-        canvas.create_line(left, y, right, y, fill=color, dash=(4, 4))
+        canvas.create_line(left, y, right, y, fill=color, dash=dash)

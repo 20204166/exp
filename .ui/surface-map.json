@@ -1,0 +1,16 @@
+{
+  "surface": "Thermals Tkinter page",
+  "entry_points": [
+    "maintenance/ui/thermals_page.py",
+    "maintenance/ui/thermal_graph.py",
+    "maintenance/ui/dashboard_page.py",
+    "maintenance/dialogs.py"
+  ],
+  "evidence": {
+    "structural_render": "tests.dump_ui",
+    "focused_tests": "tests.test_telemetry_graph, tests.test_thermals_page",
+    "live_resize": "tests.test_live_tk_resize"
+  },
+  "native_platforms": ["Linux"],
+  "unverified_platforms": ["Windows", "macOS"]
+}
