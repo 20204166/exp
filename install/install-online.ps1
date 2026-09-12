@@ -140,10 +140,14 @@ print(f"  window: {window.__file__}")
         if (-not $already) {
             $updated = if ($userPath) { "$bin;$userPath" } else { $bin }
             [Environment]::SetEnvironmentVariable("Path", $updated, "User")
-            Write-Host "Added '$bin' to your user PATH. Open a new terminal, then run: system-analyzer"
-        } else {
-            Write-Host "Installed $wheel. Console scripts: $bin (already on PATH). Run: system-analyzer"
+            Write-Host "Added '$bin' to your user PATH."
         }
+        $sessionHas = ($env:Path -split ";") | Where-Object { $_.TrimEnd("\") -eq $bin.TrimEnd("\") }
+        if (-not $sessionHas) {
+            $env:Path = "$bin;$env:Path"
+        }
+        Write-Host "Installed $wheel. Console scripts: $bin"
+        Write-Host "Run now: system-analyzer"
     } else {
         Write-Host "Installed $wheel. Console scripts: $bin"
         Write-Host "Add this directory to PATH if needed, then run: system-analyzer"
