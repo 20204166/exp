@@ -165,3 +165,59 @@ selection path renders each node's own telemetry history. Its false-positive
 check was executed by temporarily forcing the renderer to use the local
 context; the test failed on the remote-history assertion, then the production
 function was restored. Focused thermal and isolation coverage passed `23/23`.
+
+## Final Report
+
+Audited provider dispatch and normalization, thermal telemetry/UI boundaries,
+process safety, configuration/log paths, external commands and encoding,
+discovery lifecycle, remote authentication/TLS/identity, packaging/installers,
+canonical responsibility ownership, fail-soft behavior, shutdown, and node
+selection isolation. Confirmed defects were bounded thermal `NO_DATA`
+perpetual waiting, unreadable process ancestry not failing closed, missing
+Windows console suppression on existing subprocesses, and subprocess
+`UnicodeError` handling. These were fixed in prior phases. No Phase 4, 8, 9,
+10, or 11 vulnerability or packaging defect was proven.
+
+The thermal root cause was conflation of card-level capability with
+thermal-series capability and the absence of a bounded empty-read transition.
+`TemperatureTelemetry` now owns that per-component counter and resolves
+repeated empty reads to `UNSUPPORTED`; explicit provider `UNSUPPORTED` remains
+immediate, failures remain distinct, and data is never fabricated. Process
+actions fail closed when ancestry cannot be read. Shared command execution
+handles malformed output fail-soft, platform paths use native conventions,
+and Windows command windows are suppressed without changing command semantics.
+Threshold rendering distinguishes warning and critical states, and per-node
+telemetry isolation has permanent regression coverage.
+
+The reuse audit retained canonical owners for command execution, process
+safety, thermal normalization, identity, and platform acquisition. Remote D7
+found sufficient controls for discovery trust promotion, TLS pinning, HMAC
+freshness/replay, capability/permission authorization, stable identity, and
+lifecycle gating. No vulnerability or Mode B transition resulted.
+
+Native Windows and macOS execution was unavailable. PowerShell installers,
+native discovery/TLS, native sensor availability, Recycle Bin/Trash behavior,
+and clean Python 3.10/3.11 installs remain `IMPLEMENTED BUT NOT
+NATIVE-VERIFIED`. Current-provider unsupported capabilities include battery
+temperature and SMART data; GPU utilization remains provider-dependent.
+
+Validation evidence includes Linux regression `1377/1377` from
+`.venv/bin/python -m unittest discover -s tests -q`, passing `ruff check .`,
+passing focused thermal/packaging/deployment/D7/shell/compile/Pyright/scoped
+Mypy checks, and the recorded characterization failure against a temporarily
+hardcoded local renderer. Whole-repository format checking has 44 pre-existing
+findings, Pyright has 41 pre-existing findings, and whole-repo Mypy is blocked
+by duplicate PoC module names; none is claimed as a pass.
+
+Implementation/test changes are in `main.py`, `maintenance/actions.py`,
+`maintenance/components/process_safety.py`,
+`maintenance/components/temperature.py`, `maintenance/external_commands.py`,
+`maintenance/remote_security.py`, `maintenance/ui/thermal_graph.py`, and
+their focused tests. Audit documentation is in `docs/platform_audit/`,
+`docs/security_reviews/`, `docs/bug_hunts/`, and `.ui/`. Phase commits are
+`fce6373`, `44a0801`, `0fb9518`, `d277ce9`, `7146d2f`, `c84dbd2`, `72ef5bd`,
+`bb0c352`, `bbd0e04`, and `9f0b562`; this final documentation update follows.
+
+At report time, only pre-existing untracked `.claude/` is present and was not
+touched. No secrets, native-platform claims, or unsupported capability claims
+were added.

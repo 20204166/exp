@@ -675,10 +675,10 @@ Compare against Phase 0's baseline log — any new failure is a regression and m
 
 **Skills:** `repo-context-curator` for folding the durable lesson back into repo context; `verifying-before-completion` for the final validation claims.
 
-- [ ] **Step 1: Update `docs/CAPABILITY_TRANSPARENCY_2026-09-10.md`** (or supersede it with a dated new version per that doc's own convention) to reflect Phase 3's fix and every Phase 4–9 finding — using only the existing state vocabulary, no "fully compatible" language.
-- [ ] **Step 2: Invoke `repo-context-curator`** to check whether `AGENTS.md` needs the thermal-capability-conflation lesson (a distinct thermal-capability signal vs. card-level capability) folded in as durable guidance, so a ninth thermal fix attempt doesn't re-make the same mistake.
-- [ ] **Step 3: Write the final report** answering every question in the original spec's Section 61 (repo areas audited, defects found per platform, root cause, fixes made, canonical reuse, native evidence gaps, exact commands run, remaining unsupported capabilities, files changed, working-tree status) into `docs/platform_audit/PLATFORM-MATRIX.md`'s closing section.
-- [ ] **Step 4: Final validation, per `verifying-before-completion`** — re-run every command from Phase 0 Step 2 and Phase 13 Step 4, paste the actual output, and only then close the pass.
+- [x] **Step 1: Update `docs/CAPABILITY_TRANSPARENCY_2026-09-10.md`** (or supersede it with a dated new version per that doc's own convention) to reflect Phase 3's fix and every Phase 4–9 finding — using only the existing state vocabulary, no "fully compatible" language.
+- [x] **Step 2: Invoke `repo-context-curator`** to check whether `AGENTS.md` needs the thermal-capability-conflation lesson (a distinct thermal-capability signal vs. card-level capability) folded in as durable guidance, so a ninth thermal fix attempt doesn't re-make the same mistake.
+- [x] **Step 3: Write the final report** answering every question in the original spec's Section 61 (repo areas audited, defects found per platform, root cause, fixes made, canonical reuse, native evidence gaps, exact commands run, remaining unsupported capabilities, files changed, working-tree status) into `docs/platform_audit/PLATFORM-MATRIX.md`'s closing section.
+- [x] **Step 4: Final validation, per `verifying-before-completion`** — re-run every command from Phase 0 Step 2 and Phase 13 Step 4, paste the actual output, and only then close the pass.
 
 ---
 

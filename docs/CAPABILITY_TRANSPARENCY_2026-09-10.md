@@ -29,7 +29,7 @@ what the current providers can attempt.
 | Network traffic/interfaces | Supported via psutil | Supported via psutil | Supported via psutil |
 | Battery charge | Supported when psutil exposes a battery; otherwise Unsupported | Same | Same |
 | Battery temperature | Unsupported by current providers | Unsupported by current providers | Unsupported by current providers |
-| CPU/GPU/NVMe thermals | Supported when psutil exposes matching sensors; otherwise No data yet or Temporarily unavailable on provider failure | Not verified on native platform | Not verified on native platform |
+| CPU/GPU/NVMe thermals | Supported when psutil exposes matching sensors; repeated empty reads on a supported card resolve to Unsupported after the bounded confirmation window; provider failures remain Temporarily unavailable | Not verified on native platform | Not verified on native platform |
 | SMART data | Unsupported by current providers | Unsupported by current providers | Unsupported by current providers |
 | Process inventory/review | Supported through psutil and safety policy | Supported through psutil and safety policy | Supported through psutil and safety policy |
 | Downloads cleanup | Supported, restricted to Downloads and Trash | Supported, restricted to Downloads and Trash | Supported, restricted to Downloads and Recycle Bin |
@@ -54,9 +54,13 @@ remain fail-soft when they cannot distinguish permission from provider failure.
 - Provider fakes cover Linux, macOS, and Windows dispatch in
   `tests/test_gpu_name.py` and the capability catalog tests.
 - The native smoke command used here was a direct `SystemScanner.scan_component`
-  run for CPU, memory, storage, GPU, network, and battery.
+  run for CPU, memory, storage, GPU, network, and battery. Phase 13 additionally
+  ran the repository Linux regression and static gates.
 - This environment is Linux. Linux provider smoke ran here; macOS and
   Windows native provider execution remains unverified because those hosts and
   their native commands are unavailable.
-- `ruff`, `pyright`, and `mypy` are not installed in the current environment;
-  their required checks remain a validation gap.
+- The current Linux environment has Ruff, Pyright, and Mypy in `.venv`.
+  `ruff check .` passed; repository-wide format checking reports pre-existing
+  findings, Pyright reports pre-existing findings, and whole-repository Mypy is
+  blocked by duplicate module names in versioned PoC directories. These
+  limitations do not change the capability state vocabulary.
