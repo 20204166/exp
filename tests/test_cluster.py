@@ -178,6 +178,14 @@ class ResourceSummaryCodecTests(unittest.TestCase):
         with self.assertRaises(ClusterDataError):
             resource_summary_from_dict({"title": "x"})
 
+    def test_invalid_boolean_names_are_reported(self) -> None:
+        payload = resource_summary_to_dict(_summary())
+        for field in ("actionable", "failed"):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                ClusterDataError, rf"resource summary {field} must be a boolean"
+            ):
+                resource_summary_from_dict({**payload, field: "yes"})
+
 
 class DashboardCodecTests(unittest.TestCase):
     def test_round_trip_preserves_dashboard(self) -> None:
@@ -290,6 +298,16 @@ class ProcessAndFileCodecTests(unittest.TestCase):
         )
         decoded = process_candidate_from_dict(process_candidate_to_dict(original))
         self.assertEqual(decoded, original)
+
+    def test_invalid_numeric_name_is_reported(self) -> None:
+        payload = process_candidate_to_dict(
+            ProcessCandidate(1, "app", 100, 1.0, 2.0, "Active", "user", True)
+        )
+        for field in ("memory_bytes", "memory_percent", "cpu_percent"):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                ClusterDataError, rf"process candidate {field} must be a number"
+            ):
+                process_candidate_from_dict({**payload, field: "not-a-number"})
 
     def test_file_candidate_round_trip(self) -> None:
         original = make_file_candidate(Path("/tmp/x"), modified_at=NOW, reason="reason")

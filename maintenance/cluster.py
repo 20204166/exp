@@ -206,7 +206,9 @@ def resource_summary_from_dict(data: Any) -> ResourceSummary:
             )
     for attribute in ("actionable", "failed"):
         if not isinstance(data.get(attribute), bool):
-            raise ClusterDataError(f"resource summary {field} must be a boolean")
+            raise ClusterDataError(
+                f"resource summary {attribute} must be a boolean"
+            )
     decoded_temperatures = []
     for item in temperatures:
         try:
@@ -425,7 +427,9 @@ def process_candidate_from_dict(data: Any) -> ProcessCandidate:
             or not math.isfinite(float(value))
             or value < 0
         ):
-            raise ClusterDataError(f"process candidate {field} must be a number")
+            raise ClusterDataError(
+                f"process candidate {attribute} must be a number"
+            )
     create_time = data.get("create_time")
     if create_time is not None and (
         not isinstance(create_time, (int, float))
