@@ -25,6 +25,7 @@ from maintenance.components.temperature import (
     is_valid_temperature_value,
 )
 from maintenance.models import CapabilityState, ResourceSummary, unavailable_summary
+from maintenance.scanner_support.smc import COMPONENT_LABELS, read_smc_temperatures
 
 from ._compat import scanner_module
 
@@ -1091,9 +1092,12 @@ class DashboardMixin:
     def _temperature_scan(cls, psutil_module: Any) -> TemperatureScan:
         """Return normalised temperature samples plus the concise card lines."""
 
-        if not cls._temperature_sensors_supported(scanner_module.platform.system()):
+        system = scanner_module.platform.system()
+        if not cls._temperature_sensors_supported(system):
             now = scanner_module.datetime.now(scanner_module.timezone.utc).astimezone()
             return TemperatureScan(now, scanner_module.time.monotonic(), (), ())
+        if system == "Darwin":
+            return cls._temperature_scan_smc()
 
         sensors = cls._psutil_value(lambda: psutil_module.sensors_temperatures())
         if not isinstance(sensors, dict) or not sensors:
@@ -1149,18 +1153,57 @@ class DashboardMixin:
             captured_at, captured_monotonic, tuple(lines), tuple(grouped)
         )
 
-    @staticmethod
-    def _temperature_sensors_supported(system: str | None) -> bool:
-        """Return whether the OS exposes psutil's ``sensors_temperatures`` API.
+    @classmethod
+    def _temperature_scan_smc(cls) -> TemperatureScan:
+        """Return SMC temperature samples on Intel Macs (empty on failure).
 
-        psutil only implements ``sensors_temperatures`` on Linux; macOS and
-        Windows raise ``NotImplementedError``. Gating on the platform means
-        the scan never probes system sensors on an OS that cannot provide
-        them, so the thermals card degrades to no-data without a misleading
-        sensor-read warning.
+        ``read_smc_temperatures`` already fails closed to no data when IOKit
+        is unavailable or the machine is Apple Silicon, so this path can never
+        raise for platform reasons.
         """
 
-        return system == "Linux"
+        captured_at = scanner_module.datetime.now(
+            scanner_module.timezone.utc
+        ).astimezone()
+        captured_monotonic = scanner_module.time.monotonic()
+        readings = read_smc_temperatures(is_valid=cls._sensible_temperature)
+        lines: list[str] = []
+        grouped: list[tuple[str, tuple[TemperatureSample, ...]]] = []
+        for component, entries in readings.items():
+            samples = tuple(
+                TemperatureSample(
+                    component=component,
+                    sensor_id=sensor_id,
+                    sensor_name=sensor_name,
+                    value_celsius=celsius,
+                    sampled_at=captured_at,
+                    sampled_monotonic=captured_monotonic,
+                )
+                for sensor_id, sensor_name, celsius in entries
+            )
+            if not samples:
+                continue
+            grouped.append((component, samples))
+            label = COMPONENT_LABELS.get(component, component)
+            lines.append(
+                f"{label}: {max(sample.value_celsius for sample in samples):.0f}°C"
+            )
+        return TemperatureScan(
+            captured_at, captured_monotonic, tuple(lines), tuple(grouped)
+        )
+
+    @staticmethod
+    def _temperature_sensors_supported(system: str | None) -> bool:
+        """Return whether the OS can produce temperature readings.
+
+        On Linux this uses psutil's ``sensors_temperatures``; on macOS the
+        Apple SMC is read directly on Intel machines (Apple Silicon and any
+        IOKit failure degrade to no-data). Windows and other platforms have no
+        supported source, so the thermals card degrades to no-data without a
+        misleading sensor-read warning.
+        """
+
+        return system in ("Linux", "Darwin")
 
     @classmethod
     def _temperature_lines(cls, psutil_module: Any) -> list[str]:

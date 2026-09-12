@@ -98,9 +98,37 @@ class TemperatureLinesTests(unittest.TestCase):
 
     def test_temperature_sensor_support_matches_platform(self) -> None:
         self.assertTrue(SystemScanner._temperature_sensors_supported("Linux"))
-        self.assertFalse(SystemScanner._temperature_sensors_supported("Darwin"))
+        self.assertTrue(SystemScanner._temperature_sensors_supported("Darwin"))
         self.assertFalse(SystemScanner._temperature_sensors_supported("Windows"))
         self.assertFalse(SystemScanner._temperature_sensors_supported("FreeBSD"))
+
+    def test_temperature_scan_uses_smc_on_macos(self) -> None:
+        from maintenance.scanner_support import dashboard as dashboard_module
+
+        captured: dict[str, object] = {}
+
+        def fake_read(is_valid=None):
+            captured["validator"] = is_valid
+            return {
+                "cpu": [("smc:TC0P", "TC0P", 61.5)],
+                "battery": [("smc:TB0T", "TB0T", 32.25)],
+            }
+
+        with (
+            patch.object(dashboard_module, "read_smc_temperatures", fake_read),
+            patch("maintenance.scanner.platform.system", return_value="Darwin"),
+        ):
+            scan = SystemScanner._temperature_scan(_thermal_psutil(dict))
+
+        self.assertEqual(
+            {
+                key: samples[0].value_celsius
+                for key, samples in scan.samples_by_component
+            },
+            {"cpu": 61.5, "battery": 32.25},
+        )
+        self.assertEqual(scan.lines, ("CPU: 62°C", "Battery: 32°C"))
+        self.assertIsNotNone(captured["validator"])
 
     def test_temperature_scan_skips_sensors_on_macos_and_windows(self) -> None:
         for system in ("Darwin", "Windows"):
@@ -113,16 +141,12 @@ class TemperatureLinesTests(unittest.TestCase):
                     )[1]
                 )
 
-                with patch(
-                    "maintenance.scanner.platform.system", return_value=system
-                ):
+                with patch("maintenance.scanner.platform.system", return_value=system):
                     scan = SystemScanner._temperature_scan(fake)
 
                 self.assertEqual(scan.lines, ())
                 self.assertEqual(scan.samples_by_component, ())
-                self.assertEqual(
-                    probed, [], "sensors must never be probed off Linux"
-                )
+                self.assertEqual(probed, [], "sensors must never be probed off Linux")
 
     def test_temperature_scan_reads_sensors_on_linux(self) -> None:
         fake = _thermal_psutil(lambda: {"coretemp": [_temp(45.0)]})
