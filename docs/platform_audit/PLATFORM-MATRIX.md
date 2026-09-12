@@ -110,3 +110,17 @@ execution remains unverified.
 Phase 8 full D7 review is recorded at
 `docs/security_reviews/SEC-20260912-002-review.md`; all four reviewer legs and
 Agent 5 are complete. No Phase 8 vulnerability or app-code fix was identified.
+
+## Phase 9 Packaging, Installers, and Python Floor
+
+| Surface | Classification | Evidence / disposition |
+| --- | --- | --- |
+| `pyproject.toml` metadata and dependencies | VERIFIED by repository tests | Python floor is `>=3.10`; Darwin excludes NVIDIA-only dependency; both console entry points and package data are declared. |
+| Python 3.10 source compatibility | VERIFIED by static checks | Repository Python sources compile and pass Ruff with `--target-version py310`; no 3.11+-only syntax/API pattern was found in the audited source. |
+| Unix installer scripts | VERIFIED on Linux | All eight shell scripts pass `bash -n`; packaging/deployment tests pass. |
+| PowerShell installer surface | IMPLEMENTED BUT NOT NATIVE-VERIFIED | Paired scripts, shared helper contracts, and prior fixes are present and covered by source/tests; no native PowerShell runtime was available. |
+| Built wheel and entry points | VERIFIED by repository tests | Package structure, wheel members, metadata, dependencies, version, and both console scripts pass deployment validation. |
+
+Phase 9 found no packaging defect and made no application or installer-code
+changes. Native Windows PowerShell execution and clean-install verification on
+Python 3.10/3.11 remain required evidence for a future native smoke run.
