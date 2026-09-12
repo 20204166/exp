@@ -5,11 +5,13 @@ from typing import Any
 
 from maintenance.components import (
     PROTECTED_PROCESS_NAMES,
-    protected_process_pids,
     require_psutil,
     usernames_match,
 )
-from maintenance.components.process_safety import is_protected_process_name
+from maintenance.components.process_safety import (
+    is_protected_process_name,
+    protected_process_pid_snapshot,
+)
 from maintenance.models import FileActionResult, ProcessActionResult
 from maintenance.nodes import ProcessActionKind, ProcessTerminationRequest
 from maintenance.scanner import SystemScanner
@@ -104,6 +106,9 @@ class ProcessManager:
         )
         current_user = getpass.getuser()
         protected_pids = self._protected_pids(psutil_module)
+        if protected_pids is None:
+            errors.append("Process ancestry unavailable; refusing process actions.")
+            return self._build_process_action_result(pids, (), (), errors)
         target_create_times = dict(expected_create_times or {})
 
         targets: list[Any] = []
@@ -168,6 +173,8 @@ class ProcessManager:
     ) -> tuple[list[Any], list[str]]:
         current_user = getpass.getuser()
         protected_pids = self._protected_pids(psutil_module)
+        if protected_pids is None:
+            return [], ["Process ancestry unavailable; refusing process actions."]
         process_factory = psutil_module.Process
         same_user = self._same_user
         processes: list[Any] = []
@@ -249,8 +256,9 @@ class ProcessManager:
         return False
 
     @staticmethod
-    def _protected_pids(psutil_module: Any) -> set[int]:
-        return protected_process_pids(psutil_module)
+    def _protected_pids(psutil_module: Any) -> set[int] | None:
+        protected, complete = protected_process_pid_snapshot(psutil_module)
+        return protected if complete else None
 
     @staticmethod
     def _same_user(username: str, current_user: str) -> bool:

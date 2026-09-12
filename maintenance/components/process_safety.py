@@ -83,16 +83,22 @@ def protected_process_pids(psutil_module: Any) -> set[int]:
     stricter fail-closed view lives in `ProcessSafetyPolicy`.
     """
 
+    protected, _complete = protected_process_pid_snapshot(psutil_module)
+    return protected
+
+
+def protected_process_pid_snapshot(psutil_module: Any) -> tuple[set[int], bool]:
+    """Return protected PIDs and whether the current ancestry was readable."""
+
     protected = {0, 1, os.getpid()}
     if psutil_module is None:
-        return protected
-
+        return protected, False
     try:
         process = psutil_module.Process(os.getpid())
         protected.update(parent.pid for parent in process.parents())
-    except (psutil_module.NoSuchProcess, psutil_module.AccessDenied):
-        pass
-    return protected
+    except Exception:  # noqa: BLE001 - action safety must fail closed.
+        return protected, False
+    return protected, True
 
 
 class ProcessSafetyPolicy:

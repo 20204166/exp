@@ -7,6 +7,8 @@ and ``wait_procs``. It is deliberately separate from the scanner-oriented and
 safety-policy process fakes because those model different contracts.
 """
 
+import getpass
+import os
 from typing import Any
 
 
@@ -80,7 +82,10 @@ class ActionPsutil:
         pass
 
     def __init__(self, processes: dict[int, ActionProcess]) -> None:
-        self.processes = processes
+        self.processes = dict(processes)
+        self.processes.setdefault(
+            os.getpid(), ActionProcess(os.getpid(), "python", getpass.getuser())
+        )
         self.wait_procs_calls = 0
 
     def Process(self, pid: int) -> ActionProcess:

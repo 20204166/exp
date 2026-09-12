@@ -15,6 +15,7 @@ from maintenance.nodes import (
     ProcessTerminationRequest,
 )
 from tests.support.process_actions import ActionProcess as FakeProcess
+from tests.support.process_actions import ActionPsutil
 from tests.support.process_actions import ActionPsutil as FakePsutil
 
 
@@ -28,6 +29,22 @@ def _manager_with(
 
 
 class ProcessProtectionTests(unittest.TestCase):
+    def test_unreadable_ancestry_fails_closed_before_termination(self) -> None:
+        class UnreadableCurrentProcess(FakeProcess):
+            def parents(self) -> list[Any]:
+                raise ActionPsutil.AccessDenied("ancestry unavailable")
+
+        target_pid = 50000
+        current = UnreadableCurrentProcess(os.getpid(), "python", getpass.getuser())
+        target = FakeProcess(target_pid, "bash", getpass.getuser())
+        fake = FakePsutil({os.getpid(): current, target_pid: target})
+
+        with patch("maintenance.actions.psutil", fake):
+            result = ProcessManager().request_quit([target_pid])
+
+        self.assertFalse(target.terminated)
+        self.assertTrue(any("ancestry" in error for error in result.errors))
+
     def test_typed_request_reuses_target_revalidation(self) -> None:
         manager, fake, patcher = _manager_with(
             {
