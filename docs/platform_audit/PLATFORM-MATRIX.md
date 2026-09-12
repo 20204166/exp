@@ -44,3 +44,25 @@ tree already contains the shared predicate and per-sample filtering described th
 | CPU/GPU/NVMe thermals | PARTIAL: sensor availability varies | IMPLEMENTED BUT NOT NATIVE-VERIFIED | IMPLEMENTED BUT NOT NATIVE-VERIFIED |
 | Process review and safe termination | VERIFIED by Linux tests | IMPLEMENTED BUT NOT NATIVE-VERIFIED | IMPLEMENTED BUT NOT NATIVE-VERIFIED |
 | Downloads cleanup and Trash | VERIFIED by tests | IMPLEMENTED BUT NOT NATIVE-VERIFIED | IMPLEMENTED BUT NOT NATIVE-VERIFIED |
+
+## Phase 1 Platform-Assumption Inventory
+
+The Phase 1 searches were rerun against the execution tree. Binary `__pycache__`
+matches from the subprocess and cleanup searches were excluded from source
+classification.
+
+| Surface / file | Classification | Evidence and rationale |
+| --- | --- | --- |
+| `scanner_support/smc.py` Darwin guard | CORRECT PLATFORM ADAPTER | Apple SMC access is explicitly restricted to Darwin. |
+| `preferences.py`, `components/downloads.py`, `components/node_context.py`, `scanner_support/storage.py` platform dispatch | CORRECT PLATFORM ADAPTER | Platform selection is injected or branches into existing OS-specific providers. |
+| `scanner_support/dashboard.py` Linux `/proc/swaps` | CORRECT PLATFORM ADAPTER | The path is reached only for Linux swap accounting. |
+| `scanner_support/dashboard.py` and `gpu.py` PowerShell flags | CORRECT PLATFORM ADAPTER | Windows-only `CREATE_NO_WINDOW` handling surrounds Windows commands. |
+| `scanner_support/gpu.py` `system_profiler`/`lspci` | CORRECT PLATFORM ADAPTER | Commands are selected by macOS/Linux provider dispatch. |
+| `external_commands.py` shared command runner | SAFE CROSS-PLATFORM CODE | Text/JSON command execution is centralized and accepts caller-supplied creation flags. |
+| `remote_security.py`, `scanner.py`, `ui/window_discovery.py` subprocess use | NOT VERIFIED | Runtime behavior depends on host command availability; no native Windows/macOS execution evidence exists. Detailed subprocess review is scoped to Phase 6. |
+| `actions.py` `send2trash` | SAFE CROSS-PLATFORM CODE | Cleanup is dependency-gated and remains constrained by the action safety policy. |
+| `scanner_support/dashboard.py` sensor provider dispatch | SAFE CROSS-PLATFORM CODE | Linux, Darwin, and Windows acquisition paths fail soft; native non-Linux execution is not verified. |
+| `scanner_support/storage.py` Trash provider dispatch | NOT VERIFIED | Windows `SHQueryRecycleBinW` and macOS Trash paths have fixture/source evidence but no native host run. |
+
+No Phase 1 hit met the evidence threshold for an unsafe platform assumption. No
+BugGuard candidate was opened, and no application code or tests were changed.
