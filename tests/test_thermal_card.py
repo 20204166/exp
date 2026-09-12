@@ -1,5 +1,6 @@
 """Focused tests for the Battery/Thermal card behaviour."""
 
+import json
 import unittest
 from types import SimpleNamespace
 from typing import Any
@@ -99,7 +100,7 @@ class TemperatureLinesTests(unittest.TestCase):
     def test_temperature_sensor_support_matches_platform(self) -> None:
         self.assertTrue(SystemScanner._temperature_sensors_supported("Linux"))
         self.assertTrue(SystemScanner._temperature_sensors_supported("Darwin"))
-        self.assertFalse(SystemScanner._temperature_sensors_supported("Windows"))
+        self.assertTrue(SystemScanner._temperature_sensors_supported("Windows"))
         self.assertFalse(SystemScanner._temperature_sensors_supported("FreeBSD"))
 
     def test_temperature_scan_uses_smc_on_macos(self) -> None:
@@ -130,23 +131,60 @@ class TemperatureLinesTests(unittest.TestCase):
         self.assertEqual(scan.lines, ("CPU: 62°C", "Battery: 32°C"))
         self.assertIsNotNone(captured["validator"])
 
-    def test_temperature_scan_skips_sensors_on_macos_and_windows(self) -> None:
-        for system in ("Darwin", "Windows"):
-            with self.subTest(system=system):
-                probed: list[int] = []
-                fake = _thermal_psutil(
-                    lambda probed=probed: (
-                        probed.append(1),
-                        {"coretemp": [_temp(45.0)]},
-                    )[1]
-                )
+    def test_temperature_scan_skips_psutil_sensors_on_macos(self) -> None:
+        probed: list[int] = []
 
-                with patch("maintenance.scanner.platform.system", return_value=system):
-                    scan = SystemScanner._temperature_scan(fake)
+        def read_sensors() -> dict[str, list[SimpleNamespace]]:
+            probed.append(1)
+            return {"coretemp": [_temp(45.0)]}
 
-                self.assertEqual(scan.lines, ())
-                self.assertEqual(scan.samples_by_component, ())
-                self.assertEqual(probed, [], "sensors must never be probed off Linux")
+        fake = _thermal_psutil(read_sensors)
+
+        with patch("maintenance.scanner.platform.system", return_value="Darwin"):
+            scan = SystemScanner._temperature_scan(fake)
+
+        self.assertEqual(scan.lines, ())
+        self.assertEqual(scan.samples_by_component, ())
+        self.assertEqual(probed, [], "sensors must never be probed off Linux")
+
+    def test_temperature_scan_reads_windows_acpi_zone(self) -> None:
+        result = SimpleNamespace(
+            stdout=json.dumps(
+                {
+                    "InstanceName": "ACPI\\ThermalZone\\TZ00_0",
+                    "CurrentTemperature": 3015,
+                }
+            )
+        )
+        with (
+            patch("maintenance.scanner.platform.system", return_value="Windows"),
+            patch("maintenance.scanner.subprocess.run", return_value=result),
+        ):
+            scan = SystemScanner._temperature_scan(_thermal_psutil(dict))
+
+        self.assertEqual(scan.lines, ("CPU: 28°C",))
+        sample = dict(scan.samples_by_component)["cpu"][0]
+        self.assertAlmostEqual(sample.value_celsius, 28.35, places=2)
+        self.assertEqual(sample.sensor_id, "acpi:ACPI\\ThermalZone\\TZ00_0")
+
+    def test_temperature_scan_handles_multiple_windows_acpi_zones(self) -> None:
+        result = SimpleNamespace(
+            stdout=json.dumps(
+                [
+                    {"InstanceName": "TZ00", "CurrentTemperature": 2983},
+                    {"InstanceName": "TZ01", "CurrentTemperature": 3015},
+                    {"InstanceName": "TZ02", "CurrentTemperature": 0},
+                ]
+            )
+        )
+        with (
+            patch("maintenance.scanner.platform.system", return_value="Windows"),
+            patch("maintenance.scanner.subprocess.run", return_value=result),
+        ):
+            scan = SystemScanner._temperature_scan(_thermal_psutil(dict))
+
+        samples = dict(scan.samples_by_component)["cpu"]
+        self.assertEqual([sample.sensor_name for sample in samples], ["TZ00", "TZ01"])
 
     def test_temperature_scan_reads_sensors_on_linux(self) -> None:
         fake = _thermal_psutil(lambda: {"coretemp": [_temp(45.0)]})
