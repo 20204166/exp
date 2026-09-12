@@ -44,7 +44,7 @@ def run_text_command(
             timeout=timeout_seconds,
             creationflags=creationflags,
         )
-    except (OSError, subprocess.SubprocessError) as error:
+    except (OSError, UnicodeError, subprocess.SubprocessError) as error:
         return "", str(error)
     return result.stdout, None
 

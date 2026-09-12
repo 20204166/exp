@@ -14,6 +14,16 @@ from maintenance.external_commands import (
 
 
 class RunTextCommandTests(unittest.TestCase):
+    def test_decode_error_is_reported_as_command_failure(self) -> None:
+        def failing_runner(*args: Any, **kwargs: Any) -> Any:
+            del args, kwargs
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte")
+
+        stdout, error = run_text_command(["cmd"], runner=failing_runner)
+
+        self.assertEqual(stdout, "")
+        self.assertIn("invalid byte", error or "")
+
     def test_successful_command_returns_stdout(self) -> None:
         stdout, error = run_text_command(
             [sys.executable, "-c", "print('probe-ok')"],

@@ -36,6 +36,29 @@ class LoggingSetupTests(unittest.TestCase):
             self.assertIsNotNone(path)
             self.assertTrue(Path(path or "").exists())
 
+    def test_log_path_uses_platform_state_conventions(self) -> None:
+        home = Path("/home/alice")
+        self.assertEqual(
+            main.default_log_path(
+                environment={"XDG_STATE_HOME": "/tmp/state"},
+                home=home,
+                platform_name="Linux",
+            ),
+            Path("/tmp/state/system-analyzer/system-analyzer.log"),
+        )
+        self.assertEqual(
+            main.default_log_path(
+                environment={"LOCALAPPDATA": r"C:\Users\Alice\AppData\Local"},
+                home=home,
+                platform_name="Windows",
+            ),
+            Path(r"C:\Users\Alice\AppData\Local/system-analyzer/system-analyzer.log"),
+        )
+        self.assertEqual(
+            main.default_log_path(environment={}, home=home, platform_name="Darwin"),
+            home / "Library" / "Logs" / "system-analyzer" / main.LOG_FILE_NAME,
+        )
+
     def test_setup_logging_falls_back_when_state_dir_unavailable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             blocker = Path(directory) / "state"

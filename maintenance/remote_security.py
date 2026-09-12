@@ -53,6 +53,9 @@ def ensure_tls_material(directory: Path, node_id: str) -> TLSMaterial:
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if os.name == "nt"
+                else 0,
             )
             os.chmod(temporary_key, 0o600)
             os.chmod(temporary_certificate, 0o644)
