@@ -112,6 +112,50 @@ security authority, lifecycle, freshness, platform behavior, performance
 requirements, compatibility risk, or an abstraction that would add coupling for
 trivial duplication.
 
+## CONDITIONAL SIMPLIFICATION / GUARD CLAUSES
+
+When legitimate consolidation work already touches code, consider flattening
+the normal or successful path when invalid input, unsupported or stale state,
+missing prerequisites, permission or capability failures, empty/no-op cases,
+or other exceptional cases can be expressed as early guards. This is a
+candidate refactoring, not a mandatory style rule:
+
+```text
+if invalid: return failure
+if unavailable: return unavailable
+if not_authorized: return denied
+perform_normal_operation()
+```
+
+Apply this only when it materially reduces nesting, makes special cases
+explicit, preserves behavior exactly, needs no new abstraction, keeps the diff
+small, and existing tests cover the affected branches. Do not invert
+conditions by default. Keep balanced branches balanced when both are normal,
+the current `if/else` is clearer, negation creates double negatives or harder
+predicates, shared post-processing matters, or early returns would obscure
+transaction, cleanup, lifetime, exception, or context-manager scope.
+
+Before moving a condition, verify that evaluation has no required side effect,
+preceding statements need not run first, and exception semantics, cleanup,
+`finally`/context-manager behavior, callback and logging/status ordering, and
+mutation order remain equivalent. Prefer existing canonical predicates such as
+`is_authorized(...)`, `is_supported(...)`, `is_stale(...)`, or `can_execute(...)`
+when semantically identical; SEARCH BEFORE CREATE, and do not add helpers just
+to make a guard clause look prettier. Apply De Morgan transformations only when
+evaluation order and behavior remain safe and the result is clearer. Otherwise
+keep the existing structure.
+
+For explicit consolidation or simplification audits, report only meaningful
+candidates using: **APPLY — HIGH VALUE / LOW RISK**; **KEEP — CURRENT FORM
+CLEARER**; **KEEP — BOTH BRANCHES ARE NORMAL**; **KEEP — ORDER/SIDE-EFFECT
+RISK**; or **KEEP — NEGATION WOULD REDUCE CLARITY**. Do not report every
+ordinary conditional. The objective is lower cognitive load and a clearer
+normal path, with behavior before simplification:
+
+> **FLATTEN THE HAPPY PATH WHEN FAILURE GUARDS MAKE IT CLEARER. DO NOT INVERT
+> CONDITIONS BY DEFAULT. GUARD EXCEPTIONAL CASES; KEEP BALANCED BRANCHES
+> BALANCED. CLARITY BEFORE EARLY RETURNS. BEHAVIOR BEFORE SIMPLIFICATION.**
+
 ## Consolidate Safely
 
 When a candidate is justified:
