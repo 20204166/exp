@@ -138,6 +138,7 @@ class ComponentFacadeReexportTests(unittest.TestCase):
             "DownloadScanner",
             "DownloadsPathResolver",
             "HashFingerprint",
+            "local_scan_anchor",
             "ProcessSafetyPolicy",
             "PROTECTED_PROCESS_NAMES",
             "ResourceFeature",
