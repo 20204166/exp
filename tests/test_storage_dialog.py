@@ -406,6 +406,40 @@ class StorageDialogCoordinatorTests(unittest.TestCase):
         dialog._show_error.assert_called_once_with("denied")
         self.assertFalse(dialog._trash_active)
 
+    def test_scan_omits_scan_root_when_not_set(self) -> None:
+        runner = DeferredRunner()
+        dialog = self._dialog()
+        dialog.coordinator = AppCoordinator(
+            runner=runner, deliver=lambda callback: callback()
+        )
+        dialog.provider = Mock()
+        dialog.provider.storage_candidates = Mock(return_value=[])
+
+        dialog.scan()
+        runner.run_next()
+
+        dialog.provider.storage_candidates.assert_called_once_with(
+            progress_callback=ANY, cancel_event=ANY
+        )
+
+    def test_scan_forwards_an_explicit_scan_root_to_the_provider(self) -> None:
+        broad_root = Path("/broad-root")
+        runner = DeferredRunner()
+        dialog = self._dialog()
+        dialog.coordinator = AppCoordinator(
+            runner=runner, deliver=lambda callback: callback()
+        )
+        dialog._scan_root = broad_root
+        dialog.provider = Mock()
+        dialog.provider.storage_candidates = Mock(return_value=[])
+
+        dialog.scan()
+        runner.run_next()
+
+        dialog.provider.storage_candidates.assert_called_once_with(
+            progress_callback=ANY, cancel_event=ANY, scan_root=broad_root
+        )
+
     def test_close_cancels_trash_and_late_result_is_ignored(self) -> None:
         runner = DeferredRunner()
         dialog = self._dialog()

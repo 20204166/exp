@@ -1325,6 +1325,7 @@ class StorageDialog(tk.Toplevel):
         read_only: bool = False,
         on_close: Callable[[], None] | None = None,
         provider: Any | None = None,
+        scan_root: Path | None = None,
     ) -> None:
         super().__init__(master)
         self.provider = analyzer if provider is None else provider
@@ -1343,6 +1344,7 @@ class StorageDialog(tk.Toplevel):
         self.candidates: dict[str, FileCandidate] = {}
         self._scan_active = False
         self._waiting_for_shared = False
+        self._scan_root = scan_root
 
         title = "Storage Cleanup"
         if node_title is not None:
@@ -1360,15 +1362,23 @@ class StorageDialog(tk.Toplevel):
             frame_cls=tk.Frame,
             on_close=self._close,
         )
-        description = (
-            "Find large files and verified duplicates in Downloads. "
-            "Only selected files are moved to Trash. "
-            "Ctrl-click (Cmd-click on macOS) to select multiple files."
-        )
         if read_only:
             description = (
                 "This node is read-only: files can be reviewed but not moved "
                 "to Trash from here."
+            )
+        elif scan_root is not None:
+            description = (
+                "Reviewing your entire local system, not just Downloads. This "
+                "can take a long time. Only files inside Downloads can be "
+                "moved to Trash from here; everything else is review-only. "
+                "Ctrl-click (Cmd-click on macOS) to select multiple files."
+            )
+        else:
+            description = (
+                "Find large files and verified duplicates in Downloads. "
+                "Only selected files are moved to Trash. "
+                "Ctrl-click (Cmd-click on macOS) to select multiple files."
             )
         description_label = ui_layout.dialog_heading(
             container,
@@ -1447,13 +1457,13 @@ class StorageDialog(tk.Toplevel):
             frame_cls=tk.Frame,
             label_cls=tk.Label,
             colors=colors,
-            status_text="Ready to scan Downloads",
+            status_text=f"Ready to {self._scan_button_label().lower()}",
         )
         self.scan_button, self.trash_button = ui_layout.pack_action_buttons(
             footer,
             [
                 (
-                    "Scan Downloads",
+                    self._scan_button_label(),
                     self.scan,
                     ui_styles.STYLE_NEUTRAL_BUTTON,
                     (8, 0),
@@ -1469,6 +1479,20 @@ class StorageDialog(tk.Toplevel):
         if cached is not None:
             self._show_candidates(cached)
         self.scan()
+
+    def _scan_scope_label(self) -> str:
+        return (
+            "the full system"
+            if getattr(self, "_scan_root", None) is not None
+            else "Downloads"
+        )
+
+    def _scan_button_label(self) -> str:
+        return (
+            "Scan Full System"
+            if getattr(self, "_scan_root", None) is not None
+            else "Scan Downloads"
+        )
 
     def _default_close(self) -> None:
         close_coordinated_dialog(
@@ -1503,10 +1527,20 @@ class StorageDialog(tk.Toplevel):
         if self._scan_active:
             return
 
+        scan_root = getattr(self, "_scan_root", None)
+
         def scan_task(
             cancel_event: threading.Event,
             progress: Callable[[str], None],
         ) -> list[FileCandidate]:
+            if scan_root is not None:
+                # The opt-in broad scan is local-only; scan_root is never
+                # set when self.provider is a remote node's provider.
+                return self.provider.storage_candidates(
+                    progress_callback=progress,
+                    cancel_event=cancel_event,
+                    scan_root=scan_root,
+                )
             return call_legacy_compatible(
                 lambda: self.provider.storage_candidates(
                     progress_callback=progress,
@@ -1522,7 +1556,7 @@ class StorageDialog(tk.Toplevel):
             on_result=self._on_scan_result,
             on_error=self._on_scan_error,
             on_progress=self._show_scan_progress,
-            waiting_text="Waiting for the active Downloads scan...",
+            waiting_text=f"Waiting for the active {self._scan_scope_label()} scan...",
             subscribe_callback=self._on_shared_scan_result,
             on_owner_started=self._begin_owner_scan,
         )
@@ -1534,7 +1568,9 @@ class StorageDialog(tk.Toplevel):
             command=self.cancel_scan,
         )
         self.trash_button.config(state=tk.DISABLED)
-        self.status_label.config(text="Scanning Downloads and checking duplicates...")
+        self.status_label.config(
+            text=f"Scanning {self._scan_scope_label()} and checking duplicates..."
+        )
 
     def _on_scan_result(self, candidates: list[FileCandidate]) -> None:
         self._set_scan_idle()
@@ -1550,7 +1586,7 @@ class StorageDialog(tk.Toplevel):
     def _wait_for_shared_scan(self) -> None:
         _register_coordinated_waiter(
             self,
-            waiting_text="Waiting for the active Downloads scan...",
+            waiting_text=f"Waiting for the active {self._scan_scope_label()} scan...",
             subscribe_callback=self._on_shared_scan_result,
         )
 
@@ -1570,7 +1606,7 @@ class StorageDialog(tk.Toplevel):
         if not self._scan_active:
             return
         self.scan_button.config(state=tk.DISABLED)
-        self.status_label.config(text="Cancelling Downloads scan...")
+        self.status_label.config(text=f"Cancelling {self._scan_scope_label()} scan...")
         self.coordinator.cancel(
             self._operation_key,
             cancellation_message=DOWNLOADS_SCAN_CANCELLED,
@@ -1589,7 +1625,7 @@ class StorageDialog(tk.Toplevel):
         self._scan_active = False
         self.scan_button.config(
             state=tk.NORMAL,
-            text="Scan Downloads",
+            text=self._scan_button_label(),
             command=self.scan,
         )
         self.trash_button.config(
@@ -1648,11 +1684,19 @@ class StorageDialog(tk.Toplevel):
             return
 
         total = sum(candidate.size_bytes for candidate in selected)
-        confirmed = messagebox.askyesno(
-            "Move Files to Trash?",
+        confirmation_message = (
             f"Move {len(selected)} selected file(s) "
             f"({SystemScanner.format_bytes(total)}) to Trash?\n\n"
-            "The files will not be permanently deleted.",
+            "The files will not be permanently deleted."
+        )
+        if getattr(self, "_scan_root", None) is not None:
+            confirmation_message += (
+                "\n\nOnly files inside Downloads will actually move; anything "
+                "selected outside Downloads is review-only and will be skipped."
+            )
+        confirmed = messagebox.askyesno(
+            "Move Files to Trash?",
+            confirmation_message,
             parent=self,
         )
         if not confirmed:
