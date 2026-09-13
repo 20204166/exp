@@ -99,7 +99,7 @@ class AppPreferences:
         intervals = RefreshIntervals()
         return cls(
             refresh_intervals=intervals,
-            visible_cards=frozenset(intervals.as_dict()),
+            visible_cards=frozenset(_CARD_KEYS),
             hide_unavailable_cards=False,
             appearance=DEFAULT_APPEARANCE,
         )
@@ -271,7 +271,7 @@ class PreferencesStore:
                 )
                 return AppPreferences.defaults()
             parsed_intervals[key] = cast(int, value)
-        unknown_intervals = set(intervals_data) - set(expected_keys)
+        unknown_intervals = set(intervals_data).difference(expected_keys)
         if unknown_intervals:
             LOGGER.warning(
                 "Preferences contain unknown intervals %s; using defaults",
