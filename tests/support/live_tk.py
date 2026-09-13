@@ -4,6 +4,8 @@ Display detection is performed once at import time; callers that need the
 value use ``DISPLAY_AVAILABLE``.
 """
 
+import os
+import sys
 import tkinter as tk
 from collections.abc import Iterator
 from typing import Any
@@ -19,6 +21,24 @@ def _display_available() -> bool:
 
 
 DISPLAY_AVAILABLE = _display_available()
+
+if DISPLAY_AVAILABLE and os.environ.get("SA_TEST_XVFB") != "1":
+    # Real-Tk tests open real windows on whatever DISPLAY this process has.
+    # Running against a live, in-use desktop session lets window-manager
+    # focus/redraw events compete with the test windows, which can make an
+    # otherwise-passing test hang or flake nondeterministically -- not a code
+    # bug, contention for the display (see docs/AUDIT_FOLLOWUP_2026-09-13.md).
+    # scripts/run_tests.sh runs the suite inside an isolated Xvfb display and
+    # sets SA_TEST_XVFB=1, which silences this notice.
+    print(
+        "note: live-Tk tests are running against the current display "
+        f"(DISPLAY={os.environ.get('DISPLAY', 'unset')}), not an isolated "
+        "one -- if this is your interactive desktop, real windows may open "
+        "on it and tests can flake under real WM contention. Prefer "
+        "`scripts/run_tests.sh` (uses xvfb-run when available) to isolate "
+        "these tests from your desktop.",
+        file=sys.stderr,
+    )
 
 TEST_COLORS = {
     "background": "#F4F7FB",

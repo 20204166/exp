@@ -206,4 +206,6 @@ See `components/README.md`.
 `tests/test_scanner_static_cache.py`, `tests/test_preferences.py`,
 `tests/test_navigation.py`, `tests/test_settings_home.py`,
 `tests/test_preferences_page.py`.
-Run everything with `python -m unittest discover -s tests`.
+Run everything with `scripts/run_tests.sh` (isolates real-Tk tests from the
+developer's desktop via `xvfb-run` when available; falls back to plain
+`python -m unittest discover -s tests` otherwise).
