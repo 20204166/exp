@@ -1328,20 +1328,31 @@ class SettingsIntegrationTests(unittest.TestCase):
 
         window._show_help_page()
 
-        window.help_page.show_topics.assert_called_once_with()
         window.help_page.focus_back.assert_called_once()
         window._page_router.show.assert_called_with("help")
 
-    def test_help_page_opens_directly_to_a_topic(self) -> None:
+    def test_help_topic_page_opens_directly_to_that_topic(self) -> None:
         window = AppWindowTests.make_window()
         window._page_router = Mock()
+        window._page_router.registered_keys = ("help:pairing-trust",)
+        window.help_topic_pages = {"pairing-trust": Mock()}
+
+        window._show_help_topic_page("pairing-trust")
+
+        window._page_router.show.assert_called_with("help:pairing-trust")
+        window.help_topic_pages["pairing-trust"].focus_back.assert_called_once()
+
+    def test_help_topic_page_falls_back_to_hub_for_unknown_topic(self) -> None:
+        window = AppWindowTests.make_window()
+        window._page_router = Mock()
+        window._page_router.registered_keys = ()
         window.help_page = Mock()
+        window.help_topic_pages = {}
 
-        window._show_help_page("pairing-trust")
+        window._show_help_topic_page("does-not-exist")
 
-        window.help_page.open_topic.assert_called_once_with("pairing-trust")
-        window.help_page.show_topics.assert_not_called()
         window._page_router.show.assert_called_with("help")
+        window.help_page.focus_back.assert_called_once()
 
     def test_reset_restores_defaults_after_confirmation(self) -> None:
         window = AppWindowTests.make_window()

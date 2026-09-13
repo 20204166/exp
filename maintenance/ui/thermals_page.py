@@ -16,6 +16,7 @@ from maintenance.components.temperature import (
 from maintenance.models import CapabilityState
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
+from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.telemetry_graph import TelemetryMiniGraph
 
 THERMAL_COMPONENTS = ("cpu", "gpu", "storage", "battery")
@@ -42,6 +43,7 @@ class ThermalsPage:
         button_cls: Callable[..., Any] = ttk.Button,
         canvas_cls: Callable[..., Any] = tk.Canvas,
         scrollbar_cls: Callable[..., Any] = ttk.Scrollbar,
+        button_coordinator: ButtonCoordinator | None = None,
         colors: dict[str, str] | None = None,
         fonts: dict[str, Any] | None = None,
     ) -> None:
@@ -51,6 +53,7 @@ class ThermalsPage:
         self.button_cls = button_cls
         self.canvas_cls = canvas_cls
         self.scrollbar_cls = scrollbar_cls
+        self._button_coordinator = button_coordinator
         self.colors = ui_styles.COLORS if colors is None else colors
         self.fonts = ui_styles.FONTS if fonts is None else fonts
         self._graphs: dict[str, TelemetryMiniGraph] = {}
@@ -97,14 +100,22 @@ class ThermalsPage:
             style="Description.TLabel",
         )
         if self.callbacks.on_learn_more is not None:
+            on_learn_more = self.callbacks.on_learn_more
             self.learn_more_button = self.button_cls(
                 self.content,
                 text="Why isn't a sensor available?",
-                command=self.callbacks.on_learn_more,
+                command=on_learn_more,
                 style=ui_styles.STYLE_NEUTRAL_BUTTON,
                 cursor="hand2",
             )
             self.learn_more_button.pack(anchor="w", pady=(0, 14))
+            if self._button_coordinator is not None:
+                self._button_coordinator.register(
+                    "thermals:learn-more", on_learn_more, replace=True
+                )
+                self._button_coordinator.bind(
+                    self.learn_more_button, "thermals:learn-more"
+                )
 
     def focus_back(self) -> None:
         self.back_button.focus_set()

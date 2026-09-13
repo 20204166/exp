@@ -6,11 +6,15 @@ wrap at normal sizes and narrow at minimum sizes). They are skipped cleanly
 in headless environments where a Tk root cannot be created.
 """
 
+import tempfile
 import tkinter as tk
 import unittest
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 from unittest.mock import Mock, patch
 
+from maintenance.cluster import ClusterState, ClusterStore
 from maintenance.dialogs import (
     InfoDialog,
     ProcessDialog,
@@ -25,6 +29,21 @@ from tests.support.live_tk import (
     pump,
     walk_widgets,
 )
+
+
+def _disabled_discovery_cluster_store(directory: str) -> ClusterStore:
+    """A ClusterStore seeded with discovery off, in a throwaway directory.
+
+    These tests build a full AppWindow to exercise layout/navigation, not
+    discovery -- leaving discovery on makes them attempt real mDNS in a
+    sandbox with no usable multicast network (which fails) and, separately,
+    would default to the real user's cluster.json config path if no store
+    is passed at all. Neither is what these tests are meant to touch.
+    """
+
+    store = ClusterStore(Path(directory) / "cluster.json")
+    store.save(replace(ClusterState.create_local(), discovery_enabled=False))
+    return store
 
 
 @unittest.skipUnless(DISPLAY_AVAILABLE, "no display for live Tk tests")
@@ -162,29 +181,34 @@ class LiveResizeTests(unittest.TestCase):
     def test_dashboard_cards_adapt_at_startup(self) -> None:
         from window import AppWindow
 
-        window = AppWindow(master=self.root)
-        for identifier in tuple(window._pending_after_ids):
-            window._cancel_timer(identifier)
-        self._pump()
+        with tempfile.TemporaryDirectory() as directory:
+            window = AppWindow(
+                master=self.root,
+                cluster_store=_disabled_discovery_cluster_store(directory),
+            )
+            for identifier in tuple(window._pending_after_ids):
+                window._cancel_timer(identifier)
+            self._pump()
 
-        card = window.cards["cpu"]
-        expected = card.winfo_width() - 36
-        actual = card.value_label.cget("wraplength")
-        self.assertLessEqual(abs(actual - expected), 12)
+            card = window.cards["cpu"]
+            expected = card.winfo_width() - 36
+            actual = card.value_label.cget("wraplength")
+            self.assertLessEqual(abs(actual - expected), 12)
 
-        window._close()
-        self.root = tk.Tk()
+            window._close()
+            self.root = tk.Tk()
 
     def test_settings_home_preferences_navigation_and_state(self) -> None:
-        import tempfile
-        from pathlib import Path
-
         from maintenance.preferences import PreferencesStore
         from window import AppWindow
 
         with tempfile.TemporaryDirectory() as directory:
             store = PreferencesStore(Path(directory) / "preferences.json")
-            window = AppWindow(master=self.root, preferences_store=store)
+            window = AppWindow(
+                master=self.root,
+                preferences_store=store,
+                cluster_store=_disabled_discovery_cluster_store(directory),
+            )
             for identifier in tuple(window._pending_after_ids):
                 window._cancel_timer(identifier)
             self._pump()
@@ -268,6 +292,8 @@ class LiveResizeTests(unittest.TestCase):
             self._pump()
             self.assertIs(window.preferences_page, first_preferences)
             self.assertIs(window.settings_home, first_home)
+            from maintenance.ui.help_content import HELP_TOPICS
+
             self.assertEqual(
                 window._page_router.registered_keys,
                 (
@@ -279,6 +305,7 @@ class LiveResizeTests(unittest.TestCase):
                     "thermals",
                     "diagnostics",
                     "help",
+                    *(f"help:{topic.key}" for topic in HELP_TOPICS),
                 ),
             )
 
@@ -296,15 +323,16 @@ class LiveResizeTests(unittest.TestCase):
         self.root = tk.Tk()
 
     def test_preferences_page_reachable_at_narrow_and_maximised_sizes(self) -> None:
-        import tempfile
-        from pathlib import Path
-
         from maintenance.preferences import PreferencesStore
         from window import AppWindow
 
         with tempfile.TemporaryDirectory() as directory:
             store = PreferencesStore(Path(directory) / "preferences.json")
-            window = AppWindow(master=self.root, preferences_store=store)
+            window = AppWindow(
+                master=self.root,
+                preferences_store=store,
+                cluster_store=_disabled_discovery_cluster_store(directory),
+            )
             for identifier in tuple(window._pending_after_ids):
                 window._cancel_timer(identifier)
 

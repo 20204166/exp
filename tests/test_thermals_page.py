@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 from maintenance.components.temperature import TemperaturePolicy, TemperatureTelemetry
 from maintenance.models import CapabilityState
+from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.thermals_page import ThermalsPage, ThermalsPageCallbacks
 from tests.support.models import make_summary
 from tests.support.temperature import make_temperature_sample
@@ -203,6 +204,26 @@ class ThermalsPageLearnMoreLinkTests(unittest.TestCase):
         )
 
         recorder.button_with_text("Why isn't a sensor available?").kwargs["command"]()
+
+        on_learn_more.assert_called_once_with()
+
+    def test_learn_more_button_registers_stable_action_id_when_coordinator_present(
+        self,
+    ) -> None:
+        recorder = WidgetRecorder()
+        coordinator = ButtonCoordinator()
+        on_learn_more = Mock()
+        page = ThermalsPage(
+            recorder.parent(),
+            callbacks=ThermalsPageCallbacks(
+                on_back=Mock(), on_learn_more=on_learn_more
+            ),
+            button_coordinator=coordinator,
+            **_thermals_page_kwargs(recorder),
+        )
+
+        self.assertIn("thermals:learn-more", coordinator.registered_ids())
+        page.learn_more_button.config_options["command"]()
 
         on_learn_more.assert_called_once_with()
 

@@ -76,20 +76,44 @@ def build_help(controller: Any, parent: Any) -> Any:
     )
     controller.help_page = ui_help.HelpPage(
         controller.help_frame,
-        callbacks=ui_help.HelpPageCallbacks(on_back=controller._show_settings_page),
+        callbacks=ui_help.HelpPageCallbacks(
+            on_back=controller._show_settings_page,
+            on_open_topic=controller._show_help_topic_page,
+        ),
         button_coordinator=controller._button_coordinator,
     )
     return controller.help_frame
 
 
-def show_help(controller: Any, topic_key: str | None = None) -> None:
-    page = getattr(controller, "help_page", None)
-    if page is not None:
-        if topic_key is not None:
-            page.open_topic(topic_key)
-        else:
-            page.show_topics()
+def build_help_topic(controller: Any, parent: Any, topic: Any) -> Any:
+    frame = controller.ttk.Frame(
+        parent,
+        padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
+        style="App.TFrame",
+    )
+    controller.help_topic_pages[topic.key] = ui_help.HelpTopicPage(
+        frame,
+        topic=topic,
+        callbacks=ui_help.HelpTopicPageCallbacks(on_back=controller._show_help_page),
+    )
+    return frame
+
+
+def show_help(controller: Any) -> None:
     show_page(controller, "help", "help_page")
+
+
+def show_help_topic(controller: Any, topic_key: str) -> None:
+    page_key = f"help:{topic_key}"
+    if page_key not in controller._page_router.registered_keys:
+        show_help(controller)
+        return
+    controller._page_router.show(page_key)
+    controller._sync_render_visibility(page_key)
+    controller._set_diagnostics_visibility(False)
+    page = controller.help_topic_pages.get(topic_key)
+    if page is not None:
+        page.focus_back()
 
 
 def build_diagnostics(controller: Any, parent: Any) -> Any:
@@ -121,8 +145,9 @@ def build_thermals(controller: Any, parent: Any) -> Any:
         controller.thermals_frame,
         callbacks=ui_thermals.ThermalsPageCallbacks(
             on_back=controller._show_dashboard_page,
-            on_learn_more=lambda: controller._show_help_page("thermals"),
+            on_learn_more=lambda: controller._show_help_topic_page("thermals"),
         ),
+        button_coordinator=controller._button_coordinator,
         colors=controller.colors,
     )
     return controller.thermals_frame
@@ -155,7 +180,7 @@ def build_nodes(controller: Any, parent: Any) -> Any:
             on_resume=controller._resume_node,
             on_remove_connection=controller._remove_connection_node,
             on_remove_job=controller._remove_job_node,
-            on_learn_pairing=lambda: controller._show_help_page("pairing-trust"),
+            on_learn_pairing=lambda: controller._show_help_topic_page("pairing-trust"),
         ),
         discovery_enabled=controller._cluster_state.discovery_enabled,
         discovered=controller._nodes_peer_specs(),

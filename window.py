@@ -1,3 +1,4 @@
+import functools
 import logging
 import threading
 import time
@@ -112,6 +113,7 @@ from maintenance.ui import window_preferences as ui_window_preferences
 from maintenance.ui import window_presentation as ui_window_presentation
 from maintenance.ui import window_scan as ui_window_scan
 from maintenance.ui.action_coordinator import ButtonCoordinator
+from maintenance.ui.help_content import HELP_TOPICS
 from maintenance.ui.navigation import PageRouter, PageSpec
 from maintenance.ui.window_supports.timer_delivery import TimerDelivery
 
@@ -299,7 +301,15 @@ class AppWindow:
         self._page_router.register(
             PageSpec(DIAGNOSTICS_PAGE, self._build_diagnostics_page)
         )
+        self.help_topic_pages: dict[str, Any] = {}
         self._page_router.register(PageSpec(HELP_PAGE, self._build_help_page))
+        for topic in HELP_TOPICS:
+            self._page_router.register(
+                PageSpec(
+                    f"help:{topic.key}",
+                    functools.partial(self._build_help_topic_page, topic=topic),
+                )
+            )
         self._page_router.show(DASHBOARD_PAGE)
         self._sync_render_visibility(DASHBOARD_PAGE)
         self._reconcile_cards_and_polling()
@@ -358,8 +368,15 @@ class AppWindow:
         self.ttk = ttk
         return ui_window_pages.build_help(self, parent)
 
-    def _show_help_page(self, topic_key: str | None = None) -> None:
-        ui_window_pages.show_help(self, topic_key)
+    def _build_help_topic_page(self, parent: Any, topic: Any) -> Any:
+        self.ttk = ttk
+        return ui_window_pages.build_help_topic(self, parent, topic)
+
+    def _show_help_page(self) -> None:
+        ui_window_pages.show_help(self)
+
+    def _show_help_topic_page(self, topic_key: str) -> None:
+        ui_window_pages.show_help_topic(self, topic_key)
 
     def _show_dashboard_page(self) -> None:
         ui_window_pages.show_dashboard(self)
