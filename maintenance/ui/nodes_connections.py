@@ -777,12 +777,14 @@ class NodesConnectionsPage:
                 button,
                 enabled,
             )
-        if spec.role_editable and self.callbacks.on_pause is not None:
+        on_pause = self.callbacks.on_pause
+        if spec.role_editable and on_pause is not None:
             pause_text = "Re-enable" if spec.paused else "Pause"
-            if spec.paused and self.callbacks.on_resume is not None:
-                pause_command = lambda: self.callbacks.on_resume(spec.node_id)
+            on_resume = self.callbacks.on_resume
+            if spec.paused and on_resume is not None:
+                pause_command = lambda: on_resume(spec.node_id)
             else:
-                pause_command = lambda: self.callbacks.on_pause(spec.node_id)
+                pause_command = lambda: on_pause(spec.node_id)
             pause_button = self.button_cls(
                 secondary_actions,
                 text=pause_text,
@@ -790,23 +792,25 @@ class NodesConnectionsPage:
                 style=ui_styles.STYLE_NEUTRAL_BUTTON,
             )
             pause_button.pack(side="left", padx=(0, 8))
-        if not spec.is_manual and self.callbacks.on_remove_connection is not None:
+        on_remove_connection = self.callbacks.on_remove_connection
+        if not spec.is_manual and on_remove_connection is not None:
             remove_connection = self.button_cls(
                 secondary_actions,
                 text="Remove connection",
-                command=lambda: self.callbacks.on_remove_connection(spec.node_id),
+                command=lambda: on_remove_connection(spec.node_id),
                 style=ui_styles.STYLE_NEUTRAL_BUTTON,
             )
             remove_connection.pack(side="left", padx=(0, 8))
+        on_remove_job = self.callbacks.on_remove_job
         if (
             spec.role_editable
             and not spec.is_manual
-            and self.callbacks.on_remove_job is not None
+            and on_remove_job is not None
         ):
             remove_job = self.button_cls(
                 secondary_actions,
                 text="Remove job",
-                command=lambda: self.callbacks.on_remove_job(spec.node_id),
+                command=lambda: on_remove_job(spec.node_id),
                 style=ui_styles.STYLE_NEUTRAL_BUTTON,
             )
             remove_job.pack(side="left", padx=(0, 8))

@@ -256,6 +256,8 @@ class PeerConnectionManager:
             return None
         if role_state.epoch is None:
             return None
+        if isinstance(state, RoleState):
+            return decision
         updated = replace(
             state,
             role_assignments=decision.assignments,
@@ -264,8 +266,6 @@ class PeerConnectionManager:
         )
         if self._cluster_store is not None:
             self._cluster_store.save(updated)
-        if isinstance(state, RoleState):
-            return decision
         state.role_assignments = updated.role_assignments
         state.coordinator_epoch = updated.coordinator_epoch
         state.promotion_epochs = updated.promotion_epochs

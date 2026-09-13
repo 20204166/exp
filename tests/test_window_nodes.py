@@ -36,7 +36,7 @@ from maintenance.nodes import (
     node_identity_fingerprint,
     node_operation_key,
 )
-from maintenance.remote import RemoteAuthError
+from maintenance.remote import RemoteAuthError, RemoteRequest
 from maintenance.ui import window_discovery as ui_window_discovery
 from maintenance.ui import window_node_actions
 from maintenance.ui.render_coordinator import UICoordinator
@@ -54,6 +54,20 @@ from window import AppWindow
 
 def _summary(key: str, value: str = "10%") -> Any:
     return make_summary(key, key, value=value, capability=CapabilityState.SUPPORTED)
+
+
+def _role_request(
+    op: str, caller_node_id: NodeId, params: dict[str, Any]
+) -> RemoteRequest:
+    return RemoteRequest(
+        node_id=NodeId("local"),
+        caller_node_id=caller_node_id,
+        op=op,
+        params=params,
+        request_id="test-request",
+        nonce="test-nonce",
+        timestamp=0.0,
+    )
 
 
 def _local_context(analyzer: Any = None) -> NodeContext:
@@ -283,6 +297,38 @@ class WindowNodeSelectorTests(unittest.TestCase):
         window._add_manual_host("Peer", "peer", "5000")
 
         window._nodes_error.assert_called_once_with("Port must be between 0 and 65535")
+
+    def test_remove_manual_host_prompts_before_revoking(self) -> None:
+        window = _make_window(start_discovery=False)
+        window._cluster_state = ClusterState()
+        window._cluster_store = Mock()
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._nodes_status = Mock()
+        window._add_manual_host("Lab Box", "lab-box.local", None)
+        node_id = "manual-lab-box.local"
+        self.assertIsNotNone(window._cluster_state.record(node_id))
+
+        with patch("window.messagebox.askyesno", return_value=False) as confirm:
+            window._remove_manual_host(node_id)
+
+        confirm.assert_called_once()
+        self.assertIsNotNone(window._cluster_state.record(node_id))
+
+    def test_remove_manual_host_revokes_after_confirmation(self) -> None:
+        window = _make_window(start_discovery=False)
+        window._cluster_state = ClusterState()
+        window._cluster_store = Mock()
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._nodes_status = Mock()
+        window._add_manual_host("Lab Box", "lab-box.local", None)
+        node_id = "manual-lab-box.local"
+
+        with patch("window.messagebox.askyesno", return_value=True):
+            window._remove_manual_host(node_id)
+
+        self.assertIsNone(window._cluster_state.record(node_id))
 
     def test_selector_absent_for_single_local_node(self) -> None:
         window = _make_window()
@@ -519,6 +565,7 @@ class WindowNodeConnectionTests(unittest.TestCase):
             ),
         )
         epoch = state.coordinator_epoch
+        assert epoch is not None
         state.coordinator_epoch = replace(
             epoch,
             issued_at=time.time() - 130.0,
@@ -540,6 +587,7 @@ class WindowNodeConnectionTests(unittest.TestCase):
         window = _make_window(start_discovery=False)
         state = ClusterState.create_local(local_node_id="local")
         epoch = state.coordinator_epoch
+        assert epoch is not None
         state.coordinator_epoch = replace(epoch, lease_expires_at=time.time() + 15.0)
         window._cluster_state = state
         manager = Mock()
@@ -558,9 +606,13 @@ class WindowNodeConnectionTests(unittest.TestCase):
         window._schedule_peer_reconciliation = Mock()
         window.snapshot = None
 
-        before = state.coordinator_epoch.lease_expires_at
+        epoch_before = state.coordinator_epoch
+        assert epoch_before is not None
+        before = epoch_before.lease_expires_at
         window._reconcile_peer_connections()
-        after = state.coordinator_epoch.lease_expires_at
+        epoch_after = state.coordinator_epoch
+        assert epoch_after is not None
+        after = epoch_after.lease_expires_at
 
         self.assertGreater(after, before)
         manager.renew_cluster_lease.assert_called_once()
@@ -767,10 +819,10 @@ class WindowNodeSwitchingTests(unittest.TestCase):
             return True
 
         window._save_cluster_state = Mock(side_effect=save_state)
-        request = SimpleNamespace(
-            op="remove_job",
-            caller_node_id=NodeId("local"),
-            params={
+        request = _role_request(
+            "remove_job",
+            NodeId("local"),
+            {
                 "target_node_id": "peer-a",
                 "cluster_id": state.cluster_id,
                 "epoch": 1,
@@ -799,10 +851,10 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window._cluster_state = state
         manager = Mock()
         window._peer_connection_manager = manager
-        request = SimpleNamespace(
-            op="remove_connection",
-            caller_node_id=NodeId("peer-a"),
-            params={
+        request = _role_request(
+            "remove_connection",
+            NodeId("peer-a"),
+            {
                 "target_node_id": "peer-a",
                 "cluster_id": state.cluster_id,
                 "epoch": 1,
@@ -819,10 +871,10 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window = _make_window(start_discovery=False)
         state = ClusterState.create_local(local_node_id="local")
         window._cluster_state = state
-        request = SimpleNamespace(
-            op="remove_connection",
-            caller_node_id=NodeId("peer-a"),
-            params={
+        request = _role_request(
+            "remove_connection",
+            NodeId("peer-a"),
+            {
                 "target_node_id": "other",
                 "cluster_id": state.cluster_id,
                 "epoch": 1,
@@ -935,10 +987,10 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         )
         window._cluster_state = state
         window._save_cluster_state = Mock(return_value=True)
-        request = SimpleNamespace(
-            op="remove_job",
-            caller_node_id=NodeId("local"),
-            params={"target_node_id": "peer-a", "cluster_id": "c", "epoch": 0, "fencing_token": "t"},
+        request = _role_request(
+            "remove_job",
+            NodeId("local"),
+            {"target_node_id": "peer-a", "cluster_id": "c", "epoch": 0, "fencing_token": "t"},
         )
 
         with self.assertRaises(ValueError):
@@ -949,10 +1001,10 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         state = ClusterState.create_local(local_node_id="local")
         window._cluster_state = state
         window._save_cluster_state = Mock(return_value=True)
-        request = SimpleNamespace(
-            op="remove_job",
-            caller_node_id=NodeId("local"),
-            params={"target_node_id": "ghost", "cluster_id": "c", "epoch": 1, "fencing_token": "t"},
+        request = _role_request(
+            "remove_job",
+            NodeId("local"),
+            {"target_node_id": "ghost", "cluster_id": "c", "epoch": 1, "fencing_token": "t"},
         )
 
         with self.assertRaises(ValueError):
@@ -962,10 +1014,10 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window = _make_window(start_discovery=False)
         state = ClusterState.create_local(local_node_id="local")
         window._cluster_state = state
-        request = SimpleNamespace(
-            op="remove_connection",
-            caller_node_id=NodeId("ghost"),
-            params={"target_node_id": "ghost", "cluster_id": "c", "epoch": 1, "fencing_token": "t"},
+        request = _role_request(
+            "remove_connection",
+            NodeId("ghost"),
+            {"target_node_id": "ghost", "cluster_id": "c", "epoch": 1, "fencing_token": "t"},
         )
 
         with self.assertRaises(RemoteAuthError):
@@ -1867,6 +1919,55 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         window._nodes_error.assert_called_once_with(
             "Pairing requires explicit target-side grant provisioning"
         )
+
+    def test_pairing_clears_stale_revoked_role_assignment(self) -> None:
+        window = _make_window(start_discovery=False)
+        window._cluster_state = ClusterState(
+            role_assignments=(
+                RoleAssignment(
+                    frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}),
+                    node_id=NodeId("local"),
+                ),
+                RoleAssignment(
+                    frozenset({ClusterRole.WORKER}),
+                    node_id=NodeId("peer-a"),
+                    revoked=True,
+                ),
+            )
+        )
+        window._cluster_store = Mock()
+        window._nodes_error = Mock()
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._rebuild_node_selector = Mock()
+        window._nodes_status = Mock()
+        window._provision_target_grant = Mock(return_value=True)
+        window._node_registry.update_discovered(
+            _candidate("peer-a", node_identity_fingerprint("peer-a"))
+        )
+
+        with patch("window.messagebox.askyesno", return_value=True):
+            window._pair_discovered_node("peer-a")
+
+        stale = next(
+            (
+                item
+                for item in window._cluster_state.role_assignments
+                if item.node_id == NodeId("peer-a")
+            ),
+            None,
+        )
+        self.assertIsNone(stale)
+
+        window._set_node_roles("peer-a", frozenset({"worker"}))
+
+        window._nodes_error.assert_not_called()
+        assignment = next(
+            item
+            for item in window._cluster_state.role_assignments
+            if item.node_id == NodeId("peer-a")
+        )
+        self.assertFalse(assignment.revoked)
 
     def test_activation_result_is_ignored_after_record_replacement(self) -> None:
         window = _make_window(start_discovery=False)

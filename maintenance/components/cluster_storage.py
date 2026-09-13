@@ -9,6 +9,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from maintenance.nodes import NodeId
 
@@ -376,7 +377,7 @@ class _BatchStore:
             db.execute("DELETE FROM snapshot_batches WHERE batch_id = ?", (oldest[0],))
 
     @staticmethod
-    def _decode(row: tuple[object, ...]) -> SnapshotBatch:
+    def _decode(row: tuple[Any, ...]) -> SnapshotBatch:
         payload = json.loads(str(row[6]))
         records = tuple(
             ResourceSnapshot(

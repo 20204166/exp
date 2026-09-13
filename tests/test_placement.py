@@ -423,10 +423,8 @@ class PlacementPolicyTests(unittest.TestCase):
         renders.invalidate("component:cpu", node_id=NodeId("node-b"))
         committed: list[RenderIntent] = []
 
-        app.run(
-            node_a_key,
-            lambda _cancel, _progress: "node-a-result",
-            on_result=lambda key, value: renders.request(
+        def on_result(key: str, value: Any) -> None:
+            renders.request(
                 RenderIntent(
                     "component:cpu",
                     generation=1,
@@ -435,7 +433,12 @@ class PlacementPolicyTests(unittest.TestCase):
                     payload_set=True,
                 ),
                 committed.append,
-            ),
+            )
+
+        app.run(
+            node_a_key,
+            lambda _cancel, _progress: "node-a-result",
+            on_result=on_result,
         )
         app.run(node_b_key, lambda _cancel, _progress: "node-b-result")
         workers[0]()

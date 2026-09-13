@@ -300,63 +300,58 @@ class ClusterPage:
                 action_id = f"cluster:node:{spec.node_id}:open"
                 coordinator.register(action_id, open_node, replace=True)
                 coordinator.bind(button, action_id)
-        if (
-            spec.role_editable
-            and not spec.is_local
-            and self.callbacks.on_revoke is not None
-        ):
+        on_revoke = self.callbacks.on_revoke
+        if spec.role_editable and not spec.is_local and on_revoke is not None:
             revoke = self.button_cls(
                 row,
                 text="Revoke",
-                command=lambda: self.callbacks.on_revoke(spec.node_id),
+                command=lambda: on_revoke(spec.node_id),
                 style=ui_styles.STYLE_DANGER_BUTTON,
             )
             revoke.pack(side="right", padx=(0, 8))
+        on_remove_connection = self.callbacks.on_remove_connection
         if (
             spec.role_editable
             and not spec.is_local
-            and self.callbacks.on_remove_connection is not None
+            and on_remove_connection is not None
         ):
             remove_connection = self.button_cls(
                 row,
                 text="Remove connection",
-                command=lambda: self.callbacks.on_remove_connection(spec.node_id),
+                command=lambda: on_remove_connection(spec.node_id),
                 style=ui_styles.STYLE_NEUTRAL_BUTTON,
             )
             remove_connection.pack(side="right", padx=(0, 8))
-        if (
-            spec.role_editable
-            and not spec.is_local
-            and self.callbacks.on_remove_job is not None
-        ):
+        on_remove_job = self.callbacks.on_remove_job
+        if spec.role_editable and not spec.is_local and on_remove_job is not None:
             remove_job = self.button_cls(
                 row,
                 text="Remove job",
-                command=lambda: self.callbacks.on_remove_job(spec.node_id),
+                command=lambda: on_remove_job(spec.node_id),
                 style=ui_styles.STYLE_NEUTRAL_BUTTON,
             )
             remove_job.pack(side="right", padx=(0, 8))
-        if spec.is_local and self.callbacks.on_share_dashboard is not None:
+        on_share_dashboard = self.callbacks.on_share_dashboard
+        if spec.is_local and on_share_dashboard is not None:
             share = self.button_cls(
                 row,
                 text="Share dashboard",
-                command=self.callbacks.on_share_dashboard,
+                command=on_share_dashboard,
                 style=ui_styles.STYLE_NEUTRAL_BUTTON,
             )
             share.pack(side="right", padx=(0, 8))
+        on_pause = self.callbacks.on_pause
+        on_resume = self.callbacks.on_resume
         if (
             spec.role_editable
             and not spec.is_local
-            and (
-                self.callbacks.on_pause is not None
-                or self.callbacks.on_resume is not None
-            )
+            and (on_pause is not None or on_resume is not None)
         ):
             paused = spec.paused
-            if paused and self.callbacks.on_resume is not None:
-                command = lambda: self.callbacks.on_resume(spec.node_id)
-            elif not paused and self.callbacks.on_pause is not None:
-                command = lambda: self.callbacks.on_pause(spec.node_id)
+            if paused and on_resume is not None:
+                command = lambda: on_resume(spec.node_id)
+            elif not paused and on_pause is not None:
+                command = lambda: on_pause(spec.node_id)
             else:
                 command = lambda: None
             pause = self.button_cls(

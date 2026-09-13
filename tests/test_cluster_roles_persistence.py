@@ -18,6 +18,7 @@ class ClusterRolePersistenceTests(unittest.TestCase):
             restored = store.load()
         self.assertEqual(restored.local_node_id, "coord")
         self.assertIn(ClusterRole.COORDINATOR, restored.local_assignment.roles)
+        assert restored.coordinator_epoch is not None
         self.assertEqual(restored.coordinator_epoch.epoch, 1)
 
     def test_v1_state_gets_safe_local_coordinator(self) -> None:
@@ -188,7 +189,9 @@ class ClusterRolePersistenceTests(unittest.TestCase):
             if ClusterRole.COORDINATOR in item.roles and not item.revoked
         ]
         self.assertEqual(len(active_coordinators), 1)
-        self.assertEqual(active_coordinators[0].node_id.value, "coord")
+        node_id = active_coordinators[0].node_id
+        assert node_id is not None
+        self.assertEqual(node_id.value, "coord")
         self.assertIn(ClusterRole.WORKER, active_coordinators[0].roles)
 
     def test_non_finite_epoch_lease_is_rejected_on_load(self) -> None:

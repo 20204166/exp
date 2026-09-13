@@ -188,7 +188,9 @@ def remove_connection_node(
         local_id = registry.local_id()
         if local_id is not None:
             registry.select(local_id)
-    if controller.__dict__.get("_selected_node_id") != registry.selected_id():
+    if registry is not None and controller.__dict__.get(
+        "_selected_node_id"
+    ) != registry.selected_id():
         controller.__dict__["_selected_node_id"] = registry.selected_id()
         context = registry.selected_context()
         controller._sync_selected_context_mirrors(context)
@@ -363,7 +365,16 @@ def pair_discovered_node(
     )
     if existing_record is None:
         trusted_nodes = (*trusted_nodes, record)
-    state = replace(controller._cluster_state, trusted_nodes=trusted_nodes)
+    # Trust and cluster role are separate owners: a previous Revoke also
+    # revokes this node's role assignment, but re-pairing only re-establishes
+    # trust. Clear a stale revoked role now so it doesn't keep rejecting role
+    # operations with "revoked node requires a new pairing invite" forever.
+    role_state = _role_state(controller).clear_revocation(node)
+    state = replace(
+        controller._cluster_state,
+        trusted_nodes=trusted_nodes,
+        role_assignments=role_state.assignments,
+    )
     if not controller._save_cluster_state(state):
         registry.revoke_trusted(node)
         if previous_context is not None:
@@ -667,7 +678,16 @@ def add_manual_host(
     controller._nodes_status(f"Configured manual host {display_name}")
 
 
-def remove_manual_host(controller: Any, node_id: str) -> None:
+def remove_manual_host(
+    controller: Any, node_id: str, *, messagebox_module: Any = messagebox
+) -> None:
+    if not messagebox_module.askyesno(
+        "Remove manual host",
+        "This deletes the manual host configuration and invalidates its trust "
+        "and permissions. Add it again to reconnect.",
+        parent=controller.master,
+    ):
+        return
     controller._revoke_trusted_node(node_id)
 
 

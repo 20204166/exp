@@ -155,7 +155,9 @@ class ResourceCardContractTests(unittest.TestCase):
                 card.update_summary(
                     summary("gpu", "GPU", percent=None, capability=state)
                 )
-            self.assertIn(expected, card.subtitle_label.options["text"])
+            subtitle_text = card.subtitle_label.options["text"]
+            assert isinstance(subtitle_text, str)
+            self.assertIn(expected, subtitle_text)
 
     def test_update_summary_shrinks_metric_rows(self) -> None:
         card: Any = object.__new__(ResourceCard)

@@ -456,6 +456,40 @@ class DiscoveredBoundaryTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             registry.context(NodeId("peer-a"))
 
+    def test_revoked_peer_reappears_as_untrusted_discovery_candidate(self) -> None:
+        # Revoke invalidates trust; it must not blacklist discovery. A peer
+        # that keeps advertising after being revoked has to surface again
+        # through the normal untrusted-candidate path, not stay hidden.
+        registry = NodeRegistry(_local_context())
+        registry.update_discovered(_candidate("peer-a"))
+        registry.begin_pairing(NodeId("peer-a"))
+        registry.promote_to_trusted(NodeId("peer-a"))
+        self.assertEqual(registry.discovered_candidates(), ())
+
+        registry.revoke_trusted(NodeId("peer-a"))
+        with self.assertRaises(KeyError):
+            registry.context(NodeId("peer-a"))
+
+        registry.update_discovered(_candidate("peer-a"))
+
+        candidates = {c.stable_id for c in registry.discovered_candidates()}
+        self.assertIn("peer-a", candidates)
+
+    def test_rejected_pair_request_leaves_peer_discoverable(self) -> None:
+        # Reject is weaker than revoke: it never created trust, so the peer
+        # must remain visible as an ordinary untrusted discovery candidate
+        # on the very next scan, with no cooldown or blacklist.
+        registry = NodeRegistry(_local_context())
+        registry.update_discovered(_candidate("peer-a"))
+        registry.begin_pairing(NodeId("peer-a"))
+
+        registry.reject_discovered(NodeId("peer-a"))
+
+        self.assertEqual(registry.discovered_candidates(), ())
+        registry.update_discovered(_candidate("peer-a"))
+        candidates = {c.stable_id for c in registry.discovered_candidates()}
+        self.assertIn("peer-a", candidates)
+
     def test_revoke_local_node_is_rejected(self) -> None:
         registry = NodeRegistry(_local_context())
         with self.assertRaises(ValueError):

@@ -92,10 +92,9 @@ class ClusterRoleTests(unittest.TestCase):
             epoch=CoordinatorEpoch(8, NodeId("sub"), "new", 0.0, 100.0),
         )
         returned = rejoin_as_worker(state, node_id=NodeId("coord"), current_epoch=8)
-        self.assertEqual(
-            returned.assignment_for(NodeId("coord")).roles,
-            frozenset({ClusterRole.WORKER}),
-        )
+        assignment = returned.assignment_for(NodeId("coord"))
+        assert assignment is not None
+        self.assertEqual(assignment.roles, frozenset({ClusterRole.WORKER}))
 
     def test_remove_job_requires_active_coordinator(self) -> None:
         with self.assertRaises(RoleAuthorizationError):
@@ -142,6 +141,46 @@ class ClusterRoleTests(unittest.TestCase):
 
     def test_default_assignment_has_active_job(self) -> None:
         self.assertTrue(self.worker.has_active_job)
+
+    def test_clear_revocation_drops_stale_revoked_assignment(self) -> None:
+        revoked = RoleAssignment(
+            frozenset({ClusterRole.WORKER}),
+            NodeId("worker"),
+            revoked=True,
+        )
+        state = RoleState(assignments=(self.coordinator, revoked))
+
+        cleared = state.clear_revocation(NodeId("worker"))
+
+        self.assertIsNone(cleared.assignment_for(NodeId("worker")))
+
+    def test_clear_revocation_allows_reassignment_after_fresh_pairing(self) -> None:
+        revoked = RoleAssignment(
+            frozenset({ClusterRole.WORKER}),
+            NodeId("worker"),
+            revoked=True,
+        )
+        state = RoleState(assignments=(self.coordinator, revoked)).clear_revocation(
+            NodeId("worker")
+        )
+
+        updated, _change = state.assign(
+            actor=self.coordinator,
+            target=NodeId("worker"),
+            roles=frozenset({ClusterRole.WORKER}),
+        )
+
+        assignment = updated.assignment_for(NodeId("worker"))
+        self.assertIsNotNone(assignment)
+        assert assignment is not None
+        self.assertFalse(assignment.revoked)
+
+    def test_clear_revocation_is_a_no_op_for_active_assignment(self) -> None:
+        state = RoleState(assignments=(self.coordinator, self.worker))
+
+        cleared = state.clear_revocation(NodeId("worker"))
+
+        self.assertEqual(cleared.assignment_for(NodeId("worker")), self.worker)
 
     def test_assign_job_revoked_target_is_rejected(self) -> None:
         revoked = RoleAssignment(

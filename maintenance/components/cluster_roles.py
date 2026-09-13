@@ -146,14 +146,14 @@ class RoleState:
         )
 
     def assign(
-        self=None,
+        self,
         *,
         actor: RoleAssignment,
         target: NodeId,
         roles: frozenset[ClusterRole],
         now: float = 0.0,
     ) -> tuple[RoleState, RoleChange]:
-        state = self if self is not None else RoleState()
+        state = self
         if ClusterRole.COORDINATOR not in actor.roles or actor.paused or actor.revoked:
             raise RoleAuthorizationError("only an active Coordinator may assign roles")
         assignment = RoleAssignment(roles, node_id=target)
@@ -196,6 +196,26 @@ class RoleState:
         if current is None or current.revoked:
             raise RoleAuthorizationError("unknown or revoked node")
         return self._replace_assignment(replace(current, paused=False))
+
+    def clear_revocation(self, target: NodeId) -> RoleState:
+        """Drop a stale revoked assignment so a freshly paired node is unblocked.
+
+        Trust and cluster role are separate owners: revoking trust for a node
+        also revokes its role (see revoke_node), but re-establishing trust
+        through a fresh pairing invite does not by itself touch role state.
+        Without this, a revoked-then-re-paired node's role assignment stays
+        permanently revoked and every role operation against it keeps failing
+        with "revoked node requires a new pairing invite" even after that
+        invite has happened. Callers apply this once trust is re-established.
+        """
+
+        current = self.assignment_for(target)
+        if current is None or not current.revoked:
+            return self
+        return replace(
+            self,
+            assignments=tuple(item for item in self.assignments if item.node_id != target),
+        )
 
     def revoke(self, *, actor: RoleAssignment, target: NodeId) -> RoleState:
         self._assert_control(actor)

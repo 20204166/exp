@@ -8,6 +8,7 @@ from maintenance.components.cluster_roles import (
     ClusterRole,
     CoordinatorEpoch,
     RoleAssignment,
+    RoleState,
 )
 from maintenance.components.cluster_storage import (
     CoordinatorTimeline,
@@ -79,8 +80,11 @@ class ClusterFailoverTests(unittest.TestCase):
             now=99.0,
         )
 
+        assert renewed.coordinator_epoch is not None
         self.assertEqual(renewed.coordinator_epoch.lease_expires_at, 219.0)
-        self.assertEqual(self.store.load().coordinator_epoch.issued_at, 99.0)
+        reloaded_epoch = self.store.load().coordinator_epoch
+        assert reloaded_epoch is not None
+        self.assertEqual(reloaded_epoch.issued_at, 99.0)
 
     def test_stale_heartbeat_epoch_is_rejected(self) -> None:
         state = self.state()
@@ -95,6 +99,7 @@ class ClusterFailoverTests(unittest.TestCase):
                 role_state=state,
             )
         )
+        assert state.coordinator_epoch is not None
         self.assertEqual(state.coordinator_epoch.epoch, 7)
 
     def test_subcoordinator_promotes_once_and_persists_new_epoch(self) -> None:
@@ -107,8 +112,31 @@ class ClusterFailoverTests(unittest.TestCase):
         assert decision is not None
         self.assertEqual(decision.epoch.epoch, 8)
         self.assertIn(ClusterRole.COORDINATOR, state.local_assignment.roles)
-        self.assertEqual(self.store.load().coordinator_epoch.epoch, 8)
+        reloaded_epoch = self.store.load().coordinator_epoch
+        assert reloaded_epoch is not None
+        self.assertEqual(reloaded_epoch.epoch, 8)
         self.assertIsNone(self.manager.promote_if_due(state, now=221.0))
+
+    def test_promote_if_due_accepts_bare_role_state_without_persisting(self) -> None:
+        # promote_if_due's dual-mode input (a bare RoleState, used for pure
+        # computation without a ClusterStore) must short-circuit before the
+        # dataclasses.replace(state, role_assignments=..., ...) call further
+        # down, since RoleState's fields are named assignments/epoch, not
+        # role_assignments/coordinator_epoch -- calling replace() on a real
+        # RoleState with those keywords raises TypeError.
+        role_state = RoleState(
+            assignments=(
+                RoleAssignment(frozenset({ClusterRole.COORDINATOR}), NodeId("coord")),
+                RoleAssignment(frozenset({ClusterRole.SUBCOORDINATOR}), NodeId("sub")),
+            ),
+            epoch=CoordinatorEpoch(7, NodeId("coord"), "old", 0.0, 100.0),
+        )
+
+        decision = self.manager.promote_if_due(role_state, now=220.1)
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision.epoch.epoch, 8)
 
     def test_promotion_imports_only_the_valid_standby_epoch(self) -> None:
         state = self.state()
