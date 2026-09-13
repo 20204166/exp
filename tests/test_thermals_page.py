@@ -6,9 +6,10 @@ from unittest.mock import Mock
 
 from maintenance.components.temperature import TemperaturePolicy, TemperatureTelemetry
 from maintenance.models import CapabilityState
-from maintenance.ui.thermals_page import ThermalsPage
+from maintenance.ui.thermals_page import ThermalsPage, ThermalsPageCallbacks
 from tests.support.models import make_summary
 from tests.support.temperature import make_temperature_sample
+from tests.support.widget_recording import WidgetRecorder
 
 
 def _telemetry(*components: str) -> TemperatureTelemetry:
@@ -163,6 +164,47 @@ class ThermalsPageStateTests(unittest.TestCase):
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].peak_celsius, 55.0)
+
+
+def _thermals_page_kwargs(recorder: WidgetRecorder) -> dict[str, Any]:
+    """ThermalsPage reuses one frame/label class for both plain and styled
+    widgets, unlike the settings-style pages -- it takes five injectable
+    classes, not WidgetRecorder.page_kwargs()'s seven."""
+
+    return {
+        "frame_cls": recorder.frame_cls(),
+        "label_cls": recorder.label_cls(),
+        "button_cls": recorder.button_cls(),
+        "canvas_cls": recorder.canvas_cls(),
+        "scrollbar_cls": recorder.scrollbar_cls(),
+    }
+
+
+class ThermalsPageLearnMoreLinkTests(unittest.TestCase):
+    def test_learn_more_button_absent_by_default(self) -> None:
+        recorder = WidgetRecorder()
+        page = ThermalsPage(
+            recorder.parent(),
+            callbacks=ThermalsPageCallbacks(on_back=Mock()),
+            **_thermals_page_kwargs(recorder),
+        )
+
+        self.assertFalse(hasattr(page, "learn_more_button"))
+
+    def test_learn_more_button_invokes_callback_when_provided(self) -> None:
+        recorder = WidgetRecorder()
+        on_learn_more = Mock()
+        _page = ThermalsPage(
+            recorder.parent(),
+            callbacks=ThermalsPageCallbacks(
+                on_back=Mock(), on_learn_more=on_learn_more
+            ),
+            **_thermals_page_kwargs(recorder),
+        )
+
+        recorder.button_with_text("Why isn't a sensor available?").kwargs["command"]()
+
+        on_learn_more.assert_called_once_with()
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from typing import Any, cast
 from maintenance import __version__
 from maintenance.ui import cluster_page as ui_cluster
 from maintenance.ui import diagnostics_page as ui_diagnostics
+from maintenance.ui import help_page as ui_help
 from maintenance.ui import nodes_connections as ui_nodes
 from maintenance.ui import preferences_page as ui_preferences
 from maintenance.ui import render_coordinator as ui_render
@@ -67,6 +68,30 @@ def build_preferences(controller: Any, parent: Any) -> Any:
     return controller.preferences_frame
 
 
+def build_help(controller: Any, parent: Any) -> Any:
+    controller.help_frame = controller.ttk.Frame(
+        parent,
+        padding=(ui_styles.SPACING["page_x"], ui_styles.SPACING["page_y"]),
+        style="App.TFrame",
+    )
+    controller.help_page = ui_help.HelpPage(
+        controller.help_frame,
+        callbacks=ui_help.HelpPageCallbacks(on_back=controller._show_settings_page),
+        button_coordinator=controller._button_coordinator,
+    )
+    return controller.help_frame
+
+
+def show_help(controller: Any, topic_key: str | None = None) -> None:
+    page = getattr(controller, "help_page", None)
+    if page is not None:
+        if topic_key is not None:
+            page.open_topic(topic_key)
+        else:
+            page.show_topics()
+    show_page(controller, "help", "help_page")
+
+
 def build_diagnostics(controller: Any, parent: Any) -> Any:
     controller.diagnostics_frame = controller.ttk.Frame(
         parent,
@@ -96,6 +121,7 @@ def build_thermals(controller: Any, parent: Any) -> Any:
         controller.thermals_frame,
         callbacks=ui_thermals.ThermalsPageCallbacks(
             on_back=controller._show_dashboard_page,
+            on_learn_more=lambda: controller._show_help_page("thermals"),
         ),
         colors=controller.colors,
     )
@@ -129,6 +155,7 @@ def build_nodes(controller: Any, parent: Any) -> Any:
             on_resume=controller._resume_node,
             on_remove_connection=controller._remove_connection_node,
             on_remove_job=controller._remove_job_node,
+            on_learn_pairing=lambda: controller._show_help_page("pairing-trust"),
         ),
         discovery_enabled=controller._cluster_state.discovery_enabled,
         discovered=controller._nodes_peer_specs(),
@@ -169,6 +196,7 @@ def select_settings_category(controller: Any, key: str) -> None:
         "nodes": controller._show_nodes_page,
         "cluster": controller._show_cluster_page,
         "diagnostics": controller._show_diagnostics_page,
+        "help": controller._show_help_page,
     }.get(key)
     if handler is not None:
         handler()

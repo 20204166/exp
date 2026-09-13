@@ -26,6 +26,7 @@ class ThermalsPageCallbacks:
     """Controller actions exposed by the page."""
 
     on_back: Callable[[], None]
+    on_learn_more: Callable[[], None] | None = None
 
 
 class ThermalsPage:
@@ -95,6 +96,15 @@ class ThermalsPage:
             pady=(0, 14),
             style="Description.TLabel",
         )
+        if self.callbacks.on_learn_more is not None:
+            self.learn_more_button = self.button_cls(
+                self.content,
+                text="Why isn't a sensor available?",
+                command=self.callbacks.on_learn_more,
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+                cursor="hand2",
+            )
+            self.learn_more_button.pack(anchor="w", pady=(0, 14))
 
     def focus_back(self) -> None:
         self.back_button.focus_set()

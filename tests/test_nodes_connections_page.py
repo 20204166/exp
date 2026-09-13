@@ -2,6 +2,7 @@
 
 import tkinter as tk
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
@@ -176,6 +177,21 @@ class NodesConnectionsPageTests(unittest.TestCase):
         recorder.button_with_text("Start Discovery").kwargs["command"]()
 
         callbacks.on_start_discovery.assert_called_once_with()
+
+    def test_learn_pairing_button_absent_by_default(self) -> None:
+        _page, _parent, recorder = make_page()
+
+        self.assertNotIn(
+            "Learn about pairing & trust", recorder.label_texts(("button",))
+        )
+
+    def test_learn_pairing_button_invokes_callback_when_provided(self) -> None:
+        callbacks = replace(make_callbacks(), on_learn_pairing=Mock())
+        _page, _parent, recorder = make_page(callbacks)
+
+        recorder.button_with_text("Learn about pairing & trust").kwargs["command"]()
+
+        callbacks.on_learn_pairing.assert_called_once_with()
 
     def test_stable_actions_are_registered_and_cleared_by_prefix(self) -> None:
         coordinator = ButtonCoordinator()

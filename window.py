@@ -124,6 +124,7 @@ NODES_PAGE = "nodes"
 CLUSTER_PAGE = "cluster"
 THERMALS_PAGE = "thermals"
 DIAGNOSTICS_PAGE = "diagnostics"
+HELP_PAGE = "help"
 
 
 class AppWindow:
@@ -298,6 +299,7 @@ class AppWindow:
         self._page_router.register(
             PageSpec(DIAGNOSTICS_PAGE, self._build_diagnostics_page)
         )
+        self._page_router.register(PageSpec(HELP_PAGE, self._build_help_page))
         self._page_router.show(DASHBOARD_PAGE)
         self._sync_render_visibility(DASHBOARD_PAGE)
         self._reconcile_cards_and_polling()
@@ -351,6 +353,13 @@ class AppWindow:
 
     def _show_diagnostics_page(self) -> None:
         ui_window_pages.show_page(self, DIAGNOSTICS_PAGE, "diagnostics_page")
+
+    def _build_help_page(self, parent: Any) -> Any:
+        self.ttk = ttk
+        return ui_window_pages.build_help(self, parent)
+
+    def _show_help_page(self, topic_key: str | None = None) -> None:
+        ui_window_pages.show_help(self, topic_key)
 
     def _show_dashboard_page(self) -> None:
         ui_window_pages.show_dashboard(self)

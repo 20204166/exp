@@ -1313,6 +1313,36 @@ class SettingsIntegrationTests(unittest.TestCase):
         window.settings_home.focus_back.assert_called_once()
         window._page_router.show.assert_called_with("settings")
 
+    def test_settings_category_dispatch_opens_help(self) -> None:
+        window = AppWindowTests.make_window()
+        window._page_router = Mock()
+
+        window._on_select_settings_category("help")
+
+        window._page_router.show.assert_called_with("help")
+
+    def test_help_back_returns_to_settings(self) -> None:
+        window = AppWindowTests.make_window()
+        window._page_router = Mock()
+        window.help_page = Mock()
+
+        window._show_help_page()
+
+        window.help_page.show_topics.assert_called_once_with()
+        window.help_page.focus_back.assert_called_once()
+        window._page_router.show.assert_called_with("help")
+
+    def test_help_page_opens_directly_to_a_topic(self) -> None:
+        window = AppWindowTests.make_window()
+        window._page_router = Mock()
+        window.help_page = Mock()
+
+        window._show_help_page("pairing-trust")
+
+        window.help_page.open_topic.assert_called_once_with("pairing-trust")
+        window.help_page.show_topics.assert_not_called()
+        window._page_router.show.assert_called_with("help")
+
     def test_reset_restores_defaults_after_confirmation(self) -> None:
         window = AppWindowTests.make_window()
         window.preferences_page = Mock()

@@ -46,6 +46,12 @@ def settings_categories(
             "Diagnostics",
             "See current work, recent failures, node reasons, and component health.",
         ),
+        ui_settings_home.SettingsCategorySpec(
+            "help",
+            "Help & Guide",
+            "How System Analyzer works: installing, dashboard, thermals, pairing, "
+            "clusters, and troubleshooting.",
+        ),
     ]
 
 

@@ -47,6 +47,7 @@ class NodesConnectionsCallbacks:
     on_remove_connection: Callable[[str], None] | None = None
     on_remove_job: Callable[[str], None] | None = None
     on_start_discovery: Callable[[], None] = lambda: None
+    on_learn_pairing: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +234,22 @@ class NodesConnectionsPage:
             self.start_discovery_button,
             True,
         )
+        on_learn_pairing = self.callbacks.on_learn_pairing
+        if on_learn_pairing is not None:
+            learn_pairing_button = self.button_cls(
+                body,
+                text="Learn about pairing & trust",
+                command=on_learn_pairing,
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+                cursor="hand2",
+            )
+            learn_pairing_button.pack(anchor="w", pady=(8, 0))
+            self._register_button(
+                "nodes:learn-pairing",
+                on_learn_pairing,
+                learn_pairing_button,
+                True,
+            )
 
     def _build_discovered_section(self) -> None:
         _, body = ui_layout.section_card(
