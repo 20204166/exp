@@ -14,6 +14,7 @@ from maintenance.models import (
     ResourceSummary,
     unavailable_summary,
 )
+from maintenance.preferences import AppPreferences
 from maintenance.ui import dashboard_page
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
@@ -24,6 +25,7 @@ from tests.support.window import make_window as make_bare_window
 
 def make_window() -> Any:
     return make_bare_window(
+        _preferences=AppPreferences.defaults(),
         analyze_button=RecordingControl(),
         cancel_button=RecordingControl(),
         status_label=RecordingControl(),
