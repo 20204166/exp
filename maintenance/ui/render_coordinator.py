@@ -9,9 +9,12 @@ can run.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+from maintenance.observability import EventKind, ObservabilityWatcher, Outcome
 
 LOGGER = logging.getLogger(__name__)
 
@@ -61,7 +64,7 @@ class UICoordinator:
     and committed once at the batch boundary.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, observer: ObservabilityWatcher | None = None) -> None:
         self._pending: dict[str, _PendingRender] = {}
         self._visible: dict[str, bool] = {}
         self._generations: dict[str, int] = {}
@@ -69,10 +72,32 @@ class UICoordinator:
         self._batch_depth = 0
         self._flushing = False
         self._closed = False
-        self.render_requests = 0
-        self.render_commits = 0
-        self.coalesced_requests = 0
-        self.stale_rejections = 0
+        self.pending_peak = 0
+        self.last_commit_seconds = 0.0
+        self._observer = observer or ObservabilityWatcher()
+
+    def _event_total(self, event: EventKind) -> int:
+        return self._observer.event_total("ui:render:", event)
+
+    @property
+    def render_requests(self) -> int:
+        return self._event_total("request")
+
+    @property
+    def render_commits(self) -> int:
+        return self._event_total("commit")
+
+    @property
+    def coalesced_requests(self) -> int:
+        return self._event_total("coalesced")
+
+    @property
+    def stale_rejections(self) -> int:
+        return self._event_total("stale")
+
+    @property
+    def render_failures(self) -> int:
+        return self._event_total("failure")
 
     @property
     def pending_count(self) -> int:
@@ -154,18 +179,19 @@ class UICoordinator:
         apply: Callable[[RenderIntent], None],
     ) -> bool:
         if self._closed:
+            self._record_event(intent.target, "rejected")
             return False
 
         current = self._generations.get(intent.target, 0)
         if intent.generation < current:
-            self.stale_rejections += 1
+            self._record_event(intent.target, "stale")
             return False
         if intent.generation > current:
             self._generations[intent.target] = intent.generation
 
         owner = self._target_nodes.get(intent.target)
         if owner is not None and intent.node_id is not None and owner != intent.node_id:
-            self.stale_rejections += 1
+            self._record_event(intent.target, "stale")
             return False
         if intent.node_id is not None and owner is None:
             self._target_nodes[intent.target] = intent.node_id
@@ -184,12 +210,13 @@ class UICoordinator:
                     apply=apply,
                 )
             else:
-                self.coalesced_requests += 1
+                self._record_event(intent.target, "coalesced")
                 self._pending[intent.target] = _PendingRender(
                     intent=pending.intent.merge(intent),
                     apply=apply,
                 )
-        self.render_requests += 1
+        self._record_event(intent.target, "request")
+        self.pending_peak = max(self.pending_peak, len(self._pending))
 
         if (
             self._batch_depth == 0
@@ -232,7 +259,7 @@ class UICoordinator:
             return False
         current = self._generations.get(target, 0)
         if pending.intent.generation < current:
-            self.stale_rejections += 1
+            self._record_event(target, "stale")
             del self._pending[target]
             return False
         owner = self._target_nodes.get(target)
@@ -241,16 +268,41 @@ class UICoordinator:
             and pending.intent.node_id is not None
             and owner != pending.intent.node_id
         ):
-            self.stale_rejections += 1
+            self._record_event(target, "stale")
             del self._pending[target]
             return False
         if not self._visible.get(target, True):
             return False
 
         del self._pending[target]
+        token = (
+            self._observer.begin(f"ui:render:{target}")
+            if self._observer is not None
+            else None
+        )
+        started = time.perf_counter()
+        outcome: Outcome = "success"
+        detail: str | None = None
         try:
             pending.apply(pending.intent)
         except Exception as error:  # noqa: BLE001 - dead widgets must not break later renders.
+            outcome = "failure"
+            detail = type(error).__name__
+            self._record_event(target, "failure")
             LOGGER.warning("Render commit for %s failed: %s", target, error)
-        self.render_commits += 1
+        finally:
+            self.last_commit_seconds = time.perf_counter() - started
+            if token is not None:
+                observer = self._observer
+                assert observer is not None
+                observer.finish(
+                    token,
+                    outcome=outcome,
+                    duration_seconds=self.last_commit_seconds,
+                    detail=detail,
+                )
+        self._record_event(target, "commit")
         return True
+
+    def _record_event(self, target: str, event: EventKind) -> None:
+        self._observer.record_event(f"ui:render:{target}", event)

@@ -1,11 +1,40 @@
 """Focused tests for the UI presentation coordinator."""
 
 import unittest
+from threading import current_thread
 
+from maintenance.observability import ObservabilityWatcher
 from maintenance.ui.render_coordinator import RenderIntent, UICoordinator
 
 
 class UICoordinatorTests(unittest.TestCase):
+    def test_render_commits_are_recorded_by_shared_observer(self) -> None:
+        observer = ObservabilityWatcher()
+        coordinator = UICoordinator(observer=observer)
+
+        self.assertTrue(coordinator.request(RenderIntent("dashboard"), lambda _: None))
+
+        metric = observer.snapshot().metrics[0]
+        self.assertEqual(metric.target, "ui:render:dashboard")
+        self.assertEqual(metric.count, 1)
+        self.assertEqual(metric.successes, 1)
+
+    def test_render_coalescing_stale_and_rejected_events_are_observed(self) -> None:
+        observer = ObservabilityWatcher()
+        coordinator = UICoordinator(observer=observer)
+        coordinator.begin_batch()
+        coordinator.request(RenderIntent("dashboard"), lambda _: None)
+        coordinator.request(RenderIntent("dashboard"), lambda _: None)
+        coordinator.end_batch()
+        coordinator.request(RenderIntent("dashboard", generation=-1), lambda _: None)
+        coordinator.shutdown()
+        coordinator.request(RenderIntent("dashboard"), lambda _: None)
+
+        metric = observer.snapshot().metrics[0]
+        self.assertEqual(metric.coalesced, 1)
+        self.assertEqual(metric.stale, 1)
+        self.assertEqual(metric.rejected, 1)
+
     def test_batched_requests_coalesce_latest_payload_and_fields(self) -> None:
         coordinator = UICoordinator()
         received: list[RenderIntent] = []
@@ -221,6 +250,57 @@ class UICoordinatorTests(unittest.TestCase):
 
         self.assertTrue(accepted)
         self.assertEqual(received, ["new"])
+
+    def test_render_metrics_capture_pending_peak_and_commit_duration(self) -> None:
+        coordinator = UICoordinator()
+
+        coordinator.begin_batch()
+        coordinator.request(
+            RenderIntent(target="dashboard", payload="latest", payload_set=True),
+            lambda _intent: None,
+        )
+        coordinator.end_batch()
+
+        self.assertEqual(coordinator.pending_peak, 1)
+        self.assertGreaterEqual(coordinator.last_commit_seconds, 0.0)
+
+    def test_render_metrics_count_failed_commits(self) -> None:
+        coordinator = UICoordinator()
+
+        coordinator.request(
+            RenderIntent(target="dashboard", payload_set=True),
+            lambda _intent: (_ for _ in ()).throw(RuntimeError("widget gone")),
+        )
+
+        self.assertEqual(coordinator.render_failures, 1)
+
+    def test_render_commits_run_on_the_requesting_ui_thread(self) -> None:
+        coordinator = UICoordinator()
+        committed_on = []
+
+        coordinator.request(
+            RenderIntent(target="dashboard", payload_set=True),
+            lambda _intent: committed_on.append(current_thread()),
+        )
+
+        self.assertEqual(committed_on, [current_thread()])
+
+    def test_flush_commits_higher_priority_targets_first(self) -> None:
+        coordinator = UICoordinator()
+        committed: list[str] = []
+
+        coordinator.begin_batch()
+        coordinator.request(
+            RenderIntent(target="dashboard", priority=1),
+            lambda _intent: committed.append("dashboard"),
+        )
+        coordinator.request(
+            RenderIntent(target="scan-status", priority=2),
+            lambda _intent: committed.append("scan-status"),
+        )
+        coordinator.end_batch()
+
+        self.assertEqual(committed, ["scan-status", "dashboard"])
 
 
 if __name__ == "__main__":

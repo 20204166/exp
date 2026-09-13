@@ -9,7 +9,9 @@ from maintenance.ui.window_supports.timer_delivery import TimerDelivery
 
 
 class BackgroundOrchestratorTests(unittest.TestCase):
-    def make_orchestrator(self) -> tuple[BackgroundOrchestrator, dict[str, Any]]:
+    def make_orchestrator(
+        self, *, max_drain_items: int | None = None
+    ) -> tuple[BackgroundOrchestrator, dict[str, Any]]:
         state: dict[str, Any] = {
             "closing": False,
             "poll_id": None,
@@ -40,6 +42,7 @@ class BackgroundOrchestratorTests(unittest.TestCase):
             invoke_delivered=lambda callback: TimerDelivery.invoke(callback, Mock()),
             poll_milliseconds=10,
             logger=Mock(),
+            max_drain_items=max_drain_items,
         )
         state["scheduled"] = scheduled
         state["render"] = render
@@ -101,6 +104,35 @@ class BackgroundOrchestratorTests(unittest.TestCase):
 
         self.assertEqual(state["tasks"], 0)
         self.assertEqual(orchestrator._queue.qsize(), 0)
+
+    def test_drain_yields_after_item_budget_and_keeps_polling(self) -> None:
+        orchestrator, state = self.make_orchestrator(max_drain_items=2)
+        callbacks = [Mock() for _ in range(3)]
+        for callback in callbacks:
+            orchestrator._queue.put((callback, ()))
+
+        orchestrator.drain_queue()
+
+        callbacks[0].assert_called_once_with()
+        callbacks[1].assert_called_once_with()
+        callbacks[2].assert_not_called()
+        self.assertEqual(orchestrator._queue.qsize(), 1)
+        self.assertEqual(
+            cast(list[tuple[int, object]], state["scheduled"]),
+            [(10, orchestrator.drain_queue)],
+        )
+
+    def test_progress_submission_keeps_only_newest_callback_per_key(self) -> None:
+        orchestrator, _state = self.make_orchestrator()
+        first = Mock()
+        newest = Mock()
+        orchestrator.submit_progress("scan", first)
+        orchestrator.submit_progress("scan", newest)
+
+        orchestrator.drain_queue()
+
+        first.assert_not_called()
+        newest.assert_called_once_with()
 
 
 if __name__ == "__main__":

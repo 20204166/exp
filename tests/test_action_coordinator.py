@@ -4,11 +4,31 @@ import tkinter as tk
 import unittest
 from unittest.mock import Mock
 
+from maintenance.observability import ObservabilityWatcher
 from maintenance.ui.action_coordinator import ButtonCoordinator
 from tests.support.widget_recording import RecordingWidget
 
 
 class ButtonCoordinatorTests(unittest.TestCase):
+    def test_dispatch_is_recorded_by_shared_observer(self) -> None:
+        observer = ObservabilityWatcher()
+        coordinator = ButtonCoordinator(observer=observer)
+        coordinator.register("save", lambda: None)
+
+        self.assertTrue(coordinator.dispatch("save"))
+        metric = observer.snapshot().metrics[0]
+        self.assertEqual(metric.target, "ui:action:save")
+        self.assertEqual(metric.successes, 1)
+
+    def test_disabled_dispatch_is_observed_as_rejected(self) -> None:
+        observer = ObservabilityWatcher()
+        coordinator = ButtonCoordinator(observer=observer)
+        coordinator.register("save", lambda: None, enabled=False)
+
+        self.assertFalse(coordinator.dispatch("save"))
+        metric = observer.snapshot().metrics[0]
+        self.assertEqual(metric.rejected, 1)
+
     def test_replacement_prunes_widget_that_fails_state_update(self) -> None:
         coordinator = ButtonCoordinator()
         widget = Mock()

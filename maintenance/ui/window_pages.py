@@ -129,6 +129,7 @@ def build_diagnostics(controller: Any, parent: Any) -> Any:
         callbacks=ui_diagnostics.DiagnosticsPageCallbacks(
             on_back=controller._show_settings_page,
             on_copy=controller._copy_diagnostics,
+            on_save_capture=controller._save_performance_capture,
         ),
         snapshot=controller._diagnostics_snapshot(),
         button_coordinator=controller._button_coordinator,

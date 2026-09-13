@@ -10,9 +10,12 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
+
+from maintenance.observability import ObservabilityWatcher, ObservationToken
 
 from .placement import (
     PlacementDecision,
@@ -22,6 +25,13 @@ from .placement import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+class CachePolicy(Enum):
+    """Explicit cache behavior for one coordinated operation."""
+
+    NONE = "none"
+    STALE_WHILE_REFRESH = "stale_while_refresh"
 
 
 def _make_monotonic_clock(clock: Callable[[], float]) -> Callable[[], float]:
@@ -88,6 +98,7 @@ class ComponentRefreshScheduler:
         intervals: dict[str, int] | None = None,
         *,
         clock: Callable[[], float] | None = None,
+        observer: ObservabilityWatcher | None = None,
     ) -> None:
         configured_intervals = (
             dict(intervals) if intervals is not None else RefreshIntervals().as_dict()
@@ -97,6 +108,7 @@ class ComponentRefreshScheduler:
                 raise ValueError("Interval must be positive")
         self.intervals = configured_intervals
         self._clock = _make_monotonic_clock(clock or time.monotonic)
+        self._observer = observer or ObservabilityWatcher()
         self._records = {
             key: _RefreshEntry(interval=milliseconds / 1000.0)
             for key, milliseconds in self.intervals.items()
@@ -108,6 +120,8 @@ class ComponentRefreshScheduler:
             entry = _RefreshEntry(interval=5.0)
             self._records[key] = entry
         if entry.in_flight or entry.paused:
+            if entry.in_flight:
+                self._observer.record_event(f"component:{key}", "coalesced")
             return False
         if not self._is_due(entry, now):
             return False
@@ -240,12 +254,16 @@ class ScanCoordinator:
     active: bool = False
     generation: int = 0
     rerun_requested: bool = False
+    observer: ObservabilityWatcher = field(
+        default_factory=ObservabilityWatcher, repr=False
+    )
 
     def begin(self) -> tuple[int, bool]:
         """Start a scan or mark that one should run again after completion."""
 
         if self.active:
             self.rerun_requested = True
+            self.observer.record_event("app:dashboard-scan", "coalesced")
             return self.generation, False
 
         self.active = True
@@ -256,6 +274,7 @@ class ScanCoordinator:
         """Finish the active generation and report whether a rerun is queued."""
 
         if generation != self.generation:
+            self.observer.record_event("app:dashboard-scan", "stale")
             return False, False
 
         return True, self._reset_state_and_return_rerun()
@@ -288,6 +307,7 @@ class AppRunState:
     rerun_requested: bool = False
     cancelled: bool = False
     cancel_event: threading.Event | None = None
+    future: Future[Any] | None = None
     last_result: Any | None = None
     subscribers: list[Callable[[str, Any | None], None]] | None = field(default=None)
     on_result: Callable[[str, Any], None] | None = None
@@ -334,20 +354,29 @@ class AppCoordinator:
     def __init__(
         self,
         *,
-        runner: Callable[[Callable[[], None]], None] | None = None,
+        runner: Callable[[Callable[[], None]], Any] | None = None,
         deliver: Callable[[Callable[[], None]], None] | None = None,
         on_activity: Callable[[], None] | None = None,
+        deliver_progress: Callable[[str, Callable[[], None]], None] | None = None,
+        max_workers: int = 8,
         placement_policy: PlacementPolicy | None = None,
+        observer: ObservabilityWatcher | None = None,
     ) -> None:
+        if max_workers <= 0:
+            raise ValueError("max_workers must be positive")
         self._executor = (
-            None if runner is not None else ThreadPoolExecutor(max_workers=4)
+            None if runner is not None else ThreadPoolExecutor(max_workers=max_workers)
         )
         self._runner = runner or self._submit_default
         self._deliver = deliver or (lambda callback: callback())
         self._on_activity = on_activity
+        self._deliver_progress = deliver_progress or (
+            lambda _key, callback: self._deliver(callback)
+        )
         self._placement_policy = (
             PlacementPolicy() if placement_policy is None else placement_policy
         )
+        self._observer = observer
         self._states: dict[str, AppRunState] = {}
         self._coalesced_generations: dict[str, int] = {}
         self._coalesced_callbacks: dict[str, Callable[[], None]] = {}
@@ -366,10 +395,10 @@ class AppCoordinator:
 
         return self._placement_policy.choose(request, views)
 
-    def _submit_default(self, worker: Callable[[], None]) -> None:
+    def _submit_default(self, worker: Callable[[], None]) -> Future[Any]:
         if self._executor is None:
             raise RuntimeError("default worker executor is unavailable")
-        self._executor.submit(worker)
+        return self._executor.submit(worker)
 
     def state(self, key: str) -> AppRunState:
         return self._states.setdefault(key, AppRunState())
@@ -419,6 +448,7 @@ class AppCoordinator:
         on_error: Callable[[str, str], None] | None = None,
         on_progress: Callable[[str, str], None] | None = None,
         on_finished: Callable[[], None] | None = None,
+        cache_policy: CachePolicy = CachePolicy.NONE,
     ) -> int | None:
         """Run one background operation under the shared key.
 
@@ -431,6 +461,7 @@ class AppCoordinator:
         state = self.state(key)
         if state.in_flight:
             state.rerun_requested = True
+            self._record_observer_event(key, "coalesced")
             if on_result is not None:
                 state.on_result = on_result
             if on_error is not None:
@@ -448,34 +479,60 @@ class AppCoordinator:
             state.on_progress = on_progress
         state.on_finished = on_finished
         state.task_factory = task_factory
+        if cache_policy is CachePolicy.STALE_WHILE_REFRESH:
+            cached = state.last_result
+            if cached is not None and on_result is not None:
+                self.record_cache_hit(key)
+                self._deliver(lambda: self._safe_invoke(on_result, key, cached))
         return self._start_run(key, state)
 
     def _start_run(self, key: str, state: AppRunState) -> int:
         generation = self._claim_run(state)
         cancel_event = state.cancel_event
         task_factory = state.task_factory
+        token: ObservationToken | None = (
+            self._observer.begin(f"app:{key}") if self._observer is not None else None
+        )
+        observer = self._observer
 
         def emit_progress(message: str) -> None:
-            self._deliver(lambda: self._invoke_progress(key, generation, message))
+            self._deliver_progress(
+                key, lambda: self._invoke_progress(key, generation, message)
+            )
 
         def worker() -> None:
             try:
                 result = task_factory(cancel_event, emit_progress)  # type: ignore[misc]
             except Exception as error:  # noqa: BLE001 - failures reach the UI thread.
                 message = str(error)
+                if token is not None and observer is not None:
+                    observer.finish(
+                        token, outcome="failure", detail=type(error).__name__
+                    )
                 self._deliver(
                     lambda: self._complete_run(key, generation, error=message)
                 )
             else:
+                if token is not None and observer is not None:
+                    observer.finish(
+                        token,
+                        outcome="cancelled"
+                        if cancel_event is not None and cancel_event.is_set()
+                        else "success",
+                    )
                 self._deliver(
                     lambda: self._complete_run(key, generation, result=result)
                 )
 
         self._note_activity()
         try:
-            self._runner(worker)
+            submitted = self._runner(worker)
+            if isinstance(submitted, Future):
+                state.future = submitted
         except RuntimeError as error:
             message = str(error)
+            if token is not None and observer is not None:
+                observer.finish(token, outcome="failure", detail=type(error).__name__)
             LOGGER.warning("Could not start operation %r: %s", key, message)
             self._deliver(lambda: self._complete_run(key, generation, error=message))
         return generation
@@ -483,6 +540,10 @@ class AppCoordinator:
     def _note_activity(self) -> None:
         if self._on_activity is not None:
             self._on_activity()
+
+    def _record_observer_event(self, key: str, event: str) -> None:
+        if self._observer is not None:
+            self._observer.record_event(f"app:{key}", event)  # type: ignore[arg-type]
 
     def _invoke_progress(self, key: str, generation: int, message: str) -> None:
         state = self._states.get(key)
@@ -500,6 +561,7 @@ class AppCoordinator:
 
         state.in_flight = False
         state.cancel_event = None
+        state.future = None
         rerun_requested = state.rerun_requested
         state.rerun_requested = False
         return rerun_requested
@@ -514,6 +576,7 @@ class AppCoordinator:
     ) -> None:
         state = self._states.get(key)
         if state is None or generation != state.generation or not state.in_flight:
+            self._record_observer_event(key, "stale")
             return
         rerun_requested = self._settle_run(state)
         if state.cancelled:
@@ -626,6 +689,15 @@ class AppCoordinator:
         state.rerun_requested = False
         if state.cancel_event is not None:
             state.cancel_event.set()
+        if state.future is not None:
+            cancelled_before_start = state.future.cancel()
+            state.future = None
+            if cancelled_before_start:
+                self._deliver(
+                    lambda: self._complete_run(
+                        key, state.generation, error=cancellation_message
+                    )
+                )
         # Waking waiters is idempotent (subscribers are cleared on the first
         # wake), but the owner must be told about the cancellation exactly
         # once even if cancel() is called repeatedly.
@@ -663,6 +735,11 @@ class AppCoordinator:
     def last_result(self, key: str) -> Any | None:
         state = self._states.get(key)
         return state.last_result if state is not None else None
+
+    def record_cache_hit(self, key: str) -> None:
+        """Record a caller-served cached read without changing coordinator state."""
+
+        self._record_observer_event(key, "cache_hit")
 
     def store(self, key: str, result: Any) -> None:
         """Cache one result for instant retrieval without a run lifecycle."""

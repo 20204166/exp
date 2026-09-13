@@ -4,6 +4,8 @@ import threading
 import time
 import tkinter as tk
 from collections.abc import Callable
+from datetime import datetime, timezone
+from pathlib import Path
 from queue import Queue
 from tkinter import messagebox, simpledialog, ttk
 from typing import Any
@@ -50,7 +52,11 @@ from maintenance.components.temperature import (
     TemperatureRenderState,
     TemperatureTelemetryUpdate,
 )
-from maintenance.diagnostics import ClusterDiagnostic, build_diagnostics_snapshot
+from maintenance.diagnostics import (
+    ClusterDiagnostic,
+    build_diagnostics_snapshot,
+    serialize_diagnostics,
+)
 from maintenance.dialogs import (
     InfoDialog,  # noqa: F401 - retained dialog patch seam
     ProcessDialog,  # noqa: F401 - retained dialog patch seam
@@ -78,6 +84,8 @@ from maintenance.nodes import (
     node_identity_fingerprint,  # noqa: F401 - retained discovery patch seam
     node_operation_key,  # noqa: F401 - retained dialog patch seam
 )
+from maintenance.observability import ObservabilityWatcher
+from maintenance.persistence import atomic_write_text
 from maintenance.preferences import (
     AppPreferences,
     PreferencesSaveError,  # noqa: F401 - retained preference patch seam
@@ -118,6 +126,9 @@ from maintenance.ui.navigation import PageRouter, PageSpec
 from maintenance.ui.window_supports.timer_delivery import TimerDelivery
 
 LOGGER = logging.getLogger(__name__)
+PERFORMANCE_CAPTURE_DIRECTORY = (
+    Path(__file__).resolve().parent / "docs" / "performance" / "observability"
+)
 
 DASHBOARD_PAGE = "dashboard"
 SETTINGS_PAGE = "settings"
@@ -205,7 +216,8 @@ class AppWindow:
         self._pending_after_ids: set[str] = set()
         self._background_poll_id: str | None = None
         self._background_tasks = 0
-        self._scan_coordinator = ScanCoordinator()
+        self._observer = ObservabilityWatcher()
+        self._scan_coordinator = ScanCoordinator(observer=self._observer)
         self._analysis_cancel_event: threading.Event | None = None
         self._scan_timeout_id: str | None = None
         self._lease_grace_id: str | None = None
@@ -214,13 +226,15 @@ class AppWindow:
         self._background_queue: Queue[BackgroundItem] = Queue()
         self._coordinator = AppCoordinator(
             deliver=self._submit_ui,
+            deliver_progress=self._submit_latest_progress,
             on_activity=self._start_background_poll,
+            observer=self._observer,
         )
         self._component_scheduler = ComponentRefreshScheduler(
-            self._preferences.refresh_intervals.as_dict()
+            self._preferences.refresh_intervals.as_dict(), observer=self._observer
         )
-        self._button_coordinator = ButtonCoordinator()
-        self._ui_coordinator = ui_render.UICoordinator()
+        self._button_coordinator = ButtonCoordinator(observer=self._observer)
+        self._ui_coordinator = ui_render.UICoordinator(observer=self._observer)
         self._background_orchestrator = self._make_background_orchestrator()
         self._feature_catalog = ResourceFeatureCatalog()
         self._component_poll_id: str | None = None
@@ -289,7 +303,7 @@ class AppWindow:
         ui_node_runtime.schedule_selected_node_scan(self)
 
     def _build_window(self) -> None:
-        self._page_router = PageRouter(self.master)
+        self._page_router = PageRouter(self.master, coordinator=self._coordinator)
         self._page_router.register(PageSpec(DASHBOARD_PAGE, self._build_dashboard_page))
         self._page_router.register(
             PageSpec(SETTINGS_PAGE, self._build_settings_home_page)
@@ -409,6 +423,7 @@ class AppWindow:
                 self._coordinator.discovery, "unavailable_reason", None
             ),
             cluster=self._cluster_diagnostic(),
+            observer=self._observer,
         )
 
     def _cluster_diagnostic(self) -> ClusterDiagnostic:
@@ -447,6 +462,27 @@ class AppWindow:
     def _copy_diagnostics(self, text: str) -> None:
         self.master.clipboard_clear()
         self.master.clipboard_append(text)
+
+    def _save_performance_capture(self) -> str | None:
+        """Persist one explicit, bounded observer capture under the repo root."""
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        path = PERFORMANCE_CAPTURE_DIRECTORY / f"observability-{timestamp}.json"
+        try:
+            atomic_write_text(
+                path,
+                serialize_diagnostics(self._diagnostics_snapshot()),
+                temp_prefix=".observability-",
+                create_directory_message="Could not create capture directory",
+                save_message="Could not write performance capture",
+                save_error_factory=OSError,
+                fsync_warning_template="Could not sync performance capture directory: %s",
+                logger=LOGGER,
+            )
+        except OSError as error:
+            LOGGER.warning("Could not save performance capture: %s", error)
+            return None
+        return str(path)
 
     def _set_diagnostics_visibility(self, visible: bool) -> None:
         if not visible:
@@ -759,6 +795,9 @@ class AppWindow:
 
         ui_window_lifecycle.submit_ui(self, callback)
 
+    def _submit_latest_progress(self, key: str, callback: Callable[[], None]) -> None:
+        self._background_orchestrator.submit_progress(key, callback)
+
     def _start_background_poll(self) -> None:
         ui_window_lifecycle.start_background_poll(self)
 
@@ -836,6 +875,9 @@ class AppWindow:
 
     def _on_auto_hide_change(self, enabled: bool) -> None:
         ui_window_preferences.on_auto_hide_change(self, enabled)
+
+    def _on_full_system_scan_change(self, enabled: bool) -> None:
+        ui_window_preferences.on_full_system_scan_change(self, enabled)
 
     def _on_appearance_change(self, theme: str) -> None:
         ui_window_preferences.on_appearance_change(self, theme)

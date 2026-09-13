@@ -6,6 +6,7 @@ import time
 import tkinter as tk
 import unittest
 from collections.abc import Callable
+from concurrent.futures import Future
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import Any, Literal
@@ -37,6 +38,7 @@ from maintenance.components import (
 )
 from maintenance.components.coordinator import (
     AppCoordinator,
+    CachePolicy,
     ComponentRefreshScheduler,
     RefreshIntervals,
     _make_monotonic_clock,
@@ -50,6 +52,7 @@ from maintenance.components.scan_support import (
     stat_fingerprint,
 )
 from maintenance.nodes import NodeCapability, NodeId
+from maintenance.observability import ObservabilityWatcher
 from tests.support.scanner import make_scanner
 from tests.support.scheduling import DeferredRunner
 from tests.support.widget_recording import (
@@ -1302,6 +1305,128 @@ class SharedScanHelperTests(unittest.TestCase):
 
 
 class AppCoordinatorTests(unittest.TestCase):
+    def test_stale_while_refresh_serves_one_cached_result_then_refreshes(self) -> None:
+        runner = DeferredRunner()
+        received: list[str] = []
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        coordinator.store("read", "cached")
+
+        coordinator.run(
+            "read",
+            lambda _cancel, _progress: "fresh",
+            on_result=lambda _key, result: received.append(result),
+            cache_policy=CachePolicy.STALE_WHILE_REFRESH,
+        )
+        coordinator.run(
+            "read",
+            lambda _cancel, _progress: "ignored",
+            on_result=lambda _key, result: received.append(result),
+            cache_policy=CachePolicy.STALE_WHILE_REFRESH,
+        )
+
+        self.assertEqual(received, ["cached"])
+        self.assertEqual(len(runner.workers), 1)
+        runner.run_next()
+        self.assertEqual(received, ["cached", "fresh"])
+
+    def test_non_cacheable_operation_never_serves_cached_result(self) -> None:
+        runner = DeferredRunner()
+        received: list[str] = []
+        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        coordinator.store("action", "old")
+
+        coordinator.run(
+            "action",
+            lambda _cancel, _progress: "new",
+            on_result=lambda _key, result: received.append(result),
+            cache_policy=CachePolicy.NONE,
+        )
+
+        self.assertEqual(received, [])
+        runner.run_next()
+        self.assertEqual(received, ["new"])
+
+    def test_cancel_releases_a_run_when_executor_never_started_it(self) -> None:
+        future: Future[Any] = Future()
+
+        coordinator = AppCoordinator(
+            runner=lambda _worker: future,
+            deliver=lambda callback: callback(),
+        )
+        coordinator.run("queued", lambda _cancel, _progress: "result")
+
+        coordinator.cancel("queued")
+
+        self.assertFalse(coordinator.in_flight("queued"))
+        self.assertTrue(future.cancelled())
+
+    def test_progress_delivery_can_use_latest_wins_channel(self) -> None:
+        workers: list[Callable[[], None]] = []
+        delivered: list[tuple[str, Callable[[], None]]] = []
+        coordinator = AppCoordinator(
+            runner=workers.append,
+            deliver=lambda callback: callback(),
+            deliver_progress=lambda key, callback: delivered.append((key, callback)),
+        )
+
+        def task(_cancel: Any, progress: Callable[[str], None]) -> str:
+            progress("first")
+            return "done"
+
+        coordinator.run("scan", task)
+
+        workers[0]()
+
+        self.assertEqual([key for key, _callback in delivered], ["scan"])
+
+    def test_cache_hit_is_recorded_without_changing_cached_value(self) -> None:
+        observer = ObservabilityWatcher()
+        coordinator = AppCoordinator(observer=observer)
+        coordinator.store("read-only", "cached")
+
+        coordinator.record_cache_hit("read-only")
+
+        self.assertEqual(coordinator.last_result("read-only"), "cached")
+        self.assertEqual(observer.event_count("app:read-only", "cache_hit"), 1)
+
+    def test_operation_lifecycle_is_recorded_by_shared_observer(self) -> None:
+        workers: list[Callable[[], None]] = []
+        observer = ObservabilityWatcher()
+        coordinator = AppCoordinator(
+            runner=workers.append,
+            deliver=lambda callback: callback(),
+            observer=observer,
+        )
+
+        coordinator.run("scan", lambda _cancel, _progress: "result")
+        workers[0]()
+
+        metric = observer.snapshot().metrics[0]
+        self.assertEqual(metric.target, "app:scan")
+        self.assertEqual(metric.count, 1)
+        self.assertEqual(metric.successes, 1)
+
+    def test_coalesced_operation_is_observed(self) -> None:
+        workers: list[Callable[[], None]] = []
+        observer = ObservabilityWatcher()
+        coordinator = AppCoordinator(runner=workers.append, observer=observer)
+
+        coordinator.run("scan", lambda _cancel, _progress: "result")
+        self.assertIsNone(coordinator.run("scan", lambda _cancel, _progress: "rerun"))
+
+        metric = observer.snapshot().metrics[0]
+        self.assertEqual(metric.coalesced, 1)
+
+    def test_late_operation_completion_is_observed_as_stale(self) -> None:
+        observer = ObservabilityWatcher()
+        coordinator = AppCoordinator(observer=observer)
+        generation = coordinator.begin("scan")[0]
+
+        coordinator._complete_run("scan", generation + 1, result="late")
+
+        metric = observer.snapshot().metrics[0]
+        self.assertEqual(metric.stale, 1)
+
     def test_choose_placement_delegates_without_starting_or_mutating_a_run(
         self,
     ) -> None:

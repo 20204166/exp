@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import statistics
 import time
 import tracemalloc
 from collections.abc import Callable, Iterator, Mapping
@@ -10,6 +9,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 from maintenance.components.catalog import ResourceFeatureCatalog
+from maintenance.observability import (
+    summarize_samples as _summarize_observability_samples,
+)
 
 Evidence = Literal["native", "simulated", "unavailable"]
 MeasurementState = Literal["cold", "warm"]
@@ -120,38 +122,10 @@ def deterministic_coordination_metrics(
     )
 
 
-def _percentile(ordered: list[float], fraction: float) -> float:
-    if len(ordered) == 1:
-        return ordered[0]
-    position = (len(ordered) - 1) * fraction
-    lower = int(position)
-    upper = min(lower + 1, len(ordered) - 1)
-    weight = position - lower
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * weight
-
-
 def summarize_samples(samples: tuple[float, ...]) -> dict[str, float | int]:
     """Return robust distribution statistics for one measured sample set."""
 
-    if not samples:
-        raise ValueError("at least one sample is required")
-    ordered = sorted(samples)
-    lower = ordered[0]
-    upper = ordered[-1]
-    spread = upper - lower
-    p25 = _percentile(ordered, 0.25)
-    p75 = _percentile(ordered, 0.75)
-    outlier_ceiling = p75 + 1.5 * (p75 - p25)
-    return {
-        "minimum": lower,
-        "p25": p25,
-        "median": statistics.median(ordered),
-        "p75": p75,
-        "p95": _percentile(ordered, 0.95),
-        "maximum": upper,
-        "spread": spread,
-        "outliers": sum(value > outlier_ceiling for value in ordered),
-    }
+    return _summarize_observability_samples(samples)
 
 
 def interleave_modes(modes: tuple[str, ...], repetitions: int) -> Iterator[str]:

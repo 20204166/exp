@@ -13,6 +13,7 @@ def build_local_node_context(controller: Any) -> None:
         file_manager=controller.file_manager,
         scheduler=controller._component_scheduler,
         coordinator=controller._coordinator,
+        observer=getattr(controller, "_observer", None),
         snapshot=controller.snapshot,
         capabilities=controller._capabilities,
     )

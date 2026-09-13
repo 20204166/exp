@@ -20,6 +20,7 @@ from maintenance.ui.action_coordinator import ButtonCoordinator
 class DiagnosticsPageCallbacks:
     on_back: Callable[[], None]
     on_copy: Callable[[str], None]
+    on_save_capture: Callable[[], str | None] | None = None
 
 
 class DiagnosticsPage:
@@ -84,11 +85,33 @@ class DiagnosticsPage:
             style=ui_styles.STYLE_NEUTRAL_BUTTON,
         )
         self.copy_button.pack(anchor="e", pady=(0, 10))
+        self.save_capture_button = self.button_cls(
+            self.content,
+            text="Save performance capture",
+            command=self._save_capture,
+            style=ui_styles.STYLE_NEUTRAL_BUTTON,
+        )
+        self.save_capture_button.pack(anchor="e", pady=(0, 10))
+        self._capture_status = self.style_label_cls(
+            self.content,
+            text="Captures stay in memory until you save one.",
+            style="Description.TLabel",
+        )
+        self._capture_status.pack(anchor="e", pady=(0, 10))
         if self._button_coordinator is not None:
             self._button_coordinator.register(
                 "diagnostics:copy", self._copy, replace=True
             )
             self._button_coordinator.bind(self.copy_button, "diagnostics:copy")
+            if self.callbacks.on_save_capture is not None:
+                self._button_coordinator.register(
+                    "diagnostics:save_capture",
+                    self._save_capture,
+                    replace=True,
+                )
+                self._button_coordinator.bind(
+                    self.save_capture_button, "diagnostics:save_capture"
+                )
         self._pulse_body = self._section(self.content, "Live health pulse")
         self._summary_body = self._section(self.content, "Summary")
         self._components_body = self._section(self.content, "Components")
@@ -252,6 +275,24 @@ class DiagnosticsPage:
             [
                 ("Stale result rejections", str(snapshot.render.stale_rejections)),
                 ("Pending render targets", str(snapshot.render.pending)),
+                *(
+                    [
+                        (
+                            metric.target,
+                            (
+                                f"{metric.count} events · "
+                                f"p95 {metric.distribution.get('p95', 0.0):.3f}s · "
+                                f"coalesced {metric.coalesced} · "
+                                f"stale {metric.stale} · rejected {metric.rejected}"
+                            ),
+                        )
+                        for metric in (
+                            snapshot.observability.metrics
+                            if snapshot.observability is not None
+                            else ()
+                        )
+                    ]
+                ),
             ],
         )
 
@@ -355,6 +396,17 @@ class DiagnosticsPage:
 
     def _copy(self) -> None:
         self.callbacks.on_copy(serialize_diagnostics(self._snapshot))
+
+    def _save_capture(self) -> None:
+        callback = self.callbacks.on_save_capture
+        if callback is None:
+            return
+        path = callback()
+        self._capture_status.configure(
+            text=(
+                f"Saved: {path}" if path is not None else "Capture could not be saved"
+            )
+        )
 
     def focus_back(self) -> None:
         self.back_button.focus_set()

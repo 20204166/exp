@@ -15,9 +15,32 @@ from maintenance.diagnostics import (
     truncate_detail,
 )
 from maintenance.nodes import NodeId
+from maintenance.observability import ObservabilityWatcher
 
 
 class DiagnosticsSnapshotTests(unittest.TestCase):
+    def test_snapshot_includes_shared_observability(self) -> None:
+        observer = ObservabilityWatcher()
+        observer.record("app:scan", 0.25)
+
+        snapshot = build_diagnostics_snapshot(
+            scheduler=SimpleNamespace(intervals={}, diagnostic_state=lambda _key: ()),
+            coordinator=SimpleNamespace(diagnostic_states=lambda: ()),
+            registry=SimpleNamespace(contexts=lambda: ()),
+            ui_coordinator=SimpleNamespace(
+                pending_count=0,
+                render_requests=0,
+                render_commits=0,
+                coalesced_requests=0,
+                stale_rejections=0,
+            ),
+            observer=observer,
+        )
+
+        self.assertIsNotNone(snapshot.observability)
+        assert snapshot.observability is not None
+        self.assertEqual(snapshot.observability.metrics[0].target, "app:scan")
+
     def test_cluster_diagnostic_does_not_claim_physical_storage_accounting(
         self,
     ) -> None:

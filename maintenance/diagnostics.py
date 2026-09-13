@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any
 
 from maintenance.components.placement import PlacementDecision
+from maintenance.observability import ObservabilitySnapshot, ObservabilityWatcher
 
 MAX_DETAIL_LENGTH = 160
 
@@ -127,6 +128,7 @@ class DiagnosticsSnapshot:
     most_recent_failure: str | None = None
     placement: PlacementDiagnostic | None = None
     cluster: ClusterDiagnostic | None = None
+    observability: ObservabilitySnapshot | None = None
 
 
 def _component_state(in_flight: bool, paused: bool, error: Any) -> str:
@@ -147,6 +149,7 @@ def build_diagnostics_snapshot(
     discovery_reason: str | None = None,
     placement: PlacementDecision | None = None,
     cluster: ClusterDiagnostic | None = None,
+    observer: ObservabilityWatcher | None = None,
 ) -> DiagnosticsSnapshot:
     component_rows: list[ComponentDiagnostic] = []
     for key in scheduler.intervals:
@@ -230,6 +233,7 @@ def build_diagnostics_snapshot(
         most_recent_failure=truncate_detail(failures[-1] if failures else None),
         placement=placement_diagnostic,
         cluster=cluster,
+        observability=observer.snapshot() if observer is not None else None,
     )
 
 

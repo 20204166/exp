@@ -108,6 +108,7 @@ class PerformanceAuditModelTests(unittest.TestCase):
         self.assertEqual(summary["p25"], 2.0)
         self.assertEqual(summary["p75"], 4.0)
         self.assertAlmostEqual(summary["p95"], 80.8)
+        self.assertAlmostEqual(summary["p99"], 96.16)
         self.assertEqual(summary["outliers"], 1)
 
     def test_interleave_modes_alternates_baseline_and_candidate(self) -> None:

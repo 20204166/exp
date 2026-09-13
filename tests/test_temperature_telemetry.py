@@ -17,6 +17,7 @@ from maintenance.components.temperature import (
     temperature_sample_to_dict,
 )
 from maintenance.models import CapabilityState
+from maintenance.observability import ObservabilityWatcher
 from tests.support.models import make_summary
 from tests.support.temperature import FIXED_TEMPERATURE_AT, make_temperature_sample
 
@@ -37,6 +38,16 @@ def _summary_with_temp(value_celsius: float, monotonic: float):
 
 
 class TemperatureTelemetryTests(unittest.TestCase):
+    def test_summary_recording_is_observed(self) -> None:
+        observer = ObservabilityWatcher()
+        telemetry = TemperatureTelemetry(observer=observer)
+
+        telemetry.record_summary("cpu", _summary_with_temp(50.0, 10.0))
+
+        metric = observer.snapshot().metrics[0]
+        self.assertEqual(metric.target, "thermal:cpu")
+        self.assertEqual(metric.successes, 1)
+
     def test_temperature_value_uses_finite_local_range(self) -> None:
         from maintenance.components.temperature import is_valid_temperature_value
 

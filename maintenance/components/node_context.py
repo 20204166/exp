@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 from maintenance.cluster import ClusterState
+from maintenance.components.temperature import TemperatureTelemetry
 from maintenance.nodes import (
     LOCAL_NODE_ID,
     NodeContext,
@@ -20,6 +21,7 @@ from maintenance.nodes import (
     local_node_descriptor,
     node_identity_fingerprint,
 )
+from maintenance.observability import ObservabilityWatcher
 
 
 def build_local_node_context(
@@ -32,6 +34,7 @@ def build_local_node_context(
     coordinator: Any,
     snapshot: Any | None,
     capabilities: dict[str, Any],
+    observer: ObservabilityWatcher | None = None,
     hostname: str | None = None,
     platform_name: str | None = None,
     stable_node_id: Callable[[], str] = generate_stable_node_id,
@@ -68,6 +71,7 @@ def build_local_node_context(
         file_manager=file_manager,
         scheduler=scheduler,
         coordinator=coordinator,
+        telemetry=TemperatureTelemetry(observer=observer),
         snapshot=snapshot,
         capabilities=capabilities,
     )

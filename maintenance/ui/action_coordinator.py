@@ -12,6 +12,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from maintenance.observability import ObservabilityWatcher
+
 
 @dataclass(slots=True)
 class _ActionRecord:
@@ -23,8 +25,9 @@ class _ActionRecord:
 class ButtonCoordinator:
     """Register stable action IDs and keep bound widgets in sync."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, observer: ObservabilityWatcher | None = None) -> None:
         self._actions: dict[str, _ActionRecord] = {}
+        self._observer = observer
 
     def register(
         self,
@@ -76,8 +79,27 @@ class ButtonCoordinator:
     def dispatch(self, action_id: str) -> bool:
         record = self._actions.get(action_id)
         if record is None or not record.enabled:
+            if self._observer is not None:
+                self._observer.record_event(
+                    f"ui:action:{action_id}",
+                    "rejected",  # type: ignore[arg-type]
+                )
             return False
-        record.callback()
+        token = (
+            self._observer.begin(f"ui:action:{action_id}")
+            if self._observer is not None
+            else None
+        )
+        observer = self._observer
+        try:
+            record.callback()
+        except Exception as error:
+            if token is not None and observer is not None:
+                observer.finish(token, outcome="failure", detail=type(error).__name__)
+            raise
+        else:
+            if token is not None and observer is not None:
+                observer.finish(token)
         return True
 
     def set_enabled(self, action_id: str, enabled: bool) -> None:

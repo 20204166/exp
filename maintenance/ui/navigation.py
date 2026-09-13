@@ -18,6 +18,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from maintenance.components.coordinator import CachePolicy
+
 PageBuilder = Callable[[Any], Any]
 
 
@@ -43,7 +45,9 @@ class PageRouter:
         self._host = host
         self._coordinator = coordinator
         self._pages: dict[str, Any] = {}
-        self._loaders: dict[str, tuple[Callable[[], Any], Callable[[Any], None]]] = {}
+        self._loaders: dict[
+            str, tuple[Callable[[], Any], Callable[[Any], None], CachePolicy]
+        ] = {}
         self._active_key: str | None = None
 
     @property
@@ -79,6 +83,8 @@ class PageRouter:
         key: str,
         loader: Callable[[], Any],
         on_result: Callable[[Any], None],
+        *,
+        cache_policy: CachePolicy = CachePolicy.STALE_WHILE_REFRESH,
     ) -> None:
         """Attach a heavy-data loader to one page.
 
@@ -89,7 +95,7 @@ class PageRouter:
 
         if key not in self._pages:
             raise KeyError(f"Unknown page: {key}")
-        self._loaders[key] = (loader, on_result)
+        self._loaders[key] = (loader, on_result, cache_policy)
 
     def refresh(self, key: str) -> int | None:
         """Redraw a page from its cached data and re-run it in the background.
@@ -104,10 +110,7 @@ class PageRouter:
         entry = self._loaders.get(key)
         if entry is None or self._coordinator is None:
             return None
-        loader, on_result = entry
-        cached = self._coordinator.last_result(key)
-        if cached is not None:
-            on_result(cached)
+        loader, on_result, cache_policy = entry
 
         def task_factory(
             _cancel_event: Any,
@@ -119,6 +122,7 @@ class PageRouter:
             key,
             task_factory,
             on_result=lambda _key, result: on_result(result),
+            cache_policy=cache_policy,
         )
 
     def show(self, key: str) -> Any:

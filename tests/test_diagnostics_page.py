@@ -98,6 +98,37 @@ class DiagnosticsPageTests(unittest.TestCase):
         self.assertIn("No remote nodes configured", texts)
         self.assertIn("No placement decision yet", texts)
 
+    def test_save_capture_action_is_visible(self) -> None:
+        _page, _callbacks, _copy_callback, recorder = self.make_page()
+
+        self.assertIn(
+            "Save performance capture",
+            {widget.kwargs.get("text") for widget in recorder.widgets("button")},
+        )
+
+    def test_save_capture_action_invokes_callback(self) -> None:
+        recorder = WidgetRecorder()
+        save_callback = Mock(return_value="docs/performance/capture.json")
+        page = DiagnosticsPage(
+            recorder.parent(),
+            callbacks=DiagnosticsPageCallbacks(
+                on_back=Mock(), on_copy=Mock(), on_save_capture=save_callback
+            ),
+            snapshot=empty_snapshot(),
+            **recorder.page_kwargs(),
+        )
+
+        page._save_capture()
+
+        save_callback.assert_called_once_with()
+        self.assertTrue(
+            any(
+                label_options(widget).get("text")
+                == "Saved: docs/performance/capture.json"
+                for widget in recorder.widgets("style_label")
+            )
+        )
+
     def test_placement_row_is_visible(self) -> None:
         page, _callbacks, _copy_callback, recorder = self.make_page()
         page.render(

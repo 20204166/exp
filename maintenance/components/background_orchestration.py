@@ -62,6 +62,7 @@ class BackgroundOrchestrator:
         invoke_delivered: Callable[[Callable[[], None]], None],
         poll_milliseconds: int,
         logger: logging.Logger,
+        max_drain_items: int | None = 256,
     ) -> None:
         self._queue = queue
         self._is_closing = is_closing
@@ -78,6 +79,10 @@ class BackgroundOrchestrator:
         self._invoke_delivered = invoke_delivered
         self._poll_milliseconds = poll_milliseconds
         self._logger = logger
+        self._max_drain_items = max_drain_items
+        self._progress_lock = threading.Lock()
+        self._latest_progress: dict[str, Callable[[], None]] = {}
+        self._queued_progress: set[str] = set()
 
     def run_daemon(
         self,
@@ -130,6 +135,15 @@ class BackgroundOrchestrator:
     def submit_ui(self, callback: Callable[[], None]) -> None:
         self._queue.put(("ui", callback))
 
+    def submit_progress(self, key: str, callback: Callable[[], None]) -> None:
+        """Queue only the newest progress callback for one operation."""
+        with self._progress_lock:
+            self._latest_progress[key] = callback
+            if key not in self._queued_progress:
+                self._queued_progress.add(key)
+                self._queue.put(("progress", key))
+        self.start_poll()
+
     def start_poll(self) -> None:
         if threading.current_thread() is not threading.main_thread():
             return
@@ -143,12 +157,19 @@ class BackgroundOrchestrator:
         coordinator = self._get_render_coordinator()
         if coordinator is not None:
             coordinator.begin_batch()
+        processed = 0
         try:
             while True:
+                if (
+                    self._max_drain_items is not None
+                    and processed >= self._max_drain_items
+                ):
+                    break
                 try:
                     item = self._queue.get_nowait()
                 except Empty:
                     break
+                processed += 1
 
                 if item is None:
                     self._set_task_count(max(0, self._get_task_count() - 1))
@@ -164,6 +185,15 @@ class BackgroundOrchestrator:
                         self._invoke_delivered(cast(Callable[[], None], item[1]))
                     continue
 
+                if isinstance(item, tuple) and len(item) == 2 and item[0] == "progress":
+                    key = cast(str, item[1])
+                    with self._progress_lock:
+                        self._queued_progress.discard(key)
+                        callback = self._latest_progress.pop(key, None)
+                    if callback is not None and not self._is_closing():
+                        self._invoke_delivered(callback)
+                    continue
+
                 callback, args = cast(
                     tuple[Callable[..., None], tuple[object, ...]], item
                 )
@@ -176,7 +206,8 @@ class BackgroundOrchestrator:
                 coordinator.end_batch()
 
         if not self._is_closing() and (
-            self._get_task_count() > 0
+            not self._queue.empty()
+            or self._get_task_count() > 0
             or self._has_pending_coordinator_work()
             or self._has_discovery_tick()
         ):

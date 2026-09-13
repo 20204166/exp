@@ -191,9 +191,13 @@ class PageRouterLoaderTests(unittest.TestCase):
 
     def test_refresh_shows_cached_result_instantly_then_reloads(self) -> None:
         from maintenance.components.coordinator import AppCoordinator
+        from maintenance.observability import ObservabilityWatcher
 
         runner = DeferredRunner()
-        coordinator = AppCoordinator(runner=runner, deliver=lambda callback: callback())
+        observer = ObservabilityWatcher()
+        coordinator = AppCoordinator(
+            runner=runner, deliver=lambda callback: callback(), observer=observer
+        )
         coordinator.store("data", "cached")
         router, _page = self._router(coordinator)
         received: list[str] = []
@@ -206,6 +210,7 @@ class PageRouterLoaderTests(unittest.TestCase):
         runner.run_next()
         self.assertEqual(received, ["cached", "fresh"])
         self.assertEqual(coordinator.last_result("data"), "fresh")
+        self.assertEqual(observer.event_count("app:data", "cache_hit"), 1)
 
     def test_refresh_coalesces_repeated_triggers(self) -> None:
         from maintenance.components.coordinator import AppCoordinator
@@ -225,6 +230,22 @@ class PageRouterLoaderTests(unittest.TestCase):
         runner.run_next()
         runner.run_next()
         self.assertEqual(received, ["fresh", "fresh"])
+
+    def test_loader_delegates_cache_policy_to_coordinator(self) -> None:
+        from maintenance.components.coordinator import CachePolicy
+
+        coordinator = Mock()
+        coordinator.run.return_value = 1
+        router, _page = self._router(coordinator)
+        router.register_loader("data", lambda: "fresh", lambda _result: None)
+
+        router.refresh("data")
+
+        coordinator.last_result.assert_not_called()
+        self.assertIs(
+            coordinator.run.call_args.kwargs["cache_policy"],
+            CachePolicy.STALE_WHILE_REFRESH,
+        )
 
     def test_register_loader_rejects_unknown_page(self) -> None:
         from maintenance.ui.navigation import PageRouter

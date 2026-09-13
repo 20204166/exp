@@ -7,3 +7,5 @@ zeroconf>=0.131
 ruff==0.16.6
 pyright==1.1.411
 mypy==2.3.1
+pyautogui==0.9.54
+Pillow==12.3.0

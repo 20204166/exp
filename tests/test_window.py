@@ -2,6 +2,8 @@ import threading
 import time
 import tkinter as tk
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import Mock, patch
 
@@ -61,6 +63,20 @@ class AppWindowTests(unittest.TestCase):
         window.refreshed_label.config.assert_called_once_with(
             text="Last refreshed: 03:42:52"
         )
+
+    def test_save_performance_capture_writes_json_to_configured_directory(self) -> None:
+        window = self.make_window()
+        window._diagnostics_snapshot = Mock(return_value=object())
+        with (
+            TemporaryDirectory() as directory,
+            patch("window.PERFORMANCE_CAPTURE_DIRECTORY", Path(directory)),
+            patch("window.serialize_diagnostics", return_value='{"ok": true}'),
+        ):
+            result = window._save_performance_capture()
+            self.assertIsNotNone(result)
+            path = Path(result or "")
+            self.assertTrue(path.is_file())
+            self.assertEqual(path.read_text(encoding="utf-8"), '{"ok": true}')
 
     def test_background_queue_delivers_payload_on_main_thread_poll(self) -> None:
         window = self.make_window()

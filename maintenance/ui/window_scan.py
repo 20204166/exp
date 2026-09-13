@@ -94,7 +94,9 @@ def handle_analyze(controller: Any) -> None:
         resolved_node_snapshot: NodeSnapshot | None = None
 
         def report_progress(message: str) -> None:
-            controller._submit_ui(lambda: apply_progress(message))
+            controller._submit_latest_progress(
+                "dashboard-scan", lambda: apply_progress(message)
+            )
 
         def apply_progress(message: str) -> None:
             if generation <= controller._resolved_scan_generation:

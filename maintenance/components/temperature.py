@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Any, ClassVar, TypeGuard
 
 from maintenance.models import CapabilityState, ResourceSummary
+from maintenance.observability import ObservabilityWatcher
 
 _DETAIL_TEMPERATURE_PATTERN = re.compile(r"(\d+(?:\.\d+)?)°C")
 
@@ -194,16 +195,42 @@ class TemperatureTelemetry:
         ),
     }
 
-    def __init__(self, *, policies: dict[str, TemperaturePolicy] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        policies: dict[str, TemperaturePolicy] | None = None,
+        observer: ObservabilityWatcher | None = None,
+    ) -> None:
         self._policies = dict(self.DEFAULT_POLICIES)
         if policies is not None:
             self._policies.update(policies)
         self._components: dict[str, _ComponentTelemetry] = {}
+        self._observer = observer
 
     def policy_for(self, component: str) -> TemperaturePolicy:
         return self._policies.get(component, TemperaturePolicy())
 
     def record_summary(
+        self, component: str, summary: ResourceSummary
+    ) -> TemperatureTelemetryUpdate:
+        token = (
+            self._observer.begin(f"thermal:{component.casefold()}")
+            if self._observer is not None
+            else None
+        )
+        observer = self._observer
+        try:
+            result = self._record_summary(component, summary)
+        except Exception as error:
+            if token is not None and observer is not None:
+                observer.finish(token, outcome="failure", detail=type(error).__name__)
+            raise
+        else:
+            if token is not None and observer is not None:
+                observer.finish(token)
+            return result
+
+    def _record_summary(
         self, component: str, summary: ResourceSummary
     ) -> TemperatureTelemetryUpdate:
         component = component.casefold()
