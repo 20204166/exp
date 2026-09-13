@@ -22,11 +22,33 @@ fix it:
 4. (Behavioural, real Tk) A fully constructed ``AppWindow`` actually
    registers every expected page with the page router and every expected
    button with the button coordinator -- the end-to-end version of 1-2.
+5. The scan-backed dialogs (``ProcessDialog``, ``StorageDialog``) accept and
+   are actually passed the shared ``AppCoordinator`` -- the same #1/#2 check,
+   applied to the one other ownership boundary in the app (background scan
+   work), not just pages and buttons.
 
 Adding a new page means adding one entry to ``_PAGE_REGISTRY`` below.
 ``dashboard_page.py`` is deliberately out of scope: it is a function-based
 card builder, not a reusable Page class with the callbacks/colors/fonts
 constructor shape every other page shares.
+
+Ownership summary this file enforces end to end:
+- **UICoordinator** (``maintenance/ui/render_coordinator.py``) owns page/
+  component *visibility* -- checked by ``ScannerCatalogWiringTests`` and
+  ``LiveWindowWiringTests.test_every_catalog_component_is_visible_on_the_dashboard``.
+- **ButtonCoordinator** (``maintenance/ui/action_coordinator.py``) owns every
+  button's stable action id, except each page's own page-level back button
+  (an established, verified exception -- see ``_PAGE_REGISTRY``'s
+  ``reason_if_not`` entries) -- checked by
+  ``PageButtonCoordinatorWiringTests`` and
+  ``LiveWindowWiringTests.test_every_expected_button_action_is_registered``.
+- **AppCoordinator** (``maintenance/components/coordinator.py``) owns
+  coalesced/cached/cancellable background work -- component scans, page data
+  loads, and the two scan-backed dialogs -- and delivers every result back
+  onto the UI thread -- checked by ``DialogAppCoordinatorWiringTests``.
+  (``BackgroundTaskRunner``/``run_in_thread`` in ``maintenance/dialogs.py``
+  is a deliberately separate mechanism for one-shot cancellable dialog
+  actions such as delete/kill, not a bypass of this boundary.)
 """
 
 from __future__ import annotations
@@ -41,9 +63,11 @@ from pathlib import Path
 from typing import Any
 
 from maintenance.components.catalog import ResourceFeatureCatalog
+from maintenance.dialogs import ProcessDialog, StorageDialog
 from maintenance.scanner import SystemScanner
 from maintenance.ui import window_lifecycle as ui_window_lifecycle
 from maintenance.ui import window_pages as ui_window_pages
+from maintenance.ui import window_presentation as ui_window_presentation
 from maintenance.ui.cluster_page import ClusterPage
 from maintenance.ui.diagnostics_page import DiagnosticsPage
 from maintenance.ui.help_page import HelpPage, HelpTopicPage
@@ -189,6 +213,68 @@ class PageStyleFallbackTests(unittest.TestCase):
                     f"{entry.name} ({entry.page_class.__name__}.__init__) "
                     "does not reference ui_styles.FONTS -- its fonts are "
                     "disconnected from the shared theme system."
+                )
+        self.assertEqual(failures, [], "\n".join(failures))
+
+
+@dataclass(frozen=True, slots=True)
+class _DialogWiring:
+    name: str
+    dialog_class: type
+    opener: Any
+
+
+_DIALOG_REGISTRY: tuple[_DialogWiring, ...] = (
+    _DialogWiring(
+        "Process dialog", ProcessDialog, ui_window_presentation.open_resource
+    ),
+    _DialogWiring(
+        "Storage dialog", StorageDialog, ui_window_presentation.open_resource
+    ),
+)
+
+
+class DialogAppCoordinatorWiringTests(unittest.TestCase):
+    """AppCoordinator is the shared shock-absorber for scan-backed dialogs.
+
+    ``ProcessDialog``/``StorageDialog`` run coalesced, cached, cancellable
+    scans through the app's one ``AppCoordinator`` -- the same instance the
+    dashboard and pages use. Dropping ``coordinator=controller._coordinator``
+    at the call site does not raise: the dialog silently falls back to a
+    private ``_standalone_coordinator`` (see ``maintenance/dialogs.py``), so
+    it still opens and still works, just decoupled from the app's shared
+    cache/coalescing/cancel state -- a regression invisible without a
+    dedicated check, same failure shape as the ButtonCoordinator gap this
+    file was created to catch.
+    """
+
+    def test_expected_dialogs_accept_coordinator(self) -> None:
+        failures = []
+        for entry in _DIALOG_REGISTRY:
+            params = inspect.signature(entry.dialog_class).parameters
+            if "coordinator" not in params:
+                failures.append(
+                    f"{entry.name} ({entry.dialog_class.__module__}."
+                    f"{entry.dialog_class.__name__}) does not accept a "
+                    "coordinator parameter -- add "
+                    "`coordinator: AppCoordinator | None = None` to its "
+                    "__init__ and store it as self.coordinator."
+                )
+        self.assertEqual(failures, [], "\n".join(failures))
+
+    def test_expected_dialogs_are_actually_passed_a_coordinator(self) -> None:
+        failures = []
+        for entry in _DIALOG_REGISTRY:
+            if not _constructor_call_passes_keyword(
+                entry.opener, entry.dialog_class.__name__, "coordinator"
+            ):
+                failures.append(
+                    f"{entry.name}: {entry.opener.__name__}() in "
+                    "maintenance/ui/window_presentation.py constructs "
+                    f"{entry.dialog_class.__name__}(...) without passing "
+                    "coordinator=controller._coordinator -- add that "
+                    "keyword argument to the call, or the dialog silently "
+                    "falls back to a private, disconnected AppCoordinator."
                 )
         self.assertEqual(failures, [], "\n".join(failures))
 
