@@ -28,6 +28,7 @@ from maintenance.components import (
     ScanCoordinator,
     check_cancelled,
     gpu_unavailable_message,
+    local_scan_anchor,
     normalize_username,
     protected_process_pids,
     require_psutil,
@@ -117,6 +118,32 @@ class DownloadsPathResolverTests(unittest.TestCase):
     def test_path_exists_is_fail_safe_when_exists_raises(self) -> None:
         with patch.object(Path, "exists", side_effect=OSError("boom")):
             self.assertTrue(DownloadsPathResolver._path_exists(Path("broken")))
+
+
+class LocalScanAnchorTests(unittest.TestCase):
+    def test_non_windows_anchor_is_the_filesystem_root(self) -> None:
+        self.assertEqual(
+            local_scan_anchor(system=lambda: "Linux", environment={}),
+            Path("/"),
+        )
+        self.assertEqual(
+            local_scan_anchor(system=lambda: "Darwin", environment={}),
+            Path("/"),
+        )
+
+    def test_windows_anchor_uses_the_system_drive(self) -> None:
+        self.assertEqual(
+            local_scan_anchor(
+                system=lambda: "Windows", environment={"SystemDrive": "D:"}
+            ),
+            Path("D:\\"),
+        )
+
+    def test_windows_anchor_falls_back_to_c_drive(self) -> None:
+        self.assertEqual(
+            local_scan_anchor(system=lambda: "Windows", environment={}),
+            Path("C:\\"),
+        )
 
 
 class DownloadScannerTests(unittest.TestCase):

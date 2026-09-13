@@ -158,6 +158,20 @@ class StorageEdgeCaseTests(unittest.TestCase):
             for candidate in candidates:
                 self.assertNotIn("Verified duplicate", candidate.reason)
 
+    def test_explicit_scan_root_still_rejects_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "real.bin"
+            target.write_bytes(b"content")
+            (root / "link.bin").symlink_to(target)
+            scanner = DownloadScanner(root / "unused-downloads")
+            scanner.LARGE_FILE_BYTES = 1
+            scanner.DUPLICATE_MIN_BYTES = 1
+
+            candidates = scanner.scan_downloads(scan_root=root)
+
+            self.assertEqual([candidate.path for candidate in candidates], [target])
+
     def test_cancelled_scan_raises_scan_cancelled(self) -> None:
         import threading
 
@@ -169,6 +183,43 @@ class StorageEdgeCaseTests(unittest.TestCase):
 
             with self.assertRaises(ScanCancelled):
                 DownloadScanner(root).scan_downloads(cancel_event=cancel_event)
+
+
+class FullSystemScanCleanupBoundaryTests(unittest.TestCase):
+    """The opt-in full-system scan only ever broadens what is *reviewed*.
+
+    Cleanup stays scoped to the existing FileManager.allowed_root (Downloads
+    by default): a candidate the broad scan discovers outside that root is
+    review-only and must be rejected here, never moved.
+    """
+
+    def test_candidates_outside_downloads_are_review_only(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as downloads_dir,
+            tempfile.TemporaryDirectory() as broad_dir,
+        ):
+            downloads = Path(downloads_dir)
+            broad_root = Path(broad_dir)
+            inside = downloads / "inside.bin"
+            outside = broad_root / "outside.bin"
+            inside.write_bytes(b"content")
+            outside.write_bytes(b"content")
+
+            scanner = DownloadScanner(downloads)
+            scanner.LARGE_FILE_BYTES = 1
+            candidates = scanner.scan_downloads(scan_root=broad_root)
+            self.assertEqual({candidate.path for candidate in candidates}, {outside})
+
+            manager = FileManager(downloads)
+            moved: list[str] = []
+            with patch("maintenance.actions.send2trash", moved.append):
+                result = manager.move_to_trash(
+                    [candidate.path for candidate in candidates]
+                )
+
+            self.assertEqual(result.moved, ())
+            self.assertEqual(moved, [])
+            self.assertEqual(len(result.errors), 1)
 
 
 class DuplicateExactCountTests(unittest.TestCase):

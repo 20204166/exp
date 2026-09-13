@@ -41,6 +41,7 @@ from .downloads import (
     DownloadScanner,
     DownloadsPathResolver,
     HashFingerprint,
+    local_scan_anchor,
 )
 from .gpu import GPU_INFORMATION_UNAVAILABLE, GpuDetector, gpu_unavailable_message
 from .network_discovery import (
@@ -149,6 +150,7 @@ __all__ = [
     "TemperatureTelemetry",
     "check_cancelled",
     "gpu_unavailable_message",
+    "local_scan_anchor",
     "normalize_username",
     "placement_view_for_context",
     "protected_process_pids",

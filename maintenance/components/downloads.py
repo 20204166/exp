@@ -51,6 +51,26 @@ _WINDOWS_DOWNLOADS_GUID = _WindowsGuid(
 )
 
 
+def local_scan_anchor(
+    *,
+    system: Callable[[], str] = lambda: platform.system(),
+    environment: Mapping[str, str] | None = None,
+) -> Path:
+    """Return the local filesystem anchor for an opt-in broad storage scan.
+
+    Windows resolves to the system drive root (``%SystemDrive%``, falling
+    back to ``C:\\``); every other platform resolves to ``/``. This is the
+    scan *root* only - it carries no cleanup authority, which stays with
+    ``FileManager.allowed_root``.
+    """
+
+    if system() == "Windows":
+        env = environment or os.environ
+        drive = env.get("SystemDrive", "C:")
+        return Path(f"{drive}\\")
+    return Path("/")
+
+
 class DownloadsPathResolver:
     """Resolve the Downloads root.
 
