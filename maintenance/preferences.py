@@ -93,6 +93,7 @@ class AppPreferences:
     visible_cards: frozenset[str]
     hide_unavailable_cards: bool
     appearance: str = DEFAULT_APPEARANCE
+    full_system_scan_enabled: bool = False
 
     @classmethod
     def defaults(cls) -> "AppPreferences":
@@ -102,6 +103,7 @@ class AppPreferences:
             visible_cards=frozenset(_CARD_KEYS),
             hide_unavailable_cards=False,
             appearance=DEFAULT_APPEARANCE,
+            full_system_scan_enabled=False,
         )
 
     def with_appearance(self, theme: str) -> "AppPreferences":
@@ -148,6 +150,17 @@ class AppPreferences:
         if not isinstance(enabled, bool):
             raise TypeError("hide_unavailable_cards must be a boolean")
         return replace(self, hide_unavailable_cards=enabled)
+
+    def with_full_system_scan_enabled(self, enabled: bool) -> "AppPreferences":
+        """Return a copy with the opt-in full-system storage scan changed.
+
+        Disabled by default: Storage Cleanup reviews only Downloads unless a
+        user explicitly turns this on.
+        """
+
+        if not isinstance(enabled, bool):
+            raise TypeError("full_system_scan_enabled must be a boolean")
+        return replace(self, full_system_scan_enabled=enabled)
 
 
 def default_preferences_path(
@@ -292,6 +305,13 @@ class PreferencesStore:
             LOGGER.warning("Preferences hide flag is malformed; using defaults")
             return AppPreferences.defaults()
 
+        full_system_scan_data = data.get("full_system_scan_enabled", False)
+        if not isinstance(full_system_scan_data, bool):
+            LOGGER.warning(
+                "Preferences full-system scan flag is malformed; using defaults"
+            )
+            return AppPreferences.defaults()
+
         appearance = data.get("appearance", DEFAULT_APPEARANCE)
         if not isinstance(appearance, str) or appearance not in ACCENT_THEMES:
             LOGGER.warning("Preferences appearance is invalid; using default theme")
@@ -302,6 +322,7 @@ class PreferencesStore:
             visible_cards=frozenset(visible_data),
             hide_unavailable_cards=hide_data,
             appearance=appearance,
+            full_system_scan_enabled=full_system_scan_data,
         )
 
     @staticmethod
@@ -312,5 +333,6 @@ class PreferencesStore:
             "visible_cards": sorted(preferences.visible_cards),
             "hide_unavailable_cards": preferences.hide_unavailable_cards,
             "appearance": preferences.appearance,
+            "full_system_scan_enabled": preferences.full_system_scan_enabled,
         }
         return json.dumps(payload, indent=2, sort_keys=True) + "\n"

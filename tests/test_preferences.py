@@ -353,5 +353,62 @@ class AppearancePreferenceTests(unittest.TestCase):
             self.assertEqual(store.load().appearance, "indigo")
 
 
+class FullSystemScanPreferenceTests(unittest.TestCase):
+    def test_defaults_disable_full_system_scan(self) -> None:
+        self.assertFalse(AppPreferences.defaults().full_system_scan_enabled)
+
+    def test_with_full_system_scan_enabled_toggles_flag(self) -> None:
+        preferences = AppPreferences.defaults()
+        enabled = preferences.with_full_system_scan_enabled(True)
+        self.assertTrue(enabled.full_system_scan_enabled)
+        self.assertFalse(preferences.full_system_scan_enabled)
+        self.assertFalse(
+            enabled.with_full_system_scan_enabled(False).full_system_scan_enabled
+        )
+
+    def test_with_full_system_scan_enabled_rejects_non_boolean(self) -> None:
+        with self.assertRaises(TypeError):
+            AppPreferences.defaults().with_full_system_scan_enabled("yes")  # type: ignore[arg-type]
+
+    def test_full_system_scan_preference_persists_through_store(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences.json"
+            store = PreferencesStore(path)
+            saved = store.load().with_full_system_scan_enabled(True)
+            store.save(saved)
+            self.assertTrue(PreferencesStore(path).load().full_system_scan_enabled)
+
+    def test_load_missing_full_system_scan_field_defaults_to_disabled(self) -> None:
+        """A schema-version-1 document written before this field existed."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences.json"
+            legacy_payload = {
+                "schema_version": 1,
+                "refresh_intervals_ms": RefreshIntervals().as_dict(),
+                "visible_cards": list(RefreshIntervals().as_dict()),
+                "hide_unavailable_cards": False,
+            }
+            path.write_text(json.dumps(legacy_payload))
+            loaded = PreferencesStore(path).load()
+            self.assertFalse(loaded.full_system_scan_enabled)
+
+    def test_load_malformed_full_system_scan_field_returns_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preferences.json"
+            payload = {
+                "schema_version": 1,
+                "refresh_intervals_ms": RefreshIntervals().as_dict(),
+                "visible_cards": list(RefreshIntervals().as_dict()),
+                "hide_unavailable_cards": False,
+                "full_system_scan_enabled": "yes",
+            }
+            path.write_text(json.dumps(payload))
+            self.assertEqual(
+                PreferencesStore(path).load(),
+                AppPreferences.defaults(),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
