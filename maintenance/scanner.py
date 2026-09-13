@@ -415,10 +415,12 @@ class SystemScanner(
         self,
         progress_callback: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
+        scan_root: Path | None = None,
     ) -> list[FileCandidate]:
         return self._sync_download_scanner().scan_downloads(
             progress_callback=progress_callback,
             cancel_event=cancel_event,
+            scan_root=scan_root,
         )
 
     def _download_file_stats(

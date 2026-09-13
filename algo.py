@@ -1,5 +1,6 @@
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from maintenance.components.scan_support import call_cancellable
@@ -95,11 +96,18 @@ class Analyzer:
         self,
         progress_callback: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
+        scan_root: Path | None = None,
     ) -> list[FileCandidate]:
-        """Return large and duplicate files discovered in Downloads."""
-        if progress_callback is None and cancel_event is None:
+        """Return large and duplicate files discovered in Downloads.
+
+        ``scan_root`` overrides the scanned directory for this call only
+        (e.g. the opt-in full-system scan); ``None`` keeps the existing
+        Downloads-only behaviour and call signature for legacy callers.
+        """
+        if progress_callback is None and cancel_event is None and scan_root is None:
             return self.scanner.scan_downloads()
         return self.scanner.scan_downloads(
             progress_callback=progress_callback,
             cancel_event=cancel_event,
+            scan_root=scan_root,
         )

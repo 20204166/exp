@@ -208,6 +208,7 @@ class DownloadScanner:
         self,
         progress_callback: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
+        scan_root: Path | None = None,
     ) -> list[FileCandidate]:
         while not self._downloads_scan_lock.acquire(timeout=0.1):
             self._check_cancelled(cancel_event)
@@ -215,6 +216,7 @@ class DownloadScanner:
             return self._scan_downloads(
                 progress_callback=progress_callback,
                 cancel_event=cancel_event,
+                scan_root=scan_root,
             )
         finally:
             self._downloads_scan_lock.release()
@@ -223,9 +225,10 @@ class DownloadScanner:
         self,
         progress_callback: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
+        scan_root: Path | None = None,
     ) -> list[FileCandidate]:
         self._check_cancelled(cancel_event)
-        root = self.downloads_path.expanduser()
+        root = (self.downloads_path if scan_root is None else scan_root).expanduser()
         if not root.exists():
             self._prune_hash_cache({}, cancel_event=cancel_event)
             return []

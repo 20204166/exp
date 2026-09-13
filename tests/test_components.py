@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 from unittest.mock import Mock, patch
 
+import algo
 from maintenance.components import (
     BackgroundTaskRunner,
     DownloadScanner,
@@ -198,6 +199,112 @@ class DownloadScannerTests(unittest.TestCase):
             cancel_event.set()
             with self.assertRaises(ScanCancelled):
                 scanner.scan_downloads(cancel_event=cancel_event)
+
+    def test_scan_root_none_scans_the_configured_downloads_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            downloads = Path(directory)
+            large = downloads / "large.bin"
+            large.write_bytes(b"large file contents")
+
+            scanner = DownloadScanner(downloads)
+            scanner.LARGE_FILE_BYTES = 1
+
+            candidates = scanner.scan_downloads(scan_root=None)
+
+            self.assertEqual({candidate.path for candidate in candidates}, {large})
+
+    def test_explicit_scan_root_overrides_downloads_path_for_one_call(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as downloads_dir,
+            tempfile.TemporaryDirectory() as broad_dir,
+        ):
+            downloads = Path(downloads_dir)
+            broad_root = Path(broad_dir)
+            (downloads / "downloads-only.bin").write_bytes(b"large file contents")
+            (broad_root / "elsewhere.bin").write_bytes(b"large file contents")
+
+            scanner = DownloadScanner(downloads)
+            scanner.LARGE_FILE_BYTES = 1
+
+            candidates = scanner.scan_downloads(scan_root=broad_root)
+
+            self.assertEqual(
+                {candidate.path for candidate in candidates},
+                {broad_root / "elsewhere.bin"},
+            )
+            # The instance's configured Downloads root is unchanged by a
+            # one-off broader scan.
+            self.assertEqual(scanner.downloads_path, downloads)
+            self.assertEqual(
+                {candidate.path for candidate in scanner.scan_downloads()},
+                {downloads / "downloads-only.bin"},
+            )
+
+    def test_explicit_scan_root_preserves_progress_and_cancellation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            broad_root = Path(directory)
+            first = broad_root / "one.bin"
+            second = broad_root / "two.bin"
+            first.write_bytes(b"same contents")
+            second.write_bytes(b"same contents")
+
+            scanner = DownloadScanner(Path(directory) / "unused-downloads")
+            scanner.DUPLICATE_MIN_BYTES = 1
+            messages: list[str] = []
+
+            scanner.scan_downloads(
+                scan_root=broad_root, progress_callback=messages.append
+            )
+
+            self.assertTrue(any(message.startswith("Found ") for message in messages))
+
+            cancel_event = threading.Event()
+            cancel_event.set()
+            with self.assertRaises(ScanCancelled):
+                scanner.scan_downloads(scan_root=broad_root, cancel_event=cancel_event)
+
+    def test_explicit_scan_root_reuses_the_bounded_hash_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            broad_root = Path(directory)
+            first = broad_root / "a-copy.bin"
+            second = broad_root / "b-copy.bin"
+            first.write_bytes(b"same contents")
+            second.write_bytes(b"same contents")
+
+            scanner = DownloadScanner(Path(directory) / "unused-downloads")
+            scanner.DUPLICATE_MIN_BYTES = 1
+            real_hash = DownloadScanner._file_hash
+
+            with patch.object(
+                DownloadScanner, "_file_hash", wraps=real_hash
+            ) as hash_mock:
+                self.assertEqual(len(scanner.scan_downloads(scan_root=broad_root)), 1)
+                self.assertEqual(len(scanner.scan_downloads(scan_root=broad_root)), 1)
+                self.assertEqual(hash_mock.call_count, 2)
+
+
+class AnalyzerStorageScanRootTests(unittest.TestCase):
+    def test_scan_root_none_preserves_the_legacy_zero_argument_call(self) -> None:
+        """Callers/monkeypatches expecting the original no-kwargs signature
+        must keep working when no opt-in scope is requested."""
+
+        analyzer = algo.Analyzer()
+        with patch.object(
+            analyzer.scanner, "scan_downloads", return_value=[]
+        ) as scan_mock:
+            analyzer.storage_candidates()
+        scan_mock.assert_called_once_with()
+
+    def test_explicit_scan_root_is_forwarded_to_the_scanner(self) -> None:
+        analyzer = algo.Analyzer()
+        broad_root = Path("/some/broad/root")
+        with patch.object(
+            analyzer.scanner, "scan_downloads", return_value=[]
+        ) as scan_mock:
+            analyzer.storage_candidates(scan_root=broad_root)
+        scan_mock.assert_called_once_with(
+            progress_callback=None, cancel_event=None, scan_root=broad_root
+        )
 
 
 class BackgroundTaskRunnerTests(unittest.TestCase):
