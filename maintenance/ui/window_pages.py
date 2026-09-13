@@ -50,10 +50,12 @@ def build_preferences(controller: Any, parent: Any) -> Any:
             on_cancel_scan=controller._cancel_analysis,
             on_reset=controller._on_reset,
             on_appearance_change=controller._on_appearance_change,
+            on_full_system_scan_change=controller._on_full_system_scan_change,
         ),
         intervals=controller._interval_specs(),
         cards=controller._card_specs(),
         hide_unavailable_cards=controller._preferences.hide_unavailable_cards,
+        full_system_scan_enabled=controller._preferences.full_system_scan_enabled,
         appearance=controller._preferences.appearance,
         button_coordinator=controller._button_coordinator,
     )

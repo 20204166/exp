@@ -41,6 +41,7 @@ class PreferencesPageCallbacks:
     on_scan: Callable[[], None]
     on_cancel_scan: Callable[[], None]
     on_reset: Callable[[], None]
+    on_full_system_scan_change: Callable[[bool], None]
     on_appearance_change: Callable[[str], None] | None = None
 
 
@@ -81,6 +82,7 @@ class PreferencesPage:
         intervals: list[IntervalControlSpec],
         cards: list[CardControlSpec],
         hide_unavailable_cards: bool,
+        full_system_scan_enabled: bool = False,
         appearance: str = ui_styles.DEFAULT_APPEARANCE,
         appearance_options: tuple[str, ...] | None = None,
         frame_cls: Callable[..., Any] = tk.Frame,
@@ -130,9 +132,14 @@ class PreferencesPage:
         self._interval_committed: dict[str, int] = {}
         self._card_vars: dict[str, Any] = {}
 
-        self._build(parent, hide_unavailable_cards)
+        self._build(parent, hide_unavailable_cards, full_system_scan_enabled)
 
-    def _build(self, parent: Any, hide_unavailable_cards: bool) -> None:
+    def _build(
+        self,
+        parent: Any,
+        hide_unavailable_cards: bool,
+        full_system_scan_enabled: bool,
+    ) -> None:
         (
             self.back_button,
             self.canvas,
@@ -155,7 +162,7 @@ class PreferencesPage:
             colors=self.colors,
         )
 
-        self._build_scanning_section()
+        self._build_scanning_section(full_system_scan_enabled)
         self._build_cards_section()
         self._build_manual_scan_section()
         self._build_interface_section(hide_unavailable_cards)
@@ -169,7 +176,7 @@ class PreferencesPage:
             fonts=self.fonts,
         )
 
-    def _build_scanning_section(self) -> None:
+    def _build_scanning_section(self, full_system_scan_enabled: bool) -> None:
         _, body = ui_layout.section_card(
             self.content,
             "Scanning",
@@ -184,6 +191,33 @@ class PreferencesPage:
         )
         for spec in self._intervals.values():
             self._build_interval_row(body, spec)
+
+        full_system_scan_var = self._boolean_var_factory()
+        full_system_scan_var.set(full_system_scan_enabled)
+        self._full_system_scan_var = full_system_scan_var
+
+        ui_layout.boolean_setting_row(
+            body,
+            "Review my entire local system, not just Downloads",
+            variable=full_system_scan_var,
+            control_text="Enabled",
+            on_change=lambda: self.callbacks.on_full_system_scan_change(
+                full_system_scan_var.get()
+            ),
+            action_id="preferences:full-system-scan",
+            button_coordinator=self._button_coordinator,
+            frame_cls=self.frame_cls,
+            label_cls=self.label_cls,
+            checkbutton_cls=self.checkbutton_cls,
+            colors=self.colors,
+            fonts=self.fonts,
+            help_text=(
+                "Storage Cleanup normally reviews only Downloads. Enabling "
+                "this lets it review your whole local filesystem too; this "
+                "can take a long time, and only files inside Downloads can "
+                "still be moved to Trash."
+            ),
+        )
 
     def _build_interval_row(self, body: Any, spec: IntervalControlSpec) -> None:
         var = self._var_factory()
@@ -480,6 +514,9 @@ class PreferencesPage:
             for key, var in self._card_vars.items():
                 var.set(key in preferences.visible_cards)
             self._auto_hide_var.set(preferences.hide_unavailable_cards)
+            self._full_system_scan_var.set(
+                getattr(preferences, "full_system_scan_enabled", False)
+            )
             appearance = getattr(preferences, "appearance", self._appearance)
             var = getattr(self, "_appearance_var", None)
             if var is not None:

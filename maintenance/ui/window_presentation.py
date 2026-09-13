@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from maintenance.components import local_scan_anchor
 from maintenance.health import health_warnings
 from maintenance.nodes import NodeCapability, NodePermission, node_operation_key
 from maintenance.ui import scan_status
@@ -164,6 +165,11 @@ def open_resource(controller: Any, resource_key: str) -> None:
             node_id=node_id,
             node_title=node_title,
             read_only=context is not None,
+            scan_root=(
+                local_scan_anchor()
+                if context is None and controller._preferences.full_system_scan_enabled
+                else None
+            ),
         )
     else:
         window.InfoDialog(controller.master, summary=summary, colors=controller.colors)

@@ -54,6 +54,12 @@ def on_auto_hide_change(controller: Any, enabled: bool) -> None:
     )
 
 
+def on_full_system_scan_change(controller: Any, enabled: bool) -> None:
+    apply_preferences(
+        controller, controller._preferences.with_full_system_scan_enabled(enabled)
+    )
+
+
 def on_appearance_change(controller: Any, theme: str) -> None:
     try:
         candidate = controller._preferences.with_appearance(theme)

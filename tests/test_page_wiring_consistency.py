@@ -459,6 +459,7 @@ class LiveWindowWiringTests(unittest.TestCase):
             "thermals:learn-more",
             "nodes:learn-pairing",
             "diagnostics:copy",
+            "preferences:full-system-scan",
             *(f"help:topic:{topic.key}" for topic in HELP_TOPICS),
         }
         missing = expected - registered

@@ -2133,6 +2133,25 @@ class WindowOpenResourceNodeTests(unittest.TestCase):
             window.open_resource("storage")
         self.assertEqual(dialog.call_args.kwargs["read_only"], True)
 
+    def test_remote_storage_dialog_never_gets_a_scan_root(self) -> None:
+        window = _make_window(
+            _trusted_context(
+                "dev",
+                "Dev Node",
+                cpu_value="x",
+                host_label="dev",
+                capabilities=frozenset({NodeCapability.STORAGE_REVIEW}),
+            )
+        )
+        window._switch_selected_node(NodeId("dev"))
+        window._preferences.full_system_scan_enabled = True
+        window.snapshot = Mock()
+        window.snapshot.get = Mock(return_value=_summary("storage"))
+        window._feature_catalog.get = Mock(return_value=Mock(action_kind="storage"))
+        with patch("window.StorageDialog") as dialog:
+            window.open_resource("storage")
+        self.assertIsNone(dialog.call_args.kwargs["scan_root"])
+
     def test_dialog_change_callback_does_not_rescan_a_newly_selected_node(self) -> None:
         window = _make_window(
             _trusted_context("dev", "Dev Node", cpu_value="x", host_label="dev")

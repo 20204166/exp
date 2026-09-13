@@ -31,6 +31,7 @@ def make_callbacks() -> Any:
         on_scan=Mock(),
         on_cancel_scan=Mock(),
         on_reset=Mock(),
+        on_full_system_scan_change=Mock(),
     )
 
 
@@ -201,6 +202,25 @@ class PreferencesPageTests(unittest.TestCase):
 
         callbacks.on_auto_hide_change.assert_called_once_with(True)
 
+    def test_full_system_scan_control_defaults_from_constructor(self) -> None:
+        page, _parent, _recorder = make_page()
+
+        self.assertFalse(page._full_system_scan_var.get())
+
+    def test_full_system_scan_toggle_emits_semantic(self) -> None:
+        callbacks = make_callbacks()
+        page, _parent, recorder = make_page(callbacks)
+        page._full_system_scan_var.set(True)
+
+        full_system_check = next(
+            widget
+            for widget in recorder.widgets("checkbutton")
+            if widget.kwargs.get("variable") is page._full_system_scan_var
+        )
+        full_system_check.kwargs["command"]()
+
+        callbacks.on_full_system_scan_change.assert_called_once_with(True)
+
     def test_manual_scan_buttons_invoke_scan_callbacks(self) -> None:
         callbacks = make_callbacks()
         page, _parent, _recorder = make_page(callbacks)
@@ -253,6 +273,7 @@ class PreferencesPageTests(unittest.TestCase):
                 "preferences:cancel-scan",
                 "preferences:reset",
                 "preferences:auto-hide",
+                "preferences:full-system-scan",
                 "preferences:card:cpu:visibility",
                 "preferences:card:battery:visibility",
             }.issubset(set(coordinator.registered_ids()))
@@ -292,6 +313,7 @@ class PreferencesPageTests(unittest.TestCase):
 
             visible_cards = frozenset({"cpu"})
             hide_unavailable_cards = True
+            full_system_scan_enabled = True
 
         page.refresh_from(FakePreferences())
 
@@ -300,6 +322,7 @@ class PreferencesPageTests(unittest.TestCase):
         self.assertTrue(page._card_vars["cpu"].get())
         self.assertFalse(page._card_vars["battery"].get())
         self.assertTrue(page._auto_hide_var.get())
+        self.assertTrue(page._full_system_scan_var.get())
         callbacks.on_interval_commit.assert_not_called()
         callbacks.on_card_visibility_change.assert_not_called()
 

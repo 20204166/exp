@@ -584,6 +584,26 @@ class AppWindowTests(unittest.TestCase):
             self.assertEqual(call.args[0], window.master)
             self.assertEqual(call.kwargs["colors"], window.colors)
 
+    def test_open_resource_storage_scan_root_follows_the_preference(self) -> None:
+        from maintenance.components import local_scan_anchor
+
+        window = self.make_window()
+        window.snapshot = Mock()
+        window.snapshot.get = Mock(return_value=Mock())
+        window.analyzer = Mock()
+        window.file_manager = Mock()
+
+        with patch("window.StorageDialog") as storage_dialog:
+            window.open_resource("storage")
+        self.assertIsNone(storage_dialog.call_args.kwargs["scan_root"])
+
+        window._preferences = window._preferences.with_full_system_scan_enabled(True)
+        with patch("window.StorageDialog") as storage_dialog:
+            window.open_resource("storage")
+        self.assertEqual(
+            storage_dialog.call_args.kwargs["scan_root"], local_scan_anchor()
+        )
+
     def test_open_resource_unknown_key_propagates_snapshot_lookup_error(self) -> None:
         window = self.make_window()
         window.snapshot = Mock()
