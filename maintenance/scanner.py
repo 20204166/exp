@@ -105,12 +105,20 @@ class _RecycleBinInfo(ctypes.Structure):
 
 from maintenance.scanner_support.dashboard import DashboardMixin
 from maintenance.scanner_support.gpu import GpuMixin
+from maintenance.scanner_support.network import NetworkMixin
 from maintenance.scanner_support.paths import PathsMixin
 from maintenance.scanner_support.processes import ProcessesMixin
 from maintenance.scanner_support.storage import StorageMixin
 
 
-class SystemScanner(DashboardMixin, GpuMixin, ProcessesMixin, StorageMixin, PathsMixin):
+class SystemScanner(
+    DashboardMixin,
+    NetworkMixin,
+    GpuMixin,
+    ProcessesMixin,
+    StorageMixin,
+    PathsMixin,
+):
     """Read system state and discover reviewable cleanup candidates."""
 
     LARGE_FILE_BYTES: int = 100 * 1024**2
