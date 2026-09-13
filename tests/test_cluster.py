@@ -135,8 +135,9 @@ class ResourceSummaryCodecTests(unittest.TestCase):
             ("sampled_monotonic", float("inf")),
             ("sampled_monotonic", float("-inf")),
         ):
-            with self.subTest(field=field, value=value), self.assertRaises(
-                (TypeError, ValueError)
+            with (
+                self.subTest(field=field, value=value),
+                self.assertRaises((TypeError, ValueError)),
             ):
                 temperature_sample_from_dict({**payload, field: value})
 
@@ -181,8 +182,11 @@ class ResourceSummaryCodecTests(unittest.TestCase):
     def test_invalid_boolean_names_are_reported(self) -> None:
         payload = resource_summary_to_dict(_summary())
         for field in ("actionable", "failed"):
-            with self.subTest(field=field), self.assertRaisesRegex(
-                ClusterDataError, rf"resource summary {field} must be a boolean"
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(
+                    ClusterDataError, rf"resource summary {field} must be a boolean"
+                ),
             ):
                 resource_summary_from_dict({**payload, field: "yes"})
 
@@ -304,8 +308,11 @@ class ProcessAndFileCodecTests(unittest.TestCase):
             ProcessCandidate(1, "app", 100, 1.0, 2.0, "Active", "user", True)
         )
         for field in ("memory_bytes", "memory_percent", "cpu_percent"):
-            with self.subTest(field=field), self.assertRaisesRegex(
-                ClusterDataError, rf"process candidate {field} must be a number"
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(
+                    ClusterDataError, rf"process candidate {field} must be a number"
+                ),
             ):
                 process_candidate_from_dict({**payload, field: "not-a-number"})
 
@@ -376,6 +383,12 @@ class ClusterStoreTests(unittest.TestCase):
             state = store.load()
 
         self.assertFalse(state.local_identity_persisted)
+
+    def test_save_restricts_file_to_owner_only(self) -> None:
+        store, path = self._store()
+        store.save(ClusterState.create_local())
+
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_save_and_load_round_trip(self) -> None:
         store, path = self._store()

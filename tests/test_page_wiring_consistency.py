@@ -398,7 +398,9 @@ class LiveWindowWiringTests(unittest.TestCase):
         # thread". Disabling it removes that real-networking exposure from a
         # test that was never about discovery in the first place.
         cluster_store = ClusterStore(Path(cls._tempdir.name) / "cluster.json")
-        cluster_store.save(replace(ClusterState.create_local(), discovery_enabled=False))
+        cluster_store.save(
+            replace(ClusterState.create_local(), discovery_enabled=False)
+        )
         cls.window = AppWindow(
             master=cls.root, preferences_store=store, cluster_store=cluster_store
         )
@@ -456,6 +458,7 @@ class LiveWindowWiringTests(unittest.TestCase):
             "settings:category:help",
             "thermals:learn-more",
             "nodes:learn-pairing",
+            "diagnostics:copy",
             *(f"help:topic:{topic.key}" for topic in HELP_TOPICS),
         }
         missing = expected - registered

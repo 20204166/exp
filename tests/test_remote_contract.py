@@ -60,6 +60,7 @@ from maintenance.remote import (
     sign_response,
     verify_request,
 )
+from maintenance.remote_support import protocol
 from maintenance.remote_support.transport import _recv_frame, _send_frame
 from tests.support.models import make_file_candidate, make_snapshot, make_summary
 from tests.support.temperature import make_temperature_sample
@@ -163,7 +164,9 @@ class FakeProvider:
         progress_callback=None,
         cancel_event=None,
     ) -> list[FileCandidate]:
-        return [make_file_candidate(Path("/tmp/x"), modified_at=_now(), reason="reason")]
+        return [
+            make_file_candidate(Path("/tmp/x"), modified_at=_now(), reason="reason")
+        ]
 
 
 def _service(
@@ -321,7 +324,9 @@ class SigningAndVerificationTests(unittest.TestCase):
 
 
 class RemoteServiceRoundTripTests(unittest.TestCase):
-    def test_signed_dashboard_drops_invalid_samples_and_preserves_resources(self) -> None:
+    def test_signed_dashboard_drops_invalid_samples_and_preserves_resources(
+        self,
+    ) -> None:
         class ThermalProvider(FakeProvider):
             def dashboard_snapshot(self, cancel_event=None, progress_callback=None):
                 dashboard = super().dashboard_snapshot(cancel_event, progress_callback)
@@ -349,14 +354,18 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
                 self._dashboard_requests = 0
 
             def request(self, envelope_text: str, cancel_event=None) -> str:
-                response = json.loads(memory_transport.request(envelope_text, cancel_event))
+                response = json.loads(
+                    memory_transport.request(envelope_text, cancel_event)
+                )
                 request = json.loads(envelope_text)
                 if request["op"] != "dashboard_snapshot" or self._dashboard_requests:
                     return json.dumps(response)
                 self._dashboard_requests += 1
                 snapshot = response["payload"]["snapshot"]
                 resources = snapshot["dashboard"]["resources"]
-                cpu = next(resource for resource in resources if resource["key"] == "cpu")
+                cpu = next(
+                    resource for resource in resources if resource["key"] == "cpu"
+                )
                 valid = temperature_sample_to_dict(make_temperature_sample("cpu", 45.0))
                 samples = [
                     valid,
@@ -371,7 +380,11 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
                     {**valid, "value_celsius": -1000},
                     {**valid, "value_celsius": "45"},
                     {key: value for key, value in valid.items() if key != "sensor_id"},
-                    {key: value for key, value in valid.items() if key != "sensor_name"},
+                    {
+                        key: value
+                        for key, value in valid.items()
+                        if key != "sensor_name"
+                    },
                 ]
                 cpu["temperatures"] = samples
                 response = sign_response(
@@ -1151,6 +1164,42 @@ class ProcessActionCodecTests(unittest.TestCase):
         for payload in payloads:
             with self.assertRaises(ClusterDataError):
                 process_action_result_from_dict(payload)
+
+
+class RemoteProtocolCapabilityWiringTests(unittest.TestCase):
+    """Catch a remote operation and its capability/permission drifting apart.
+
+    ``OP_REQUIRED_CAPABILITY``/``OP_REQUIRED_PERMISSION`` are hand-maintained
+    dicts (protocol.py:45-84) -- the same "hand-written dispatch, drift risk"
+    shape already tested for ``SystemScanner.scan_component`` in
+    ``tests/test_page_wiring_consistency.py::ScannerCatalogWiringTests``.
+    """
+
+    def test_every_capability_map_has_the_same_operations(self) -> None:
+        capability_ops = set(protocol.OP_REQUIRED_CAPABILITY)
+        permission_ops = set(protocol.OP_REQUIRED_PERMISSION)
+        self.assertEqual(
+            capability_ops,
+            permission_ops,
+            "OP_REQUIRED_CAPABILITY and OP_REQUIRED_PERMISSION cover different "
+            "operations -- every operation must require both a capability and "
+            "a permission.",
+        )
+
+    def test_every_node_capability_is_used_by_at_least_one_operation(self) -> None:
+        # CLEANUP is deliberately unused: Move to Trash is local-only (per
+        # maintenance/README.md) and has no remote operation at all.
+        exempt = {NodeCapability.CLEANUP}
+        used = set(protocol.OP_REQUIRED_CAPABILITY.values())
+        all_capabilities = set(NodeCapability)
+        unused = all_capabilities - used - exempt
+        self.assertEqual(
+            unused,
+            set(),
+            f"NodeCapability values with no remote operation and no documented "
+            f"exemption: {sorted(c.value for c in unused)} -- add an operation "
+            "that requires it, or add it to `exempt` above with a reason.",
+        )
 
 
 def _free_port() -> int:

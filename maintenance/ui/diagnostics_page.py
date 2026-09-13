@@ -84,6 +84,11 @@ class DiagnosticsPage:
             style=ui_styles.STYLE_NEUTRAL_BUTTON,
         )
         self.copy_button.pack(anchor="e", pady=(0, 10))
+        if self._button_coordinator is not None:
+            self._button_coordinator.register(
+                "diagnostics:copy", self._copy, replace=True
+            )
+            self._button_coordinator.bind(self.copy_button, "diagnostics:copy")
         self._summary_body = self._section(self.content, "Summary")
         self._components_body = self._section(self.content, "Components")
         self._operations_body = self._section(self.content, "Running work")

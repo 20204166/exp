@@ -31,9 +31,7 @@ def _summary_with_temp(value_celsius: float, monotonic: float):
         details=(f"Temperature: {value_celsius:.0f}°C",),
         capability=CapabilityState.SUPPORTED,
         temperatures=(
-            make_temperature_sample(
-                "cpu", value_celsius, sampled_monotonic=monotonic
-            ),
+            make_temperature_sample("cpu", value_celsius, sampled_monotonic=monotonic),
         ),
     )
 
@@ -446,6 +444,37 @@ class TemperatureTelemetryTests(unittest.TestCase):
         self.assertEqual(snapshot.state, TemperatureState.NO_DATA)
         self.assertEqual(snapshot.samples, ())
         self.assertIsNone(snapshot.current_celsius)
+
+    def test_record_scan_resets_empty_read_count_like_record_summary(self) -> None:
+        telemetry = TemperatureTelemetry()
+        confirm_samples = telemetry.policy_for("cpu").unsupported_confirm_samples
+
+        for _ in range(confirm_samples - 1):
+            telemetry.record_summary("cpu", make_summary("cpu", "CPU"))
+        self.assertEqual(
+            telemetry.series_snapshot("cpu").state, TemperatureState.NO_DATA
+        )
+
+        scan = TemperatureScan(
+            captured_at=FIXED_TEMPERATURE_AT,
+            captured_monotonic=1.0,
+            lines=("Temperature: 50°C",),
+            samples_by_component=(
+                ("cpu", (make_temperature_sample("cpu", 50.0, sampled_monotonic=1.0),)),
+            ),
+        )
+        telemetry.record_scan(scan)
+
+        for _ in range(confirm_samples - 1):
+            telemetry.record_summary("cpu", make_summary("cpu", "CPU"))
+
+        self.assertEqual(
+            telemetry.series_snapshot("cpu").state,
+            TemperatureState.NO_DATA,
+            "record_scan should reset the empty-read count on a valid sample, "
+            "just like record_summary -- otherwise the pre-scan and post-scan "
+            "empty reads accumulate together and flip to UNSUPPORTED too early.",
+        )
 
     def test_telemetry_models_are_frozen(self) -> None:
         telemetry = TemperatureTelemetry()

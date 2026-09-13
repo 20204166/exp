@@ -14,9 +14,11 @@ display. The authenticated transport that consumes these envelopes lives in
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
+import os
 import secrets
 import time
 from collections.abc import Iterable
@@ -88,7 +90,9 @@ class InviteRecord:
             raise ValueError("invite expiry must be finite")
 
 
-def _initial_roles(local_node_id: str, now: float | None = None) -> tuple[RoleAssignment, ...]:
+def _initial_roles(
+    local_node_id: str, now: float | None = None
+) -> tuple[RoleAssignment, ...]:
     return (
         RoleAssignment(
             frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}),
@@ -201,14 +205,10 @@ def resource_summary_from_dict(data: Any) -> ResourceSummary:
         raise ClusterDataError("resource summary percent must be a number")
     for attribute in ("title", "value", "subtitle"):
         if not isinstance(data.get(attribute), str):
-            raise ClusterDataError(
-                f"resource summary {attribute} must be a string"
-            )
+            raise ClusterDataError(f"resource summary {attribute} must be a string")
     for attribute in ("actionable", "failed"):
         if not isinstance(data.get(attribute), bool):
-            raise ClusterDataError(
-                f"resource summary {attribute} must be a boolean"
-            )
+            raise ClusterDataError(f"resource summary {attribute} must be a boolean")
     decoded_temperatures = []
     for item in temperatures:
         try:
@@ -427,9 +427,7 @@ def process_candidate_from_dict(data: Any) -> ProcessCandidate:
             or not math.isfinite(float(value))
             or value < 0
         ):
-            raise ClusterDataError(
-                f"process candidate {attribute} must be a number"
-            )
+            raise ClusterDataError(f"process candidate {attribute} must be a number")
     create_time = data.get("create_time")
     if create_time is not None and (
         not isinstance(create_time, (int, float))
@@ -573,7 +571,11 @@ class ClusterState:
         )
 
     def create_invite(
-        self, *, target_node_id: str = "", now: float | None = None, ttl_seconds: float = 300.0
+        self,
+        *,
+        target_node_id: str = "",
+        now: float | None = None,
+        ttl_seconds: float = 300.0,
     ) -> InviteRecord:
         if ttl_seconds <= 0:
             raise ValueError("invite TTL must be positive")
@@ -691,7 +693,9 @@ class ClusterStore:
                 coordinator_epoch=_initial_epoch(state.local_node_id),
             )
         elif state.coordinator_epoch is None:
-            state = replace(state, coordinator_epoch=_initial_epoch(state.local_node_id))
+            state = replace(
+                state, coordinator_epoch=_initial_epoch(state.local_node_id)
+            )
         return state
 
     def _save_identity_migration(self, state: ClusterState) -> bool:
@@ -708,6 +712,13 @@ class ClusterStore:
         A uniquely named temporary file is written in the destination
         directory, flushed and fsynced, then committed with ``os.replace``.
         Runtime state must only be published by the caller after this returns.
+
+        This document holds plaintext pairing/grant secrets
+        (``TrustedNodeRecord.secret`` / ``PeerGrantRecord.secret``), so the
+        file is explicitly restricted to the owning user after every write,
+        matching the same ``chmod 0o600`` treatment already applied to the
+        peer TLS private key -- not relied upon implicitly via
+        ``tempfile.mkstemp``'s default mode.
         """
 
         payload = self._serialize(state)
@@ -723,6 +734,8 @@ class ClusterStore:
             ),
             logger=LOGGER,
         )
+        with contextlib.suppress(OSError):
+            os.chmod(self.path, 0o600)
 
     def _parse(self, text: str) -> ClusterState:
         try:
@@ -772,7 +785,9 @@ class ClusterStore:
         if not isinstance(local_node_id, str) or not local_node_id:
             LOGGER.warning("Cluster local node identity is malformed; using a new id")
             local_node_id = "local"
-        role_assignments = self._parse_roles(data.get("role_assignments"), local_node_id)
+        role_assignments = self._parse_roles(
+            data.get("role_assignments"), local_node_id
+        )
         epoch = self._parse_epoch(data.get("coordinator_epoch"))
         invites = self._parse_invites(data.get("active_invites"))
         raw_promotion_epochs = data.get("promotion_epochs", [])
@@ -780,9 +795,7 @@ class ClusterStore:
             frozenset(
                 item
                 for item in raw_promotion_epochs
-                if isinstance(item, int)
-                and not isinstance(item, bool)
-                and item >= 0
+                if isinstance(item, int) and not isinstance(item, bool) and item >= 0
             )
             if isinstance(raw_promotion_epochs, list)
             else frozenset()
@@ -871,8 +884,10 @@ class ClusterStore:
             token_hash = item.get("token_hash")
             target = item.get("target_node_id", "")
             expiry = item.get("expires_at")
-            if isinstance(token_hash, str) and isinstance(target, str) and isinstance(
-                expiry, (int, float)
+            if (
+                isinstance(token_hash, str)
+                and isinstance(target, str)
+                and isinstance(expiry, (int, float))
             ):
                 try:
                     records.append(InviteRecord(token_hash, target, float(expiry)))

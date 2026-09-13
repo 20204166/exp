@@ -9,6 +9,7 @@ from maintenance.diagnostics import (
     PlacementDiagnostic,
     RenderDiagnostic,
 )
+from maintenance.ui.action_coordinator import ButtonCoordinator
 from maintenance.ui.diagnostics_page import DiagnosticsPage, DiagnosticsPageCallbacks
 from tests.support.widget_recording import WidgetRecorder
 
@@ -70,8 +71,18 @@ class DiagnosticsPageTests(unittest.TestCase):
                 nodes=(),
                 render=RenderDiagnostic(0, 0, 0, 0, 0),
                 cluster=ClusterDiagnostic(
-                    "coordinator", "coord", 2, 1.0, 10, 20, 0, 256,
-                    "normal", 100.0, False, None,
+                    "coordinator",
+                    "coord",
+                    2,
+                    1.0,
+                    10,
+                    20,
+                    0,
+                    256,
+                    "normal",
+                    100.0,
+                    False,
+                    None,
                 ),
             )
         )
@@ -84,6 +95,26 @@ class DiagnosticsPageTests(unittest.TestCase):
         page.copy_button.kwargs["command"]()
         copy_callback.assert_called_once()
         self.assertIn("components", copy_callback.call_args.args[0])
+
+    def test_copy_button_registers_stable_action_id_when_coordinator_present(
+        self,
+    ) -> None:
+        recorder = WidgetRecorder()
+        coordinator = ButtonCoordinator()
+        copy_callback = Mock()
+        callbacks = DiagnosticsPageCallbacks(on_back=Mock(), on_copy=copy_callback)
+        DiagnosticsPage(
+            recorder.parent(),
+            callbacks=callbacks,
+            snapshot=empty_snapshot(),
+            button_coordinator=coordinator,
+            **recorder.page_kwargs(),
+        )
+
+        self.assertIn("diagnostics:copy", coordinator.registered_ids())
+        coordinator.dispatch("diagnostics:copy")
+
+        copy_callback.assert_called_once()
 
     def test_refresh_reuses_existing_row_widgets(self) -> None:
         page, _callbacks, _copy_callback, recorder = self.make_page()

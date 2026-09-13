@@ -752,7 +752,6 @@ def boolean_setting_row(
             style="App.TCheckbutton",
             command=on_change,
         )
-        check.pack(side="right")
         return check
 
     row, label, control = setting_row(

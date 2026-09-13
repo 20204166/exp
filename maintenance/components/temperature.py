@@ -302,6 +302,7 @@ class TemperatureTelemetry:
                 self._record_samples(telemetry, samples)
                 telemetry.state = TemperatureState.VALID
                 telemetry.current = samples[-1]
+                telemetry.empty_reads = 0
 
     def _component(self, component: str) -> _ComponentTelemetry:
         telemetry = self._components.get(component)
@@ -452,9 +453,7 @@ class TemperatureTelemetry:
             else:
                 self._replace_tail_event(
                     telemetry,
-                    self._finalize_event(
-                        event, ended_at=None, ended_monotonic=None
-                    ),
+                    self._finalize_event(event, ended_at=None, ended_monotonic=None),
                 )
             return
 
@@ -597,10 +596,7 @@ def temperature_sample_from_dict(data: Any) -> TemperatureSample:
         raise ValueError("temperature sample sensor_id must not be empty")
     if not sensor_name:
         raise ValueError("temperature sample sensor_name must not be empty")
-    if (
-        not isinstance(value_celsius, (int, float))
-        or isinstance(value_celsius, bool)
-    ):
+    if not isinstance(value_celsius, (int, float)) or isinstance(value_celsius, bool):
         raise TypeError("temperature sample value must be a number")
     if not is_valid_temperature_value(value_celsius):
         raise ValueError("temperature sample value is outside the valid range")
@@ -610,9 +606,8 @@ def temperature_sample_from_dict(data: Any) -> TemperatureSample:
         parsed_at = datetime.fromisoformat(sampled_at)
     except ValueError as error:
         raise ValueError("temperature sample timestamp is invalid") from error
-    if (
-        not isinstance(sampled_monotonic, (int, float))
-        or isinstance(sampled_monotonic, bool)
+    if not isinstance(sampled_monotonic, (int, float)) or isinstance(
+        sampled_monotonic, bool
     ):
         raise TypeError("temperature sample monotonic time must be a number")
     try:

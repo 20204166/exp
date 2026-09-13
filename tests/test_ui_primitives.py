@@ -83,7 +83,9 @@ class SpacingTokenParityTests(unittest.TestCase):
         self.assertEqual(ui_styles.LAYOUT["fit_wrap_max"], 560)
 
     def test_scrollbar_gutter_derives_from_spacing_token(self) -> None:
-        self.assertEqual(ui_layout.SCROLLBAR_GUTTER, ui_styles.SPACING["scrollbar_gutter"])
+        self.assertEqual(
+            ui_layout.SCROLLBAR_GUTTER, ui_styles.SPACING["scrollbar_gutter"]
+        )
 
 
 class FakeStyle:
@@ -320,6 +322,29 @@ class MetricRowPrimitiveTests(unittest.TestCase):
         )
 
         label.config.assert_called_once_with(cursor="hand2")
+
+
+class BooleanSettingRowTests(unittest.TestCase):
+    def test_setting_row_owns_checkbutton_packing(self) -> None:
+        row = Mock()
+        check = Mock()
+
+        ui_layout.boolean_setting_row(
+            "parent",
+            "Enable feature",
+            variable=Mock(),
+            control_text="Enabled",
+            on_change=Mock(),
+            frame_cls=Mock(return_value=row),
+            label_cls=Mock(return_value=Mock()),
+            checkbutton_cls=Mock(return_value=check),
+            colors={"card": "#fff", "text": "#000", "secondary": "#666"},
+            fonts={"body": ("Helvetica", 9)},
+        )
+
+        check.pack.assert_called_once_with(
+            side="right", padx=(ui_styles.SPACING["control_gap"], 0)
+        )
 
 
 class ClearChildrenTests(unittest.TestCase):
