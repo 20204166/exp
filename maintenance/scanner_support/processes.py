@@ -16,6 +16,7 @@ from typing import Any
 
 from maintenance.components import ScanCancelled, protected_process_pids
 from maintenance.components.process_safety import is_protected_process_name
+from maintenance.components.scan_support import call_legacy_compatible
 from maintenance.models import ProcessActionState, ProcessCandidate
 
 from ._compat import scanner_module
@@ -148,10 +149,10 @@ class ProcessesMixin:
     @staticmethod
     def _process_iter(*, attrs: list[str]) -> Any:
         psutil_module = scanner_module.SystemScanner._require_psutil()
-        try:
-            return psutil_module.process_iter(attrs=attrs)
-        except TypeError:
-            return psutil_module.process_iter()
+        return call_legacy_compatible(
+            lambda: psutil_module.process_iter(attrs=attrs),
+            psutil_module.process_iter,
+        )
 
     def _protected_pids(self) -> set[int]:
         return protected_process_pids(scanner_module.psutil)

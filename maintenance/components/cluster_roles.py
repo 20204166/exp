@@ -133,7 +133,9 @@ class RoleState:
             raise ValueError("only one active Subcoordinator is allowed")
 
     def assignment_for(self, node_id: NodeId) -> RoleAssignment | None:
-        return next((item for item in self.assignments if item.node_id == node_id), None)
+        return next(
+            (item for item in self.assignments if item.node_id == node_id), None
+        )
 
     def active_coordinator(self) -> RoleAssignment | None:
         return next(
@@ -214,7 +216,9 @@ class RoleState:
             return self
         return replace(
             self,
-            assignments=tuple(item for item in self.assignments if item.node_id != target),
+            assignments=tuple(
+                item for item in self.assignments if item.node_id != target
+            ),
         )
 
     def revoke(self, *, actor: RoleAssignment, target: NodeId) -> RoleState:
@@ -314,8 +318,12 @@ def promote_subcoordinator(
         ),
         None,
     )
-    if sub is None or sub.node_id is None or not can_promote(
-        state, subcoordinator_id=sub.node_id, now=now, authenticated=authenticated
+    if (
+        sub is None
+        or sub.node_id is None
+        or not can_promote(
+            state, subcoordinator_id=sub.node_id, now=now, authenticated=authenticated
+        )
     ):
         raise FencingError("subcoordinator cannot promote")
     next_epoch = CoordinatorEpoch(
@@ -329,7 +337,9 @@ def promote_subcoordinator(
         frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}), node_id=sub.node_id
     )
     assignments = tuple(
-        promoted if item.node_id == sub.node_id else replace(item, roles=frozenset({ClusterRole.WORKER}))
+        promoted
+        if item.node_id == sub.node_id
+        else replace(item, roles=frozenset({ClusterRole.WORKER}))
         for item in state.assignments
     )
     return PromotionDecision(promoted, next_epoch, assignments)

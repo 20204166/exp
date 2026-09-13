@@ -288,7 +288,9 @@ class ActivityClassificationTests(unittest.TestCase):
 
     def test_activity_label_handles_negative_and_below_threshold_deltas(self) -> None:
         threshold = SystemScanner.PROCESS_ACTIVITY_MIN_CPU_PERCENT
-        self.assertEqual(SystemScanner._activity_label(threshold - 0.001), "Low activity")
+        self.assertEqual(
+            SystemScanner._activity_label(threshold - 0.001), "Low activity"
+        )
         self.assertEqual(SystemScanner._activity_label(-1.0), "Low activity")
 
 
@@ -349,6 +351,16 @@ class FakePsutil:
 
 
 class ProcessScanBehaviourTests(unittest.TestCase):
+    def test_process_iter_falls_back_only_for_legacy_signature(self) -> None:
+        def legacy_process_iter() -> list[str]:
+            return ["legacy"]
+
+        legacy_psutil = SimpleNamespace(process_iter=legacy_process_iter)
+        with patch("maintenance.scanner.psutil", legacy_psutil):
+            result = SystemScanner._process_iter(attrs=["pid"])
+
+        self.assertEqual(result, ["legacy"])
+
     def test_scan_processes_skips_process_that_disappears(self) -> None:
         keep = FakeProcess(
             50001,

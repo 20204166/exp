@@ -18,9 +18,7 @@ def make_batch(batch_id: str, size_bytes: int) -> SnapshotBatch:
         source_epoch=3,
         sequence=size_bytes,
         observed_at=100.0,
-        payload=(
-            ResourceSnapshot(NodeId("worker"), "cpu", "10%", 10.0, 10.0, 100.0),
-        ),
+        payload=(ResourceSnapshot(NodeId("worker"), "cpu", "10%", 10.0, 10.0, 100.0),),
         encoded_size=size_bytes,
     )
 
@@ -67,8 +65,13 @@ class ClusterStorageTests(unittest.TestCase):
     def test_import_records_missing_sequence_gap(self) -> None:
         store = CoordinatorTimeline(self.path / "history.db", max_bytes=1024)
         first = SnapshotBatch(
-            "first", NodeId("coordinator"), 3, 1, 100.0,
-            (ResourceSnapshot(NodeId("worker"), "cpu", "10%", 10.0, 10.0, 100.0),), 20
+            "first",
+            NodeId("coordinator"),
+            3,
+            1,
+            100.0,
+            (ResourceSnapshot(NodeId("worker"), "cpu", "10%", 10.0, 10.0, 100.0),),
+            20,
         )
         second = SnapshotBatch(
             "third", NodeId("coordinator"), 3, 3, 102.0, first.payload, 20

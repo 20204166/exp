@@ -50,24 +50,16 @@ class ProcessManager:
     def terminate(self, request: ProcessTerminationRequest) -> ProcessActionResult:
         """Execute only a typed, allowlisted request through local safety checks."""
 
+        pids = [process.pid for process in request.processes]
+        expected_create_times = {
+            process.pid: process.create_time
+            for process in request.processes
+            if process.create_time is not None
+        }
         if request.action is ProcessActionKind.REQUEST_QUIT:
-            return self.request_quit(
-                [process.pid for process in request.processes],
-                {
-                    process.pid: process.create_time
-                    for process in request.processes
-                    if process.create_time is not None
-                },
-            )
+            return self.request_quit(pids, expected_create_times)
         if request.action is ProcessActionKind.FORCE_QUIT:
-            return self.force_quit(
-                [process.pid for process in request.processes],
-                {
-                    process.pid: process.create_time
-                    for process in request.processes
-                    if process.create_time is not None
-                },
-            )
+            return self.force_quit(pids, expected_create_times)
         raise ValueError("unsupported process action")
 
     def force_quit(

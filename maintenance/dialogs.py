@@ -51,12 +51,8 @@ def _standalone_coordinator(widget: tk.Misc) -> AppCoordinator:
 
     delivery = TkDeliveryQueue(widget)
     return AppCoordinator(
-        deliver=lambda callback: delivery(_invoke_delivered_wrapper(callback))
+        deliver=lambda callback: delivery(lambda: _invoke_delivered(callback))
     )
-
-
-def _invoke_delivered_wrapper(callback: Callable[[], None]) -> Callable[[], None]:
-    return lambda: _invoke_delivered(callback)
 
 
 def run_in_thread(

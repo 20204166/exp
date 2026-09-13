@@ -320,9 +320,7 @@ class NodesConnectionsPage:
             if row is not None:
                 row.pack(fill="x", pady=(0, 8))
 
-    def _update_discovered_empty_state(
-        self, specs: list[DiscoveredPeerSpec]
-    ) -> None:
+    def _update_discovered_empty_state(self, specs: list[DiscoveredPeerSpec]) -> None:
         if specs:
             if self._discovered_empty_label is not None:
                 self._discovered_empty_label.destroy()
@@ -471,9 +469,7 @@ class NodesConnectionsPage:
         self._update_trusted_empty_state(specs)
 
     @staticmethod
-    def _same_trusted_row(
-        previous: TrustedNodeSpec, current: TrustedNodeSpec
-    ) -> bool:
+    def _same_trusted_row(previous: TrustedNodeSpec, current: TrustedNodeSpec) -> bool:
         return all(
             getattr(previous, name) == getattr(current, name)
             for name in NodesConnectionsPage._TRUSTED_STRUCTURAL
@@ -706,7 +702,10 @@ class NodesConnectionsPage:
             self.worker_role_control = None
             self.subcoordinator_role_control = None
             self.coordinator_role_control = None
-            for role, label in (("worker", "Worker"), ("subcoordinator", "Subcoordinator")):
+            for role, label in (
+                ("worker", "Worker"),
+                ("subcoordinator", "Subcoordinator"),
+            ):
                 variable = self._boolean_var_factory()
                 variable.set(role in selected)
                 role_values[role] = variable
@@ -714,13 +713,19 @@ class NodesConnectionsPage:
                     role_controls,
                     text=label,
                     variable=variable,
-                    state=(tk.NORMAL if spec.role_editable and not spec.paused else tk.DISABLED),
-                    command=lambda: self.callbacks.on_role_change
-                    and self.callbacks.on_role_change(
-                        spec.node_id,
-                        frozenset(
-                            key for key, value in role_values.items() if value.get()
-                        ),
+                    state=(
+                        tk.NORMAL
+                        if spec.role_editable and not spec.paused
+                        else tk.DISABLED
+                    ),
+                    command=lambda: (
+                        self.callbacks.on_role_change
+                        and self.callbacks.on_role_change(
+                            spec.node_id,
+                            frozenset(
+                                key for key, value in role_values.items() if value.get()
+                            ),
+                        )
                     ),
                 )
                 control.pack(anchor="w", pady=(0, 2))
@@ -819,11 +824,7 @@ class NodesConnectionsPage:
             )
             remove_connection.pack(side="left", padx=(0, 8))
         on_remove_job = self.callbacks.on_remove_job
-        if (
-            spec.role_editable
-            and not spec.is_manual
-            and on_remove_job is not None
-        ):
+        if spec.role_editable and not spec.is_manual and on_remove_job is not None:
             remove_job = self.button_cls(
                 secondary_actions,
                 text="Remove job",
@@ -920,9 +921,7 @@ class NodesConnectionsPage:
         self._update_manual_empty_state(specs)
 
     @staticmethod
-    def _same_manual_row(
-        previous: TrustedNodeSpec, current: TrustedNodeSpec
-    ) -> bool:
+    def _same_manual_row(previous: TrustedNodeSpec, current: TrustedNodeSpec) -> bool:
         return all(
             getattr(previous, name) == getattr(current, name)
             for name in NodesConnectionsPage._MANUAL_STRUCTURAL

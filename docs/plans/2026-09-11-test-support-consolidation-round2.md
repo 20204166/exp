@@ -279,13 +279,12 @@ def page_kwargs(self) -> dict[str, Any]:
         "scrollbar_cls": self.scrollbar_cls(),
     }
 
+
 def button_with_text(self, text: str) -> RecordingWidget:
     """Return the first recorded button whose ``text`` equals ``text``."""
 
     return next(
-        widget
-        for widget in self.widgets("button")
-        if widget.kwargs.get("text") == text
+        widget for widget in self.widgets("button") if widget.kwargs.get("text") == text
     )
 ```
 

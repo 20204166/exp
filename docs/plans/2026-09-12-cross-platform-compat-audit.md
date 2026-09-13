@@ -293,7 +293,9 @@ class TemperaturePolicy:
     rapid_rise_window: int = 4
     history_limit: int = 600
     event_limit: int = 8
-    unsupported_confirm_samples: int = 20  # NEW — consecutive empty reads before NO_DATA -> UNSUPPORTED
+    unsupported_confirm_samples: int = (
+        20  # NEW — consecutive empty reads before NO_DATA -> UNSUPPORTED
+    )
 ```
 
 ```python
@@ -356,16 +358,14 @@ Everything after `telemetry.last_error = None` down to the final `return` is unc
 - [x] **Step 3: Turn Phase 2's failing test green**, then add the adjacent case that must NOT regress — a genuinely slow-but-working sensor must still show "Waiting for the first sample" before the confirm limit:
 
 ```python
-    # same class as above, ThermalCapabilityGapTests(unittest.TestCase)
-    def test_temporarily_slow_sensor_still_waits_before_confirm_limit(self) -> None:
-        telemetry = TemperatureTelemetry()
-        cpu_card = make_summary(
-            "cpu", "CPU", capability=CapabilityState.SUPPORTED, temperatures=()
-        )
-        telemetry.record_summary("cpu", cpu_card)
-        self.assertEqual(
-            telemetry.series_snapshot("cpu").state, TemperatureState.NO_DATA
-        )
+# same class as above, ThermalCapabilityGapTests(unittest.TestCase)
+def test_temporarily_slow_sensor_still_waits_before_confirm_limit(self) -> None:
+    telemetry = TemperatureTelemetry()
+    cpu_card = make_summary(
+        "cpu", "CPU", capability=CapabilityState.SUPPORTED, temperatures=()
+    )
+    telemetry.record_summary("cpu", cpu_card)
+    self.assertEqual(telemetry.series_snapshot("cpu").state, TemperatureState.NO_DATA)
 ```
 
 Run: `python -m unittest tests.test_thermal_capability_gap -v` — expect both PASS. (Corrected from an earlier `pytest` invocation this plan mistakenly used throughout — this repo has no `pytest` installed; see Phase 0's correction note.)
@@ -550,8 +550,11 @@ Phase 3 turns it green) is this permanent regression test:
 
 ```python
 class ThermalCapabilityGapTests(unittest.TestCase):
-    def test_permanently_empty_temperature_samples_never_report_unsupported(self) -> None:
-        ...  # RED against current code, GREEN after Phase 3's empty_reads counter
+    def test_permanently_empty_temperature_samples_never_report_unsupported(
+        self,
+    ) -> (
+        None
+    ): ...  # RED against current code, GREEN after Phase 3's empty_reads counter
 ```
 
 No new test needed here for this case. Re-run it explicitly at Phase 12 time to confirm it is still GREEN after Phase 4–9 touched other components:
@@ -602,15 +605,21 @@ class ThermalNodeIsolationTests(unittest.TestCase):
         window._selected_node_id = registry.selected_id()
 
         sample = TemperatureSample(
-            component="cpu", sensor_id="cpu0", sensor_name="cpu0",
+            component="cpu",
+            sensor_id="cpu0",
+            sensor_name="cpu0",
             value_celsius=55.0,
             sampled_at=datetime.now(timezone.utc),
             sampled_monotonic=0.0,
         )
         local_ctx.telemetry.record_summary(
             "cpu",
-            make_summary("cpu", "CPU", capability=CapabilityState.SUPPORTED,
-                          temperatures=(sample,)),
+            make_summary(
+                "cpu",
+                "CPU",
+                capability=CapabilityState.SUPPORTED,
+                temperatures=(sample,),
+            ),
         )
 
         window._selected_node_id = remote_ctx.node_id

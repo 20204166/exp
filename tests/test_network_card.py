@@ -422,7 +422,9 @@ class NetworkCardTests(unittest.TestCase):
             CapabilityState.SUPPORTED,
         )
 
-    def test_network_capability_temporarily_unavailable_when_counters_fail(self) -> None:
+    def test_network_capability_temporarily_unavailable_when_counters_fail(
+        self,
+    ) -> None:
         scanner = make_scanner()
 
         def broken() -> Any:

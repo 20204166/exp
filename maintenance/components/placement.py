@@ -1,4 +1,14 @@
-"""Pure, deterministic selection of an execution node for one typed job."""
+"""Pure, deterministic selection of an execution node for one typed job.
+
+Status: implemented and tested, but not composed into any runtime path as of
+2026-09-13 -- nothing in the app constructs a ``PlacementRequest`` or calls
+``AppCoordinator.choose_placement`` outside this module's own tests. Every
+current scan/dialog/action targets whichever node the user manually selected.
+This is a documented future seam, not dead code slated for removal: wiring it
+up requires choosing which specific action should get automatic node
+selection instead of manual selection, which is a product decision left open
+(see docs/AUDIT_FOLLOWUP_2026-09-13.md).
+"""
 
 import math
 import time
@@ -59,9 +69,7 @@ class PlacementRequest:
             or not isinstance(self.remote_transfer_threshold_bytes, int)
             or self.remote_transfer_threshold_bytes < 0
         ):
-            raise ValueError(
-                "remote transfer threshold must be a non-negative integer"
-            )
+            raise ValueError("remote transfer threshold must be a non-negative integer")
 
 
 @dataclass(frozen=True, slots=True)

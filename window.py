@@ -188,7 +188,9 @@ class AppWindow:
         self._cluster_state = self._cluster_store.load()
         local_roles = self._cluster_state.local_assignment.roles
         self._cluster_timeline = (
-            CoordinatorTimeline(self._cluster_store.path.with_name("cluster-history.sqlite3"))
+            CoordinatorTimeline(
+                self._cluster_store.path.with_name("cluster-history.sqlite3")
+            )
             if any(role.value == "coordinator" for role in local_roles)
             else None
         )
@@ -415,13 +417,17 @@ class AppWindow:
         epoch = self._cluster_state.coordinator_epoch
         timeline = self._cluster_timeline
         standby = self._standby_buffer
-        status = timeline.status() if timeline is not None else StorageStatus(
-            0, 2 * 1024 * 1024 * 1024, 0, None, None
+        status = (
+            timeline.status()
+            if timeline is not None
+            else StorageStatus(0, 2 * 1024 * 1024 * 1024, 0, None, None)
         )
         standby_status = standby.status() if standby is not None else None
         return ClusterDiagnostic(
             role=role,
-            coordinator_id=(epoch.coordinator_id.value if epoch is not None else "unknown"),
+            coordinator_id=(
+                epoch.coordinator_id.value if epoch is not None else "unknown"
+            ),
             epoch=epoch.epoch if epoch is not None else 0,
             heartbeat_age_seconds=(
                 max(0.0, time.time() - epoch.issued_at) if epoch is not None else None

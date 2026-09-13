@@ -166,7 +166,7 @@ def _split_wheel_dependencies(
     runtime: list[str] = []
     dev: list[str] = []
     for requirement in requires_dist:
-        if "; extra == \"dev\"" in requirement:
+        if '; extra == "dev"' in requirement:
             dev.append(requirement.split(";", 1)[0].strip())
         else:
             runtime.append(requirement)

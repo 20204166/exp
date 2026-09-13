@@ -75,12 +75,16 @@ duplicated per provider:
 ```python
 # maintenance/scanner_support/temperature_platform.py
 
-RawReadings = dict[str, list[tuple[str, str, float]]]  # component -> [(sensor_id, sensor_name, celsius), ...]
+RawReadings = dict[
+    str, list[tuple[str, str, float]]
+]  # component -> [(sensor_id, sensor_name, celsius), ...]
+
 
 def windows_temperature_scan(
     *,
     runner: CommandRunner | None = None,
 ) -> TemperatureScan: ...
+
 
 def macos_temperature_scan(
     *,

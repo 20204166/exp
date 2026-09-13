@@ -37,48 +37,50 @@
 Add to `tests/test_cluster_roles.py`:
 
 ```python
-    def test_remove_job_requires_active_coordinator(self) -> None:
-        with self.assertRaises(RoleAuthorizationError):
-            RoleState(
-                assignments=(self.worker,)
-            ).remove_job(
-                actor=self.worker,
-                target=NodeId("worker"),
-            )
-
-    def test_remove_job_clears_active_assignment(self) -> None:
-        state = RoleState(assignments=(self.coordinator, self.worker))
-        updated = state.remove_job(actor=self.coordinator, target=NodeId("worker"))
-        assignment = updated.assignment_for(NodeId("worker"))
-        self.assertIsNotNone(assignment)
-        assert assignment is not None
-        self.assertFalse(assignment.has_active_job)
-
-    def test_remove_job_revoked_target_is_rejected(self) -> None:
-        revoked = RoleAssignment(
-            frozenset({ClusterRole.WORKER}),
-            NodeId("worker"),
-            revoked=True,
+def test_remove_job_requires_active_coordinator(self) -> None:
+    with self.assertRaises(RoleAuthorizationError):
+        RoleState(assignments=(self.worker,)).remove_job(
+            actor=self.worker,
+            target=NodeId("worker"),
         )
-        state = RoleState(assignments=(self.coordinator, revoked))
-        with self.assertRaises(RoleAuthorizationError):
-            state.remove_job(actor=self.coordinator, target=NodeId("worker"))
 
-    def test_assign_job_restores_participation(self) -> None:
-        idle = RoleAssignment(
-            frozenset({ClusterRole.WORKER}),
-            NodeId("worker"),
-            has_active_job=False,
-        )
-        state = RoleState(assignments=(self.coordinator, idle))
-        updated = state.assign_job(actor=self.coordinator, target=NodeId("worker"))
-        assignment = updated.assignment_for(NodeId("worker"))
-        self.assertIsNotNone(assignment)
-        assert assignment is not None
-        self.assertTrue(assignment.has_active_job)
 
-    def test_default_assignment_has_active_job(self) -> None:
-        self.assertTrue(self.worker.has_active_job)
+def test_remove_job_clears_active_assignment(self) -> None:
+    state = RoleState(assignments=(self.coordinator, self.worker))
+    updated = state.remove_job(actor=self.coordinator, target=NodeId("worker"))
+    assignment = updated.assignment_for(NodeId("worker"))
+    self.assertIsNotNone(assignment)
+    assert assignment is not None
+    self.assertFalse(assignment.has_active_job)
+
+
+def test_remove_job_revoked_target_is_rejected(self) -> None:
+    revoked = RoleAssignment(
+        frozenset({ClusterRole.WORKER}),
+        NodeId("worker"),
+        revoked=True,
+    )
+    state = RoleState(assignments=(self.coordinator, revoked))
+    with self.assertRaises(RoleAuthorizationError):
+        state.remove_job(actor=self.coordinator, target=NodeId("worker"))
+
+
+def test_assign_job_restores_participation(self) -> None:
+    idle = RoleAssignment(
+        frozenset({ClusterRole.WORKER}),
+        NodeId("worker"),
+        has_active_job=False,
+    )
+    state = RoleState(assignments=(self.coordinator, idle))
+    updated = state.assign_job(actor=self.coordinator, target=NodeId("worker"))
+    assignment = updated.assignment_for(NodeId("worker"))
+    self.assertIsNotNone(assignment)
+    assert assignment is not None
+    self.assertTrue(assignment.has_active_job)
+
+
+def test_default_assignment_has_active_job(self) -> None:
+    self.assertTrue(self.worker.has_active_job)
 ```
 
 - [ ] **Step 2: Run the tests and verify the attribute failure.**
@@ -103,23 +105,24 @@ class RoleAssignment:
 Add to `RoleState` after `revoke`:
 
 ```python
-    def remove_job(self, *, actor: RoleAssignment, target: NodeId) -> RoleState:
-        self._assert_control(actor)
-        current = self.assignment_for(target)
-        if current is None or current.revoked:
-            raise RoleAuthorizationError("unknown or revoked node")
-        if ClusterRole.WORKER not in current.roles:
-            raise RoleAuthorizationError("target has no worker role")
-        return self._replace_assignment(replace(current, has_active_job=False))
+def remove_job(self, *, actor: RoleAssignment, target: NodeId) -> RoleState:
+    self._assert_control(actor)
+    current = self.assignment_for(target)
+    if current is None or current.revoked:
+        raise RoleAuthorizationError("unknown or revoked node")
+    if ClusterRole.WORKER not in current.roles:
+        raise RoleAuthorizationError("target has no worker role")
+    return self._replace_assignment(replace(current, has_active_job=False))
 
-    def assign_job(self, *, actor: RoleAssignment, target: NodeId) -> RoleState:
-        self._assert_control(actor)
-        current = self.assignment_for(target)
-        if current is None or current.revoked:
-            raise RoleAuthorizationError("unknown or revoked node")
-        if ClusterRole.WORKER not in current.roles:
-            raise RoleAuthorizationError("target has no worker role")
-        return self._replace_assignment(replace(current, has_active_job=True))
+
+def assign_job(self, *, actor: RoleAssignment, target: NodeId) -> RoleState:
+    self._assert_control(actor)
+    current = self.assignment_for(target)
+    if current is None or current.revoked:
+        raise RoleAuthorizationError("unknown or revoked node")
+    if ClusterRole.WORKER not in current.roles:
+        raise RoleAuthorizationError("target has no worker role")
+    return self._replace_assignment(replace(current, has_active_job=True))
 ```
 
 Add `remove_job` and `assign_job` to `__all__`? They are methods; `__all__` lists module-level names only, so no change.
@@ -147,31 +150,30 @@ git commit -m "feat: add active-job state to role assignments"
 In `tests/test_cluster_roles_persistence.py`:
 
 ```python
-    def test_has_active_job_round_trip(self) -> None:
-        store = ClusterStore(tmp_path() / "cluster.json")
-        state = ClusterState.create_local()
-        assignment = state.local_assignment
-        updated = replace(state, role_assignments=(
-            replace(assignment, has_active_job=False),
-        ))
-        store.save(updated)
-        loaded = store.load()
-        self.assertFalse(loaded.local_assignment.has_active_job)
+def test_has_active_job_round_trip(self) -> None:
+    store = ClusterStore(tmp_path() / "cluster.json")
+    state = ClusterState.create_local()
+    assignment = state.local_assignment
+    updated = replace(
+        state, role_assignments=(replace(assignment, has_active_job=False),)
+    )
+    store.save(updated)
+    loaded = store.load()
+    self.assertFalse(loaded.local_assignment.has_active_job)
 
-    def test_has_active_job_defaults_true_for_old_documents(self) -> None:
-        store = ClusterStore(tmp_path() / "cluster.json")
-        state = ClusterState.create_local()
-        assignment = state.local_assignment
-        old = replace(state, role_assignments=(
-            replace(assignment, has_active_job=False),
-        ))
-        store.save(old)
-        text = (tmp_path() / "cluster.json").read_text()
-        (tmp_path() / "cluster.json").write_text(text.replace(
-            '"has_active_job": false', '"paused": false'
-        ))
-        loaded = store.load()
-        self.assertTrue(loaded.local_assignment.has_active_job)
+
+def test_has_active_job_defaults_true_for_old_documents(self) -> None:
+    store = ClusterStore(tmp_path() / "cluster.json")
+    state = ClusterState.create_local()
+    assignment = state.local_assignment
+    old = replace(state, role_assignments=(replace(assignment, has_active_job=False),))
+    store.save(old)
+    text = (tmp_path() / "cluster.json").read_text()
+    (tmp_path() / "cluster.json").write_text(
+        text.replace('"has_active_job": false', '"paused": false')
+    )
+    loaded = store.load()
+    self.assertTrue(loaded.local_assignment.has_active_job)
 ```
 
 Add the import: `from tempfile import TemporaryDirectory` and a helper `tmp_path()` returning a `Path`.
@@ -192,7 +194,7 @@ In `maintenance/cluster.py` `_serialize`, inside the `role_assignments` mapping:
 In `_parse_roles`, after `revoked=...`:
 
 ```python
-                    has_active_job=bool(item.get("has_active_job", True)),
+has_active_job = (bool(item.get("has_active_job", True)),)
 ```
 
 - [ ] **Step 4: Run the persistence and cluster tests.**
@@ -218,25 +220,25 @@ git commit -m "feat: persist active-job participation state"
 Add to `tests/test_window_nodes.py`:
 
 ```python
-    def test_revoke_removes_trust_grant_and_connection_state(self) -> None:
-        window = self._make_window_with_trusted_peer("peer-a")
-        node = NodeId("peer-a")
-        previous = window._node_registry.context(node)
-        previous.provider = Mock()
-        window._revoke_node("peer-a")
-        self.assertNotIn(node, {c.node_id for c in window._node_registry.contexts()})
-        self.assertIsNone(window._cluster_state.record("peer-a"))
-        self.assertEqual(
-            window._cluster_state.grant("peer-a"), None
-        )
-        window._refresh_cluster_page.assert_called()
-        self.assertEqual(window._nodes_status.call_args[0][0],
-                         "Node removed from trusted machines")
+def test_revoke_removes_trust_grant_and_connection_state(self) -> None:
+    window = self._make_window_with_trusted_peer("peer-a")
+    node = NodeId("peer-a")
+    previous = window._node_registry.context(node)
+    previous.provider = Mock()
+    window._revoke_node("peer-a")
+    self.assertNotIn(node, {c.node_id for c in window._node_registry.contexts()})
+    self.assertIsNone(window._cluster_state.record("peer-a"))
+    self.assertEqual(window._cluster_state.grant("peer-a"), None)
+    window._refresh_cluster_page.assert_called()
+    self.assertEqual(
+        window._nodes_status.call_args[0][0], "Node removed from trusted machines"
+    )
 
-    def test_revoke_local_node_is_rejected(self) -> None:
-        window = self._make_window()
-        window._revoke_node(window._cluster_state.local_node_id)
-        self.assertTrue(window._nodes_error.called)
+
+def test_revoke_local_node_is_rejected(self) -> None:
+    window = self._make_window()
+    window._revoke_node(window._cluster_state.local_node_id)
+    self.assertTrue(window._nodes_error.called)
 ```
 
 Reuse the existing `_make_window`/`_make_window_with_trusted_peer` helpers in this module (they already build a controller with fake registry/state/store). Read the existing helper signatures first and match them.
@@ -271,38 +273,40 @@ git commit -m "fix: revoke performs full trust, grant, and connection cleanup"
 - [ ] **Step 1: Write the failing manager tests.**
 
 ```python
-    def test_manual_disconnect_suppresses_reconcile(self) -> None:
-        registry, coordinator = self._registry_and_coordinator()
-        manager = PeerConnectionManager(
-            registry=registry, coordinator=coordinator, connect=lambda *_: None
-        )
-        node = NodeId("peer-a")
-        manager.disconnect_manual(node)
-        self.assertIsNone(manager.reconcile(now=0.0))
+def test_manual_disconnect_suppresses_reconcile(self) -> None:
+    registry, coordinator = self._registry_and_coordinator()
+    manager = PeerConnectionManager(
+        registry=registry, coordinator=coordinator, connect=lambda *_: None
+    )
+    node = NodeId("peer-a")
+    manager.disconnect_manual(node)
+    self.assertIsNone(manager.reconcile(now=0.0))
 
-    def test_reconnect_restores_automatic_reconcile(self) -> None:
-        registry, coordinator = self._registry_and_coordinator()
-        manager = PeerConnectionManager(
-            registry=registry, coordinator=coordinator, connect=lambda *_: None
-        )
-        node = NodeId("peer-a")
-        manager.disconnect_manual(node)
-        manager.reconnect(node)
-        self.assertFalse(manager.is_manual_disconnected(node))
 
-    def test_reconcile_skips_manual_disconnected_node(self) -> None:
-        registry, coordinator = self._registry_and_coordinator()
-        started: list[NodeId] = []
-        manager = PeerConnectionManager(
-            registry=registry,
-            coordinator=coordinator,
-            connect=lambda _ctx, _c, _p: None,
-        )
-        node = NodeId("peer-a")
-        manager.disconnect_manual(node)
-        deadline = manager.reconcile(now=0.0)
-        self.assertEqual(started, [])
-        self.assertIsNone(deadline)
+def test_reconnect_restores_automatic_reconcile(self) -> None:
+    registry, coordinator = self._registry_and_coordinator()
+    manager = PeerConnectionManager(
+        registry=registry, coordinator=coordinator, connect=lambda *_: None
+    )
+    node = NodeId("peer-a")
+    manager.disconnect_manual(node)
+    manager.reconnect(node)
+    self.assertFalse(manager.is_manual_disconnected(node))
+
+
+def test_reconcile_skips_manual_disconnected_node(self) -> None:
+    registry, coordinator = self._registry_and_coordinator()
+    started: list[NodeId] = []
+    manager = PeerConnectionManager(
+        registry=registry,
+        coordinator=coordinator,
+        connect=lambda _ctx, _c, _p: None,
+    )
+    node = NodeId("peer-a")
+    manager.disconnect_manual(node)
+    deadline = manager.reconcile(now=0.0)
+    self.assertEqual(started, [])
+    self.assertIsNone(deadline)
 ```
 
 Add a helper `_registry_and_coordinator` that builds a `NodeRegistry` with one trusted offline peer context and a recording `coordinator` whose `in_flight` returns False. Match existing fixtures in `tests/test_peer_connection.py`.
@@ -319,16 +323,18 @@ In `maintenance/components/peer_connection.py` `__init__`, add `self._manual_dis
 Add methods:
 
 ```python
-    def disconnect_manual(self, node_id: NodeId) -> None:
-        """Detach a relationship without revoking trust; suppress reconnect."""
-        self._manual_disconnected.add(node_id)
-        self.cancel(node_id)
+def disconnect_manual(self, node_id: NodeId) -> None:
+    """Detach a relationship without revoking trust; suppress reconnect."""
+    self._manual_disconnected.add(node_id)
+    self.cancel(node_id)
 
-    def reconnect(self, node_id: NodeId) -> None:
-        self._manual_disconnected.discard(node_id)
 
-    def is_manual_disconnected(self, node_id: NodeId) -> bool:
-        return node_id in self._manual_disconnected
+def reconnect(self, node_id: NodeId) -> None:
+    self._manual_disconnected.discard(node_id)
+
+
+def is_manual_disconnected(self, node_id: NodeId) -> bool:
+    return node_id in self._manual_disconnected
 ```
 
 In `reconcile`, skip manual-disconnected contexts:
@@ -364,28 +370,30 @@ git commit -m "feat: gate automatic reconnect behind manual disconnect"
 In `tests/test_remote_compatibility.py`, add:
 
 ```python
-    def test_remove_connection_is_a_typed_fenced_operation(self) -> None:
-        self.assertIn("remove_connection", OP_REQUIRED_CAPABILITY)
+def test_remove_connection_is_a_typed_fenced_operation(self) -> None:
+    self.assertIn("remove_connection", OP_REQUIRED_CAPABILITY)
+    validate_operation_params(
+        "remove_connection",
+        {
+            "target_node_id": "peer-a",
+            "cluster_id": "c",
+            "epoch": 1,
+            "fencing_token": "t",
+        },
+    )
+
+
+def test_remove_connection_rejects_missing_target(self) -> None:
+    with self.assertRaises(RemoteProtocolError):
         validate_operation_params(
             "remove_connection",
-            {
-                "target_node_id": "peer-a",
-                "cluster_id": "c",
-                "epoch": 1,
-                "fencing_token": "t",
-            },
+            {"cluster_id": "c", "epoch": 1, "fencing_token": "t"},
         )
 
-    def test_remove_connection_rejects_missing_target(self) -> None:
-        with self.assertRaises(RemoteProtocolError):
-            validate_operation_params(
-                "remove_connection",
-                {"cluster_id": "c", "epoch": 1, "fencing_token": "t"},
-            )
 
-    def test_remove_job_requires_fencing_fields(self) -> None:
-        with self.assertRaises(RemoteProtocolError):
-            validate_operation_params("remove_job", {})
+def test_remove_job_requires_fencing_fields(self) -> None:
+    with self.assertRaises(RemoteProtocolError):
+        validate_operation_params("remove_job", {})
 ```
 
 Import `OP_REQUIRED_CAPABILITY` in the test.
@@ -418,31 +426,32 @@ Add both to `ROLE_OPERATIONS` (they require fencing) and to the fencing-params b
 After `resume_worker`:
 
 ```python
-    def remove_connection(
-        self, target_node_id: str, *, cluster_id: str, epoch: int, fencing_token: str
-    ) -> dict[str, Any]:
-        return self._role_request(
-            "remove_connection",
-            {
-                "target_node_id": target_node_id,
-                "cluster_id": cluster_id,
-                "epoch": epoch,
-                "fencing_token": fencing_token,
-            },
-        )
+def remove_connection(
+    self, target_node_id: str, *, cluster_id: str, epoch: int, fencing_token: str
+) -> dict[str, Any]:
+    return self._role_request(
+        "remove_connection",
+        {
+            "target_node_id": target_node_id,
+            "cluster_id": cluster_id,
+            "epoch": epoch,
+            "fencing_token": fencing_token,
+        },
+    )
 
-    def remove_job(
-        self, target_node_id: str, *, cluster_id: str, epoch: int, fencing_token: str
-    ) -> dict[str, Any]:
-        return self._role_request(
-            "remove_job",
-            {
-                "target_node_id": target_node_id,
-                "cluster_id": cluster_id,
-                "epoch": epoch,
-                "fencing_token": fencing_token,
-            },
-        )
+
+def remove_job(
+    self, target_node_id: str, *, cluster_id: str, epoch: int, fencing_token: str
+) -> dict[str, Any]:
+    return self._role_request(
+        "remove_job",
+        {
+            "target_node_id": target_node_id,
+            "cluster_id": cluster_id,
+            "epoch": epoch,
+            "fencing_token": fencing_token,
+        },
+    )
 ```
 
 - [ ] **Step 5: Run the protocol and remote tests.**
@@ -499,9 +508,11 @@ Add a branch before the final `else` that raises `unknown role operation`:
 The `remove_job` branch must persist exactly like `revoke_worker` (the shared persistence lines below the branch chain already run after the if/elif chain):
 
 ```python
-    if not controller._save_cluster_state(replace(state, role_assignments=updated.assignments)):
-        raise RemoteAuthError("role state could not be saved")
-    return {"ok": True}
+if not controller._save_cluster_state(
+    replace(state, role_assignments=updated.assignments)
+):
+    raise RemoteAuthError("role state could not be saved")
+return {"ok": True}
 ```
 
 `remove_connection` returns before the shared persistence block because it changes no role state; it only detaches the caller's local relationship.
@@ -556,22 +567,30 @@ Add fields to `ClusterNodeSpec`:
 Render a participation suffix in the meta line when the node is a non-local Worker (`· 20% participation` when `not has_active_job`). Add two buttons beside Revoke/Pause:
 
 ```python
-        if spec.role_editable and not spec.is_local and self.callbacks.on_remove_connection is not None:
-            remove_connection = self.button_cls(
-                row,
-                text="Remove connection",
-                command=lambda: self.callbacks.on_remove_connection(spec.node_id),
-                style=ui_styles.STYLE_NEUTRAL_BUTTON,
-            )
-            remove_connection.pack(side="right", padx=(0, 8))
-        if spec.role_editable and not spec.is_local and self.callbacks.on_remove_job is not None:
-            remove_job = self.button_cls(
-                row,
-                text="Remove job",
-                command=lambda: self.callbacks.on_remove_job(spec.node_id),
-                style=ui_styles.STYLE_NEUTRAL_BUTTON,
-            )
-            remove_job.pack(side="right", padx=(0, 8))
+if (
+    spec.role_editable
+    and not spec.is_local
+    and self.callbacks.on_remove_connection is not None
+):
+    remove_connection = self.button_cls(
+        row,
+        text="Remove connection",
+        command=lambda: self.callbacks.on_remove_connection(spec.node_id),
+        style=ui_styles.STYLE_NEUTRAL_BUTTON,
+    )
+    remove_connection.pack(side="right", padx=(0, 8))
+if (
+    spec.role_editable
+    and not spec.is_local
+    and self.callbacks.on_remove_job is not None
+):
+    remove_job = self.button_cls(
+        row,
+        text="Remove job",
+        command=lambda: self.callbacks.on_remove_job(spec.node_id),
+        style=ui_styles.STYLE_NEUTRAL_BUTTON,
+    )
+    remove_job.pack(side="right", padx=(0, 8))
 ```
 
 In `maintenance/ui/nodes_connections.py`, add `on_remove_connection` to `NodesConnectionsCallbacks` and render `Remove connection` on the trusted coordinator row for a worker view. Match the existing trusted-row button layout.
@@ -583,11 +602,12 @@ In `maintenance/ui/window_pages.py`, pass `on_remove_connection=controller._remo
 In `window.py`, add:
 
 ```python
-    def _remove_connection_node(self, node_id: str) -> None:
-        ui_node_actions.remove_connection_node(self, node_id)
+def _remove_connection_node(self, node_id: str) -> None:
+    ui_node_actions.remove_connection_node(self, node_id)
 
-    def _remove_job_node(self, node_id: str) -> None:
-        ui_node_actions.remove_job_node(self, node_id)
+
+def _remove_job_node(self, node_id: str) -> None:
+    ui_node_actions.remove_job_node(self, node_id)
 ```
 
 - [ ] **Step 5: Implement the action functions with confirmation.**
@@ -626,7 +646,9 @@ def remove_connection_node(
     controller._nodes_status(f"Removed connection to {node_id}")
 
 
-def remove_job_node(controller: Any, node_id: str, *, messagebox_module: Any = messagebox) -> None:
+def remove_job_node(
+    controller: Any, node_id: str, *, messagebox_module: Any = messagebox
+) -> None:
     if not messagebox_module.askyesno(
         "Remove job",
         "This removes the active assignment and reduces normal collection to 20%.",

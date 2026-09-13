@@ -110,8 +110,13 @@ def snapshot_batch_from_dict(value: object) -> SnapshotBatch:
     if not isinstance(value, dict):
         raise TypeError("snapshot batch must be an object")
     required = {
-        "batch_id", "source_node_id", "source_epoch", "sequence", "observed_at",
-        "encoded_size", "payload",
+        "batch_id",
+        "source_node_id",
+        "source_epoch",
+        "sequence",
+        "observed_at",
+        "encoded_size",
+        "payload",
     }
     if not required <= set(value):
         raise ValueError("snapshot batch is incomplete")
@@ -146,7 +151,10 @@ def snapshot_batch_from_dict(value: object) -> SnapshotBatch:
         int(value["encoded_size"]),
         str(value.get("cluster_id", "")),
     )
-    if len(json.dumps(snapshot_batch_to_dict(batch), separators=(",", ":")).encode()) > MAX_BATCH_PAYLOAD_BYTES:
+    if (
+        len(json.dumps(snapshot_batch_to_dict(batch), separators=(",", ":")).encode())
+        > MAX_BATCH_PAYLOAD_BYTES
+    ):
         raise ValueError("snapshot batch is too large")
     _BatchStore._validate_batch(batch)
     return batch
@@ -181,7 +189,9 @@ class _BatchStore:
                     payload TEXT NOT NULL
                 )"""
             )
-            columns = {str(row[1]) for row in db.execute("PRAGMA table_info(snapshot_batches)")}
+            columns = {
+                str(row[1]) for row in db.execute("PRAGMA table_info(snapshot_batches)")
+            }
             if "cluster_id" not in columns:
                 db.execute(
                     "ALTER TABLE snapshot_batches ADD COLUMN cluster_id TEXT NOT NULL DEFAULT ''"
@@ -244,7 +254,8 @@ class _BatchStore:
         try:
             with _connect(self.path) as db:
                 existing = db.execute(
-                    "SELECT 1 FROM snapshot_batches WHERE batch_id = ?", (batch.batch_id,)
+                    "SELECT 1 FROM snapshot_batches WHERE batch_id = ?",
+                    (batch.batch_id,),
                 ).fetchone()
                 if existing is not None:
                     return False
@@ -281,7 +292,10 @@ class _BatchStore:
     ) -> bool:
         if cluster_id is not None and batch.cluster_id not in ("", cluster_id):
             raise ValueError("snapshot batch belongs to another cluster")
-        if expected_source_node_id is not None and batch.source_node_id != expected_source_node_id:
+        if (
+            expected_source_node_id is not None
+            and batch.source_node_id != expected_source_node_id
+        ):
             raise ValueError("snapshot batch source identity is invalid")
         if expected_epoch is not None and batch.source_epoch != expected_epoch:
             raise ValueError("snapshot batch epoch is stale")
@@ -291,11 +305,19 @@ class _BatchStore:
                 "WHERE source_node_id = ? ORDER BY sequence DESC LIMIT 1",
                 (batch.source_node_id.value,),
             ).fetchone()
-        if prior is not None and batch.source_epoch == int(prior[0]) and batch.sequence <= int(prior[1]):
+        if (
+            prior is not None
+            and batch.source_epoch == int(prior[0])
+            and batch.sequence <= int(prior[1])
+        ):
             if batch.batch_id in self.batch_ids():
                 return False
             raise ValueError("snapshot batch sequence is stale")
-        if prior is not None and batch.source_epoch == int(prior[0]) and batch.sequence > int(prior[1]) + 1:
+        if (
+            prior is not None
+            and batch.source_epoch == int(prior[0])
+            and batch.sequence > int(prior[1]) + 1
+        ):
             gap = DataGap(
                 batch.source_node_id,
                 batch.source_epoch,
@@ -325,7 +347,13 @@ class _BatchStore:
                 "ORDER BY detected_at, rowid"
             ).fetchall()
         return tuple(
-            DataGap(NodeId(str(row[0])), int(row[1]), int(row[2]), int(row[3]), float(row[4]))
+            DataGap(
+                NodeId(str(row[0])),
+                int(row[1]),
+                int(row[2]),
+                int(row[3]),
+                float(row[4]),
+            )
             for row in rows
         )
 

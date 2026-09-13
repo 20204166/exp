@@ -1168,7 +1168,9 @@ class SharedScanHelperTests(unittest.TestCase):
 
 
 class AppCoordinatorTests(unittest.TestCase):
-    def test_choose_placement_delegates_without_starting_or_mutating_a_run(self) -> None:
+    def test_choose_placement_delegates_without_starting_or_mutating_a_run(
+        self,
+    ) -> None:
         expected = PlacementDecision(None, (), (), "no eligible nodes")
 
         class FakePlacementPolicy:
@@ -1197,7 +1199,9 @@ class AppCoordinatorTests(unittest.TestCase):
         self.assertEqual(runner.workers, [])
         self.assertFalse(coordinator.in_flight("hash"))
 
-    def test_choose_placement_does_not_create_a_second_scheduler_or_lifecycle(self) -> None:
+    def test_choose_placement_does_not_create_a_second_scheduler_or_lifecycle(
+        self,
+    ) -> None:
         runner = DeferredRunner()
         coordinator = AppCoordinator(runner=runner)
         request = PlacementRequest(
@@ -1247,7 +1251,9 @@ class AppCoordinatorTests(unittest.TestCase):
         self.assertEqual(results, [])
         self.assertIsNone(coordinator.last_result("hash"))
 
-    def test_node_qualified_keys_remain_independent_after_placement_choice(self) -> None:
+    def test_node_qualified_keys_remain_independent_after_placement_choice(
+        self,
+    ) -> None:
         runner = DeferredRunner()
         coordinator = AppCoordinator(runner=runner)
         request = PlacementRequest(

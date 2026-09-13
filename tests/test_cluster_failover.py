@@ -144,11 +144,15 @@ class ClusterFailoverTests(unittest.TestCase):
         timeline = CoordinatorTimeline(self.root / "history.db", max_bytes=1024)
         payload = (ResourceSnapshot(NodeId("worker"), "cpu", "10%", 10.0, 10.0, 100.0),)
         standby.append(
-            SnapshotBatch("valid", NodeId("coord"), 7, 1, 100.0, payload, 20, "cluster"),
+            SnapshotBatch(
+                "valid", NodeId("coord"), 7, 1, 100.0, payload, 20, "cluster"
+            ),
             now=100.0,
         )
         standby.append(
-            SnapshotBatch("stale", NodeId("coord"), 6, 2, 101.0, payload, 20, "cluster"),
+            SnapshotBatch(
+                "stale", NodeId("coord"), 6, 2, 101.0, payload, 20, "cluster"
+            ),
             now=101.0,
         )
         manager = PeerConnectionManager(
@@ -171,7 +175,9 @@ class ClusterFailoverTests(unittest.TestCase):
         state.role_assignments = (
             RoleAssignment(frozenset({ClusterRole.COORDINATOR}), NodeId("coord")),
         )
-        state.coordinator_epoch = CoordinatorEpoch(8, NodeId("sub"), "new", 220.1, 340.1)
+        state.coordinator_epoch = CoordinatorEpoch(
+            8, NodeId("sub"), "new", 220.1, 340.1
+        )
 
         self.manager.rejoin_as_worker(state, NodeId("coord"), 8)
 
@@ -190,7 +196,11 @@ class ClusterFailoverTests(unittest.TestCase):
     def test_timeline_rejects_wrong_cluster_epoch_and_sequence(self) -> None:
         timeline = CoordinatorTimeline(self.root / "timeline.db", max_bytes=1024)
         batch = SnapshotBatch(
-            "one", NodeId("coord"), 7, 1, 100.0,
+            "one",
+            NodeId("coord"),
+            7,
+            1,
+            100.0,
             (ResourceSnapshot(NodeId("worker"), "cpu", "10%", 10.0, 10.0, 100.0),),
             20,
             "cluster",
@@ -199,7 +209,9 @@ class ClusterFailoverTests(unittest.TestCase):
             timeline.import_batch(batch, cluster_id="other", expected_epoch=7)
         with self.assertRaises(ValueError):
             timeline.import_batch(batch, cluster_id="cluster", expected_epoch=8)
-        self.assertTrue(timeline.import_batch(batch, cluster_id="cluster", expected_epoch=7))
+        self.assertTrue(
+            timeline.import_batch(batch, cluster_id="cluster", expected_epoch=7)
+        )
         with self.assertRaises(ValueError):
             timeline.import_batch(
                 SnapshotBatch(

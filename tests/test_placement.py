@@ -203,7 +203,9 @@ class PlacementPolicyTests(unittest.TestCase):
         self.assertTrue(view.online)
         self.assertTrue(view.protocol_compatible)
 
-    def test_trusted_online_remote_requires_explicit_protocol_compatibility(self) -> None:
+    def test_trusted_online_remote_requires_explicit_protocol_compatibility(
+        self,
+    ) -> None:
         context = _context(
             "peer",
             local=False,
@@ -253,9 +255,7 @@ class PlacementPolicyTests(unittest.TestCase):
                 "failed",
                 local=False,
                 trust=NodeTrustState.TRUSTED,
-                connection=ConnectionState(
-                    NodeConnectionStatus.AUTHENTICATION_FAILED
-                ),
+                connection=ConnectionState(NodeConnectionStatus.AUTHENTICATION_FAILED),
             ),
             protocol_compatible=True,
         )
@@ -280,20 +280,21 @@ class PlacementPolicyTests(unittest.TestCase):
         local = _view(
             "local",
             capabilities=frozenset(
-                    {
-                        NodeCapability.COMPONENT_READ,
-                        NodeCapability.PROCESS_REVIEW,
-                        NodeCapability.STORAGE_REVIEW,
-                        NodeCapability.PROCESS_TERMINATION,
-                    }
-                ), permissions=frozenset(
-                    {
-                        NodePermission.COMPONENT_READ,
-                        NodePermission.PROCESS_REVIEW,
-                        NodePermission.STORAGE_REVIEW,
-                        NodePermission.PROCESS_TERMINATION,
-                    }
-                ),
+                {
+                    NodeCapability.COMPONENT_READ,
+                    NodeCapability.PROCESS_REVIEW,
+                    NodeCapability.STORAGE_REVIEW,
+                    NodeCapability.PROCESS_TERMINATION,
+                }
+            ),
+            permissions=frozenset(
+                {
+                    NodePermission.COMPONENT_READ,
+                    NodePermission.PROCESS_REVIEW,
+                    NodePermission.STORAGE_REVIEW,
+                    NodePermission.PROCESS_TERMINATION,
+                }
+            ),
         )
         node_b = replace(local, node_id=NodeId("node-b"), is_local=False)
         node_c = replace(local, node_id=NodeId("node-c"), is_local=False)
@@ -370,15 +371,11 @@ class PlacementPolicyTests(unittest.TestCase):
                 "auth-failed",
                 local=False,
                 trust=NodeTrustState.TRUSTED,
-                connection=ConnectionState(
-                    NodeConnectionStatus.AUTHENTICATION_FAILED
-                ),
+                connection=ConnectionState(NodeConnectionStatus.AUTHENTICATION_FAILED),
             ),
             protocol_compatible=True,
         )
-        identity_changed = _view(
-            "identity-changed", local=False, identity_valid=False
-        )
+        identity_changed = _view("identity-changed", local=False, identity_valid=False)
         cases = (
             ("discovered", discovered, "not trusted"),
             (

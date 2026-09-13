@@ -188,9 +188,10 @@ def remove_connection_node(
         local_id = registry.local_id()
         if local_id is not None:
             registry.select(local_id)
-    if registry is not None and controller.__dict__.get(
-        "_selected_node_id"
-    ) != registry.selected_id():
+    if (
+        registry is not None
+        and controller.__dict__.get("_selected_node_id") != registry.selected_id()
+    ):
         controller.__dict__["_selected_node_id"] = registry.selected_id()
         context = registry.selected_context()
         controller._sync_selected_context_mirrors(context)

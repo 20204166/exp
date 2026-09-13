@@ -89,6 +89,7 @@ class DiagnosticsPage:
                 "diagnostics:copy", self._copy, replace=True
             )
             self._button_coordinator.bind(self.copy_button, "diagnostics:copy")
+        self._pulse_body = self._section(self.content, "Live health pulse")
         self._summary_body = self._section(self.content, "Summary")
         self._components_body = self._section(self.content, "Components")
         self._operations_body = self._section(self.content, "Running work")
@@ -106,10 +107,50 @@ class DiagnosticsPage:
             colors=self.colors,
             fonts=self.fonts,
         )
+        ui_layout.resize_aware(body, self._rewrap_section)
         return body
+
+    def _rewrap_section(self, body: Any) -> None:
+        """Keep right-hand diagnostic values readable as the page narrows."""
+
+        width = body.winfo_width()
+        if width <= 1:
+            return
+        wraplength = min(520, ui_layout.metric_value_wrap(width))
+        for row in self._section_rows.get(body, ()):
+            row[2].configure(wraplength=wraplength)
 
     def render(self, snapshot: DiagnosticsSnapshot) -> None:
         self._snapshot = snapshot
+        active_count = sum(item.in_flight for item in snapshot.operations)
+        failure = snapshot.most_recent_failure
+        pending = snapshot.render.pending
+        self._render_rows(
+            self._pulse_body,
+            [
+                ("Active work", str(active_count)),
+                (
+                    "Recent failures",
+                    failure or "No recent failures",
+                ),
+                (
+                    "Nodes",
+                    str(len(snapshot.nodes))
+                    if snapshot.nodes
+                    else "No remote nodes configured",
+                ),
+                (
+                    "Render pressure",
+                    f"{pending} pending" if pending else "No pending renders",
+                ),
+            ],
+            value_colors=[
+                self.colors["warning"] if active_count else self.colors["secondary"],
+                self.colors["danger"] if failure else self.colors["muted_text"],
+                self.colors["success"] if snapshot.nodes else self.colors["muted_text"],
+                self.colors["warning"] if pending else self.colors["secondary"],
+            ],
+        )
         self._render_rows(
             self._summary_body,
             [
@@ -121,6 +162,10 @@ class DiagnosticsPage:
                     "Active work",
                     str(sum(item.in_flight for item in snapshot.operations)),
                 ),
+            ],
+            value_colors=[
+                self.colors["danger"] if failure else self.colors["muted_text"],
+                self.colors["warning"] if active_count else self.colors["secondary"],
             ],
         )
         self._render_rows(
@@ -136,6 +181,10 @@ class DiagnosticsPage:
                 for item in snapshot.components
             ],
             empty_text="No data yet",
+            value_colors=[
+                self._component_color(item.state, item.capability, item.last_error)
+                for item in snapshot.components
+            ],
         )
         active = [item for item in snapshot.operations if item.in_flight]
         self._render_rows(
@@ -212,6 +261,7 @@ class DiagnosticsPage:
         rows: list[tuple[str, str]],
         *,
         empty_text: str | None = None,
+        value_colors: list[str] | None = None,
     ) -> None:
         existing = self._section_rows.setdefault(parent, [])
         if empty_text is not None:
@@ -227,37 +277,70 @@ class DiagnosticsPage:
                 del self._empty_labels[parent]
         for index, (title, value) in enumerate(rows):
             if index >= len(existing):
-                existing.append(self._row(parent, title, value))
+                existing.append(
+                    self._row(
+                        parent,
+                        title,
+                        value,
+                        value_fg=(
+                            value_colors[index]
+                            if value_colors is not None
+                            else self.colors["secondary"]
+                        ),
+                    )
+                )
             else:
                 _frame, title_label, value_label = existing[index]
-                title_label.configure(text=title)
-                value_label.configure(text=value)
+                self._configure_label(title_label, text=title)
+                self._configure_label(value_label, text=value)
+                if value_colors is not None:
+                    self._configure_label(value_label, fg=value_colors[index])
         while len(existing) > len(rows):
             frame, _title_label, _value_label = existing.pop()
             frame.destroy()
 
-    def _row(self, parent: Any, title: str, value: str) -> tuple[Any, Any, Any]:
-        row = self.frame_cls(parent, bg=self.colors["card"])
-        row.pack(fill="x", pady=(0, 5))
-        title_label = self.label_cls(
-            row,
-            text=title,
+    def _row(
+        self,
+        parent: Any,
+        title: str,
+        value: str,
+        *,
+        value_fg: str,
+    ) -> tuple[Any, Any, Any]:
+        return ui_layout.metric_row(
+            parent,
+            title,
+            value,
+            frame_cls=self.frame_cls,
+            label_cls=self.label_cls,
             bg=self.colors["card"],
-            fg=self.colors["text"],
-            font=self.fonts["body"],
-        )
-        title_label.pack(side="left")
-        value_label = self.label_cls(
-            row,
-            text=value,
-            bg=self.colors["card"],
-            fg=self.colors["secondary"],
+            label_fg=self.colors["text"],
+            value_fg=value_fg,
             font=self.fonts["body"],
             wraplength=520,
             justify="left",
+            pady=(0, 5),
         )
-        value_label.pack(side="right", anchor="e")
-        return row, title_label, value_label
+
+    def _component_color(self, state: str, capability: str, error: str | None) -> str:
+        if error is not None or state == "failed":
+            return self.colors["danger"]
+        if state == "in_flight":
+            return self.colors["warning"]
+        if state == "paused":
+            return self.colors["muted_text"]
+        if capability in {"unavailable", "unsupported"}:
+            return self.colors["muted_text"]
+        return self.colors["success"]
+
+    @staticmethod
+    def _configure_label(label: Any, **options: Any) -> None:
+        """Update a label through Tk while keeping recorder seams observable."""
+
+        label.configure(**options)
+        recorded_options = getattr(label, "kwargs", None)
+        if isinstance(recorded_options, dict):
+            recorded_options.update(options)
 
     def _empty(self, parent: Any, text: str) -> Any:
         label = self.label_cls(

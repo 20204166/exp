@@ -425,9 +425,15 @@ class RemoteService:
 
     def _verify_role_fence(self, request: RemoteRequest) -> None:
         params = request.params
-        if self._cluster_id is not None and params.get("cluster_id") != self._cluster_id:
+        if (
+            self._cluster_id is not None
+            and params.get("cluster_id") != self._cluster_id
+        ):
             raise RemoteAuthorizationError("cluster identity is invalid")
-        if self._coordinator_epoch is not None and params.get("epoch") != self._coordinator_epoch:
+        if (
+            self._coordinator_epoch is not None
+            and params.get("epoch") != self._coordinator_epoch
+        ):
             raise RemoteAuthorizationError("coordinator epoch is stale")
         if self._fencing_token is not None and not hmac.compare_digest(
             str(params.get("fencing_token")), self._fencing_token
@@ -522,16 +528,9 @@ class AuthenticatedNodeProvider:
         cancel_event: Any | None = None,
         progress_callback: Callable[[str], None] | None = None,
     ) -> Any:
-        self._check_cancel(cancel_event)
-        payload = self._request("dashboard_snapshot", {}, cancel_event)
-        try:
-            snapshot = node_snapshot_from_dict(payload["snapshot"])
-        except (KeyError, ClusterDataError) as error:
-            raise RemoteExecutionError("remote sent an invalid snapshot") from error
+        snapshot = self._node_snapshot(cancel_event)
         if snapshot.dashboard is None:
             raise RemoteExecutionError("remote sent no dashboard data")
-        if snapshot.node_id != self._node_id:
-            raise RemoteAuthError("remote snapshot came from the wrong node")
         return snapshot.dashboard
 
     def node_snapshot(
@@ -539,6 +538,10 @@ class AuthenticatedNodeProvider:
         cancel_event: Any | None = None,
         progress_callback: Callable[[str], None] | None = None,
     ) -> NodeSnapshot:
+        return self._node_snapshot(cancel_event)
+
+    def _node_snapshot(self, cancel_event: Any | None = None) -> NodeSnapshot:
+        """Fetch and validate a snapshot before applying its public contract."""
         self._check_cancel(cancel_event)
         payload = self._request("dashboard_snapshot", {}, cancel_event)
         try:
@@ -638,7 +641,12 @@ class AuthenticatedNodeProvider:
         )
 
     def upload_snapshot(
-        self, payload: dict[str, Any], *, cluster_id: str, epoch: int, fencing_token: str
+        self,
+        payload: dict[str, Any],
+        *,
+        cluster_id: str,
+        epoch: int,
+        fencing_token: str,
     ) -> dict[str, Any]:
         return self._role_request(
             "worker_snapshot",
@@ -651,7 +659,12 @@ class AuthenticatedNodeProvider:
         )
 
     def upload_standby_batch(
-        self, payload: dict[str, Any], *, cluster_id: str, epoch: int, fencing_token: str
+        self,
+        payload: dict[str, Any],
+        *,
+        cluster_id: str,
+        epoch: int,
+        fencing_token: str,
     ) -> dict[str, Any]:
         return self._role_request(
             "standby_batch",

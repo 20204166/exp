@@ -1169,9 +1169,10 @@ class ProcessActionCodecTests(unittest.TestCase):
 class RemoteProtocolCapabilityWiringTests(unittest.TestCase):
     """Catch a remote operation and its capability/permission drifting apart.
 
-    ``OP_REQUIRED_CAPABILITY``/``OP_REQUIRED_PERMISSION`` are hand-maintained
-    dicts (protocol.py:45-84) -- the same "hand-written dispatch, drift risk"
-    shape already tested for ``SystemScanner.scan_component`` in
+    ``OP_REQUIRED_CAPABILITY`` is the canonical operation table and
+    ``OP_REQUIRED_PERMISSION`` derives from its values. The assertion below
+    guards the one-to-one operation contract, while the same "hand-written
+    dispatch, drift risk" shape is also tested for ``SystemScanner.scan_component`` in
     ``tests/test_page_wiring_consistency.py::ScannerCatalogWiringTests``.
     """
 
@@ -1184,6 +1185,16 @@ class RemoteProtocolCapabilityWiringTests(unittest.TestCase):
             "OP_REQUIRED_CAPABILITY and OP_REQUIRED_PERMISSION cover different "
             "operations -- every operation must require both a capability and "
             "a permission.",
+        )
+        self.assertEqual(
+            {
+                operation: permission.value
+                for operation, permission in protocol.OP_REQUIRED_PERMISSION.items()
+            },
+            {
+                operation: capability.value
+                for operation, capability in protocol.OP_REQUIRED_CAPABILITY.items()
+            },
         )
 
     def test_every_node_capability_is_used_by_at_least_one_operation(self) -> None:

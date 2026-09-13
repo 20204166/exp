@@ -58,9 +58,7 @@ class ClusterRolePersistenceTests(unittest.TestCase):
                 "local_node_id": "worker",
                 "trusted_nodes": [],
                 "peer_grants": [],
-                "role_assignments": [
-                    {"node_id": "worker", "roles": ["worker"]}
-                ],
+                "role_assignments": [{"node_id": "worker", "roles": ["worker"]}],
             }
             path.write_text(json.dumps(payload), encoding="utf-8")
             loaded = ClusterStore(path).load()
@@ -118,9 +116,7 @@ class ClusterRolePersistenceTests(unittest.TestCase):
             store.save(state)
             loaded = store.load()
         peer = next(
-            item
-            for item in loaded.role_assignments
-            if item.node_id == NodeId("peer")
+            item for item in loaded.role_assignments if item.node_id == NodeId("peer")
         )
         self.assertTrue(peer.revoked)
         self.assertFalse(peer.has_active_job)
@@ -193,6 +189,32 @@ class ClusterRolePersistenceTests(unittest.TestCase):
         assert node_id is not None
         self.assertEqual(node_id.value, "coord")
         self.assertIn(ClusterRole.WORKER, active_coordinators[0].roles)
+
+    def test_duplicate_active_subcoordinators_collapse_to_one_on_load(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            payload = {
+                "schema_version": 2,
+                "local_node_id": "coord",
+                "trusted_nodes": [],
+                "peer_grants": [],
+                "role_assignments": [
+                    {"node_id": "first", "roles": ["subcoordinator"]},
+                    {"node_id": "second", "roles": ["subcoordinator"]},
+                ],
+            }
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            state = ClusterStore(path).load()
+
+        active_subcoordinators = [
+            item
+            for item in state.role_assignments
+            if ClusterRole.SUBCOORDINATOR in item.roles and not item.revoked
+        ]
+        self.assertEqual(len(active_subcoordinators), 1)
+        node_id = active_subcoordinators[0].node_id
+        assert node_id is not None
+        self.assertEqual(node_id.value, "first")
 
     def test_non_finite_epoch_lease_is_rejected_on_load(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

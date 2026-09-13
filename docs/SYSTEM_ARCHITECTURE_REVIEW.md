@@ -614,10 +614,10 @@ on the same canonical local scan path on the target, not a parallel implementati
 `ResourceFeatureCatalog.DEFAULT_FEATURES` (`components/catalog.py:70-77`):
 
 ```python
-ResourceFeature("cpu",     "CPU",     order=0, action_kind="process")
-ResourceFeature("memory",  "Memory",  order=1, action_kind="process")
+ResourceFeature("cpu", "CPU", order=0, action_kind="process")
+ResourceFeature("memory", "Memory", order=1, action_kind="process")
 ResourceFeature("storage", "Storage", order=2, action_kind="storage")
-ResourceFeature("gpu",     "GPU",     order=3, action_kind="informational")
+ResourceFeature("gpu", "GPU", order=3, action_kind="informational")
 ResourceFeature("network", "Network", order=4, action_kind="informational")
 ResourceFeature("battery", "Battery", order=5, action_kind="informational")
 ```
@@ -1177,8 +1177,9 @@ RemoteSocketServer, constructed at start_peer_listener time, with
 ### Startup-time exposure
 
 ```python
-self._configure_styles(); self._build_window()
-self._start_peer_listener()   # binds RemoteSocketServer(host="0.0.0.0", ssl_context=..., ...)
+self._configure_styles()
+self._build_window()
+self._start_peer_listener()  # binds RemoteSocketServer(host="0.0.0.0", ssl_context=..., ...)
 self._start_discovery()
 ```
 `start_peer_listener` binds unconditionally, on `0.0.0.0` (all interfaces, not loopback-only),

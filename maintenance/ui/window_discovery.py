@@ -38,6 +38,7 @@ from maintenance.remote import (
 from maintenance.remote_security import ensure_tls_material, server_context
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui import render_coordinator as ui_render
+from maintenance.ui.window_supports.timer_delivery import deadline_delay_ms
 
 JOB_UPLOAD_DIVISOR = 5
 
@@ -47,7 +48,7 @@ def should_upload_job(sequence: int, has_active_job: bool) -> bool:
     if has_active_job:
         return True
     return sequence % JOB_UPLOAD_DIVISOR == 0
-from maintenance.ui.window_supports.timer_delivery import deadline_delay_ms
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -178,15 +179,19 @@ def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, An
         )
         if invite is None:
             raise RemoteAuthError("pairing invite is unknown or expired")
-        if invite.target_node_id and invite.target_node_id != (
-            request.caller_node_id or NodeId("")
-        ).value:
+        if (
+            invite.target_node_id
+            and invite.target_node_id != (request.caller_node_id or NodeId("")).value
+        ):
             raise RemoteAuthError("pairing invite is bound to another node")
         invite = state.consume_invite(request.params["token"], now=time.time())
         if not controller._save_cluster_state(state):
             state.active_invites = (*state.active_invites, invite)
             raise RemoteAuthError("pairing invite could not be consumed")
-        return {"target_node_id": invite.target_node_id, "expires_at": invite.expires_at}
+        return {
+            "target_node_id": invite.target_node_id,
+            "expires_at": invite.expires_at,
+        }
     if request.op == "renew_coordinator_lease":
         manager = controller.__dict__.get("_peer_connection_manager")
         if manager is None:
@@ -209,11 +214,8 @@ def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, An
             raise RemoteAuthError("snapshot cluster identity is invalid")
         caller = request.caller_node_id
         assignment = next(
-            (
-                item
-                for item in state.role_assignments
-                if item.node_id == caller
-            ),
+            (item for item in state.role_assignments if item.node_id == caller),
+            None,
         )
         if assignment is None or assignment.paused or assignment.revoked:
             raise RemoteAuthError("snapshot sender is not active")
@@ -243,11 +245,7 @@ def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, An
     if actor_id is None:
         raise RemoteAuthError("role operation has no caller identity")
     actor = next(
-        (
-            item
-            for item in state.role_assignments
-            if item.node_id == actor_id
-        ),
+        (item for item in state.role_assignments if item.node_id == actor_id),
         None,
     )
     if actor is None:
@@ -294,7 +292,9 @@ def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, An
         )
     else:
         raise RemoteAuthError("unknown role operation")
-    if not controller._save_cluster_state(replace(state, role_assignments=updated.assignments)):
+    if not controller._save_cluster_state(
+        replace(state, role_assignments=updated.assignments)
+    ):
         raise RemoteAuthError("role state could not be saved")
     return {"ok": True}
 
@@ -396,7 +396,9 @@ def peer_connections(controller: Any) -> PeerConnectionManager | None:
         cluster_store=getattr(controller, "_cluster_store", None),
         timeline=getattr(controller, "_cluster_timeline", None),
         standby=getattr(controller, "_standby_buffer", None),
-        on_promoted=lambda state, decision: handle_promotion(controller, state, decision),
+        on_promoted=lambda state, decision: handle_promotion(
+            controller, state, decision
+        ),
     )
     controller.__dict__["_peer_connection_manager"] = manager
     return manager
@@ -581,9 +583,15 @@ def queue_cluster_uploads(controller: Any, manager: PeerConnectionManager) -> No
     subcoordinator_context = None
     if registry is not None:
         for context in registry.contexts():
-            if context.descriptor.role == "coordinator" and not context.descriptor.is_local:
+            if (
+                context.descriptor.role == "coordinator"
+                and not context.descriptor.is_local
+            ):
                 coordinator_context = context
-            if context.descriptor.role == "subcoordinator" and not context.descriptor.is_local:
+            if (
+                context.descriptor.role == "subcoordinator"
+                and not context.descriptor.is_local
+            ):
                 subcoordinator_context = context
     resources = getattr(snapshot, "resources", ())
     now = time.time()
@@ -617,11 +625,14 @@ def queue_cluster_uploads(controller: Any, manager: PeerConnectionManager) -> No
         ),
     )
     local_roles = state.local_assignment.roles
+    local_role_values = {role.value for role in local_roles}
     has_active_job = state.local_assignment.has_active_job
-    if coordinator_context is not None and coordinator_context.provider is not None and "worker" in {
-        role.value for role in local_roles
-    } and "coordinator" not in {role.value for role in local_roles} and should_upload_job(
-        sequence, has_active_job
+    if (
+        coordinator_context is not None
+        and coordinator_context.provider is not None
+        and "worker" in local_role_values
+        and "coordinator" not in local_role_values
+        and should_upload_job(sequence, has_active_job)
     ):
         key = f"cluster:worker-snapshot:{coordinator_context.node_id.value}"
         if not manager._coordinator.in_flight(key):
@@ -634,9 +645,11 @@ def queue_cluster_uploads(controller: Any, manager: PeerConnectionManager) -> No
                     fencing_token=epoch.fencing_token,
                 ),
             )
-    if subcoordinator_context is not None and subcoordinator_context.provider is not None and "coordinator" in {
-        role.value for role in local_roles
-    }:
+    if (
+        subcoordinator_context is not None
+        and subcoordinator_context.provider is not None
+        and "coordinator" in local_role_values
+    ):
         timeline = controller.__dict__.get("_cluster_timeline")
         batches = timeline.batches() if timeline is not None else ()
         if batches:
@@ -645,11 +658,13 @@ def queue_cluster_uploads(controller: Any, manager: PeerConnectionManager) -> No
             if not manager._coordinator.in_flight(key):
                 manager._coordinator.run(
                     key,
-                    lambda cancel, _progress: subcoordinator_context.provider.upload_standby_batch(
-                        snapshot_batch_to_dict(latest),
-                        cluster_id=state.cluster_id,
-                        epoch=epoch.epoch,
-                        fencing_token=epoch.fencing_token,
+                    lambda cancel, _progress: (
+                        subcoordinator_context.provider.upload_standby_batch(
+                            snapshot_batch_to_dict(latest),
+                            cluster_id=state.cluster_id,
+                            epoch=epoch.epoch,
+                            fencing_token=epoch.fencing_token,
+                        )
                     ),
                 )
 
@@ -909,11 +924,10 @@ def refresh_discovery_status(controller: Any) -> None:
 
 
 def stop_discovery(controller: Any) -> None:
-    if "_node_registry" not in controller.__dict__:
-        controller._cancel_timer(controller.__dict__.get("_discovery_tick_id"))
-        controller._discovery_tick_id = None
-        return
-    if controller.__dict__.get("_coordinator") is None:
+    if (
+        "_node_registry" not in controller.__dict__
+        or controller.__dict__.get("_coordinator") is None
+    ):
         controller._cancel_timer(controller.__dict__.get("_discovery_tick_id"))
         controller._discovery_tick_id = None
         return

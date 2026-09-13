@@ -18,10 +18,22 @@ from maintenance.nodes import NodeId
 
 
 class DiagnosticsSnapshotTests(unittest.TestCase):
-    def test_cluster_diagnostic_does_not_claim_physical_storage_accounting(self) -> None:
+    def test_cluster_diagnostic_does_not_claim_physical_storage_accounting(
+        self,
+    ) -> None:
         diagnostic = ClusterDiagnostic(
-            "coordinator", "coord", 2, 1.0, 10, 20, 0, 256,
-            "normal", 100.0, False, None,
+            "coordinator",
+            "coord",
+            2,
+            1.0,
+            10,
+            20,
+            0,
+            256,
+            "normal",
+            100.0,
+            False,
+            None,
         )
         self.assertNotIn("physical disk", serialize_cluster_diagnostic(diagnostic))
 

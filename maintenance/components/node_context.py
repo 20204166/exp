@@ -117,9 +117,7 @@ def restore_trusted_nodes(
                 else "subcoordinator"
                 if any(
                     assignment.node_id == node_id
-                    and any(
-                        role.value == "subcoordinator" for role in assignment.roles
-                    )
+                    and any(role.value == "subcoordinator" for role in assignment.roles)
                     for assignment in cluster_state.role_assignments
                 )
                 else "worker"

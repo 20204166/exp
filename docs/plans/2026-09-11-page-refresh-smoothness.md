@@ -105,65 +105,80 @@ Also add a test that a text-only change (e.g. `last_refresh` or `status`) update
 - Rewrite `refresh_nodes`:
 
 ```python
-    _STRUCTURAL = ("selectable", "status", "role", "role_editable", "paused",
-                   "has_active_job", "capabilities", "trust", "is_local",
-                   "pairing_state", "target_state")
+_STRUCTURAL = (
+    "selectable",
+    "status",
+    "role",
+    "role_editable",
+    "paused",
+    "has_active_job",
+    "capabilities",
+    "trust",
+    "is_local",
+    "pairing_state",
+    "target_state",
+)
 
-    def refresh_nodes(self, nodes: list[ClusterNodeSpec]) -> None:
-        if self._disposed:
-            return
-        incoming = {spec.node_id: spec for spec in nodes}
-        for node_id in [key for key in self._rows if key not in incoming]:
-            self._remove_row(node_id)
-        for spec in nodes:
-            previous = self._nodes.get(spec.node_id)
-            if spec.node_id not in self._rows:
-                self._rows[spec.node_id] = self._node_row(self._body, spec)
-            elif previous is not None and not self._same_row(previous, spec):
-                self._remove_row(spec.node_id)
-                self._rows[spec.node_id] = self._node_row(self._body, spec)
-            else:
-                self._update_row(spec)
-        self._nodes = {spec.node_id: spec for spec in nodes}
-        self._repack_in_order(nodes)
-        self._update_empty_state(nodes)
 
-    @staticmethod
-    def _same_row(previous: ClusterNodeSpec, current: ClusterNodeSpec) -> bool:
-        return all(
-            getattr(previous, name) == getattr(current, name)
-            for name in ClusterPage._STRUCTURAL
-        )
+def refresh_nodes(self, nodes: list[ClusterNodeSpec]) -> None:
+    if self._disposed:
+        return
+    incoming = {spec.node_id: spec for spec in nodes}
+    for node_id in [key for key in self._rows if key not in incoming]:
+        self._remove_row(node_id)
+    for spec in nodes:
+        previous = self._nodes.get(spec.node_id)
+        if spec.node_id not in self._rows:
+            self._rows[spec.node_id] = self._node_row(self._body, spec)
+        elif previous is not None and not self._same_row(previous, spec):
+            self._remove_row(spec.node_id)
+            self._rows[spec.node_id] = self._node_row(self._body, spec)
+        else:
+            self._update_row(spec)
+    self._nodes = {spec.node_id: spec for spec in nodes}
+    self._repack_in_order(nodes)
+    self._update_empty_state(nodes)
 
-    def _remove_row(self, node_id: str) -> None:
-        coordinator = self._button_coordinator
-        if coordinator is not None:
-            coordinator.clear_prefix(f"cluster:node:{node_id}:")
-        row = self._rows.pop(node_id, None)
+
+@staticmethod
+def _same_row(previous: ClusterNodeSpec, current: ClusterNodeSpec) -> bool:
+    return all(
+        getattr(previous, name) == getattr(current, name)
+        for name in ClusterPage._STRUCTURAL
+    )
+
+
+def _remove_row(self, node_id: str) -> None:
+    coordinator = self._button_coordinator
+    if coordinator is not None:
+        coordinator.clear_prefix(f"cluster:node:{node_id}:")
+    row = self._rows.pop(node_id, None)
+    if row is not None:
+        row.destroy()
+
+
+def _repack_in_order(self, nodes: list[ClusterNodeSpec]) -> None:
+    for spec in nodes:
+        row = self._rows.get(spec.node_id)
         if row is not None:
-            row.destroy()
+            row.pack(fill="x", pady=(0, 10))
 
-    def _repack_in_order(self, nodes: list[ClusterNodeSpec]) -> None:
-        for spec in nodes:
-            row = self._rows.get(spec.node_id)
-            if row is not None:
-                row.pack(fill="x", pady=(0, 10))
 
-    def _update_empty_state(self, nodes: list[ClusterNodeSpec]) -> None:
-        if nodes:
-            if self._empty_label is not None:
-                self._empty_label.destroy()
-                self._empty_label = None
-        elif self._empty_label is None:
-            self._empty_label = self.label_cls(
-                self._body,
-                text="No machines registered yet.",
-                bg=self.colors["card"],
-                fg=self.colors["muted_text"],
-                font=self.fonts["body"],
-                anchor="w",
-            )
-            self._empty_label.pack(anchor="w", pady=(0, 4))
+def _update_empty_state(self, nodes: list[ClusterNodeSpec]) -> None:
+    if nodes:
+        if self._empty_label is not None:
+            self._empty_label.destroy()
+            self._empty_label = None
+    elif self._empty_label is None:
+        self._empty_label = self.label_cls(
+            self._body,
+            text="No machines registered yet.",
+            bg=self.colors["card"],
+            fg=self.colors["muted_text"],
+            font=self.fonts["body"],
+            anchor="w",
+        )
+        self._empty_label.pack(anchor="w", pady=(0, 4))
 ```
 
 - `_update_row(spec)`: rebuild the row's dynamic content in place. The simplest robust approach that satisfies both the text-only and structural cases: rebuild the row only when structural fields changed (handled above), and for text-only changes re-create just the row's text labels by storing them in `__init__`-time row state. To keep this plan concrete and small, have `_node_row` store the meta label as an attribute on the returned row (`row._meta_label`) and update it in `_update_row`:

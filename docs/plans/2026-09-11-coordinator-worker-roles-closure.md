@@ -71,8 +71,18 @@ git commit -m "docs: clarify logical cluster storage budget"
 ```python
 def test_cluster_diagnostics_labels_logical_storage_budget(self) -> None:
     diagnostic = ClusterDiagnostic(
-        "coordinator", "coord", 2, 1.0, 10, 20, 0, 256,
-        "normal", 100.0, False, None,
+        "coordinator",
+        "coord",
+        2,
+        1.0,
+        10,
+        20,
+        0,
+        256,
+        "normal",
+        100.0,
+        False,
+        None,
     )
     self.assertNotIn("physical disk", serialize_cluster_diagnostic(diagnostic))
 ```

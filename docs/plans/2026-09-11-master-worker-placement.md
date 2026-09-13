@@ -123,7 +123,13 @@ Add tests asserting the `JobClass` values, request validation for negative trans
 ```python
 def test_request_rejects_negative_transfer_sizes() -> None:
     with self.assertRaises(ValueError):
-        PlacementRequest("hash", JobClass.MOVABLE, None, NodeCapability.COMPONENT_READ, input_size_bytes=-1)
+        PlacementRequest(
+            "hash",
+            JobClass.MOVABLE,
+            None,
+            NodeCapability.COMPONENT_READ,
+            input_size_bytes=-1,
+        )
 
 
 def test_unknown_candidates_are_not_eligible() -> None:
@@ -131,8 +137,16 @@ def test_unknown_candidates_are_not_eligible() -> None:
         "hash", JobClass.MOVABLE, None, NodeCapability.COMPONENT_READ
     )
     view = PlacementView(
-        NodeId("peer"), False, False, False, True, True, True, False,
-        frozenset({NodeCapability.COMPONENT_READ}), frozenset(),
+        NodeId("peer"),
+        False,
+        False,
+        False,
+        True,
+        True,
+        True,
+        False,
+        frozenset({NodeCapability.COMPONENT_READ}),
+        frozenset(),
     )
     decision = PlacementPolicy(clock=lambda: 100.0).choose(
         request,
@@ -287,7 +301,14 @@ def test_target_bound_process_action_never_moves_to_another_worker() -> None:
 
     policy = PlacementPolicy(clock=lambda: 100.0)
     local_view = PlacementView(
-        NodeId("local"), True, True, True, True, True, True, False,
+        NodeId("local"),
+        True,
+        True,
+        True,
+        True,
+        True,
+        True,
+        False,
         frozenset({NodeCapability.PROCESS_TERMINATION}),
         frozenset({NodePermission.PROCESS_TERMINATION}),
     )

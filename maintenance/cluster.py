@@ -90,9 +90,7 @@ class InviteRecord:
             raise ValueError("invite expiry must be finite")
 
 
-def _initial_roles(
-    local_node_id: str, now: float | None = None
-) -> tuple[RoleAssignment, ...]:
+def _initial_roles(local_node_id: str) -> tuple[RoleAssignment, ...]:
     return (
         RoleAssignment(
             frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}),
@@ -823,6 +821,7 @@ class ClusterStore:
         if not isinstance(value, list):
             return ()
         assignments: list[RoleAssignment] = []
+        exclusive_roles = {ClusterRole.COORDINATOR, ClusterRole.SUBCOORDINATOR}
         for item in value:
             if not isinstance(item, dict) or not isinstance(item.get("node_id"), str):
                 continue
@@ -841,14 +840,7 @@ class ClusterStore:
             except (TypeError, ValueError):
                 continue
             if any(
-                (
-                    ClusterRole.SUBCOORDINATOR in current.roles
-                    and ClusterRole.SUBCOORDINATOR in assignment.roles
-                )
-                or (
-                    ClusterRole.COORDINATOR in current.roles
-                    and ClusterRole.COORDINATOR in assignment.roles
-                )
+                current.roles & assignment.roles & exclusive_roles
                 for current in assignments
             ):
                 continue

@@ -141,9 +141,7 @@ class ComponentRefreshScheduler:
         return entry.in_flight, entry.paused, entry.last_success, entry.last_error
 
     def cancel(self, key: str) -> None:
-        if key not in self.intervals:
-            raise ValueError(f"Unknown component: {key}")
-        entry = self._entry(key)
+        entry = self._configured_entry(key)
         entry.in_flight = False
         entry.refresh_requested = False
 
@@ -182,34 +180,31 @@ class ComponentRefreshScheduler:
         )
 
     def set_interval(self, key: str, milliseconds: int, now: float) -> None:
-        if key not in self.intervals:
-            raise ValueError(f"Unknown component: {key}")
+        entry = self._configured_entry(key)
         if not isinstance(milliseconds, int) or isinstance(milliseconds, bool):
             raise TypeError("Interval must be an integer number of milliseconds")
         if milliseconds <= 0:
             raise ValueError("Interval must be positive")
         self.intervals[key] = milliseconds
-        entry = self._entry(key)
         entry.interval = milliseconds / 1000.0
         entry.next_due = now + entry.interval
 
     def pause(self, key: str) -> None:
-        if key not in self.intervals:
-            raise ValueError(f"Unknown component: {key}")
-        self._entry(key).paused = True
+        self._configured_entry(key).paused = True
 
     def resume(self, key: str) -> None:
-        if key not in self.intervals:
-            raise ValueError(f"Unknown component: {key}")
-        self._entry(key).paused = False
+        self._configured_entry(key).paused = False
 
     def is_paused(self, key: str) -> bool:
         return self._entry(key).paused
 
     def request_refresh(self, key: str) -> None:
+        self._configured_entry(key).refresh_requested = True
+
+    def _configured_entry(self, key: str) -> _RefreshEntry:
         if key not in self.intervals:
             raise ValueError(f"Unknown component: {key}")
-        self._entry(key).refresh_requested = True
+        return self._entry(key)
 
     def _entry(self, key: str) -> _RefreshEntry:
         try:

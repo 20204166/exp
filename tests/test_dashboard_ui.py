@@ -106,7 +106,9 @@ class ResourceCardContractTests(unittest.TestCase):
     def test_metric_label_pairs_empty_details_yields_no_rows(self) -> None:
         self.assertEqual(metric_label_pairs((), "10%"), ())
 
-    def test_metric_label_pairs_keeps_prefixed_line_matching_headline_value(self) -> None:
+    def test_metric_label_pairs_keeps_prefixed_line_matching_headline_value(
+        self,
+    ) -> None:
         pairs = metric_label_pairs(("Download rate: 1.20 MiB/s",), "1.20 MiB/s")
         self.assertEqual(pairs, (("Download rate", "1.20 MiB/s"),))
 
@@ -149,8 +151,9 @@ class ResourceCardContractTests(unittest.TestCase):
             card.metric_rows = []
             card.metrics_frame = Mock()
             card.colors = {"card": "#fff", "secondary": "#666", "text": "#000"}
-            with patch("maintenance.dialogs.tk.Frame"), patch(
-                "maintenance.dialogs.tk.Label"
+            with (
+                patch("maintenance.dialogs.tk.Frame"),
+                patch("maintenance.dialogs.tk.Label"),
             ):
                 card.update_summary(
                     summary("gpu", "GPU", percent=None, capability=state)
@@ -189,9 +192,7 @@ class ResourceCardContractTests(unittest.TestCase):
         card.reset_summary()
 
         self.assertEqual(card.value_label.options["text"], "—")
-        self.assertEqual(
-            card.subtitle_label.options["text"], "No data yet"
-        )
+        self.assertEqual(card.subtitle_label.options["text"], "No data yet")
         self.assertEqual(card.progress.options["value"], 0)
         self.assertEqual(card.details_label.options["text"], "View details  →")
         row.destroy.assert_called_once()
@@ -255,7 +256,9 @@ class DashboardWindowTests(unittest.TestCase):
 
         dashboard_page.build(controller, recorder.parent())
 
-        self.assertIs(controller.refreshed_label.args[0], controller.dashboard_meta_frame)
+        self.assertIs(
+            controller.refreshed_label.args[0], controller.dashboard_meta_frame
+        )
         self.assertIs(
             controller.target_status_label.args[0], controller.dashboard_meta_frame
         )

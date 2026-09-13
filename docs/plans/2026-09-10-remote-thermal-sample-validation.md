@@ -121,22 +121,29 @@ git commit -m "fix: reject invalid remote thermal samples"
 - [ ] **Step 1: Add the telemetry invariant test.** Record a valid 90°C sample, save history, current, and event tuples, then decode a signed resource response containing an invalid thermal sample and pass the resulting resource to `record_summary`. Assert history, current, and events are byte-for-byte unchanged and no exception escapes.
 
 ```python
-    def test_invalid_sample_does_not_change_history_or_events(self) -> None:
-        telemetry = TemperatureTelemetry()
-        telemetry.record_summary("cpu", make_summary(
-            "cpu", "CPU", capability=CapabilityState.SUPPORTED,
+def test_invalid_sample_does_not_change_history_or_events(self) -> None:
+    telemetry = TemperatureTelemetry()
+    telemetry.record_summary(
+        "cpu",
+        make_summary(
+            "cpu",
+            "CPU",
+            capability=CapabilityState.SUPPORTED,
             temperatures=(make_temperature_sample("cpu", 90.0),),
-        ))
-        before = telemetry.series_snapshot("cpu")
-        invalid = make_summary(
-            "cpu", "CPU", capability=CapabilityState.SUPPORTED,
-            temperatures=(make_temperature_sample("cpu", float("nan")),),
-        )
-        telemetry.record_summary("cpu", invalid)
-        after = telemetry.series_snapshot("cpu")
-        self.assertEqual(after.samples, before.samples)
-        self.assertEqual(after.current_celsius, before.current_celsius)
-        self.assertEqual(after.events, before.events)
+        ),
+    )
+    before = telemetry.series_snapshot("cpu")
+    invalid = make_summary(
+        "cpu",
+        "CPU",
+        capability=CapabilityState.SUPPORTED,
+        temperatures=(make_temperature_sample("cpu", float("nan")),),
+    )
+    telemetry.record_summary("cpu", invalid)
+    after = telemetry.series_snapshot("cpu")
+    self.assertEqual(after.samples, before.samples)
+    self.assertEqual(after.current_celsius, before.current_celsius)
+    self.assertEqual(after.events, before.events)
 ```
 
 - [ ] **Step 2: Add signed-envelope preservation coverage.** Extend the remote contract fixture so one signed dashboard response contains one valid CPU sample, one invalid CPU sample, and a valid storage summary. Call the authenticated provider’s dashboard operation and assert the valid CPU/storage resources remain present while the invalid sample is absent.

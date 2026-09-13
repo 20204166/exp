@@ -158,7 +158,10 @@ class PeerConnectionManager:
             context = self._registry.context(node_id)
         except KeyError:
             return False
-        if context.descriptor.is_local or context.connection.status is not NodeConnectionStatus.ONLINE:
+        if (
+            context.descriptor.is_local
+            or context.connection.status is not NodeConnectionStatus.ONLINE
+        ):
             return False
         current = self._clock() if now is None else now
         role_now = self._role_clock() if now is None else now
@@ -191,7 +194,9 @@ class PeerConnectionManager:
         context.last_heartbeat_at = current
         return True
 
-    def heartbeat_age(self, node_id: NodeId, *, now: float | None = None) -> float | None:
+    def heartbeat_age(
+        self, node_id: NodeId, *, now: float | None = None
+    ) -> float | None:
         try:
             observed = self._registry.context(node_id).last_heartbeat_at
         except KeyError:
@@ -245,10 +250,14 @@ class PeerConnectionManager:
         """Persist one promotion through the existing peer reconciliation tick."""
 
         current = self._role_clock() if now is None else now
-        role_state = state if isinstance(state, RoleState) else RoleState(
-            assignments=state.role_assignments,
-            epoch=state.coordinator_epoch,
-            promotion_epochs=frozenset(state.promotion_epochs),
+        role_state = (
+            state
+            if isinstance(state, RoleState)
+            else RoleState(
+                assignments=state.role_assignments,
+                epoch=state.coordinator_epoch,
+                promotion_epochs=frozenset(state.promotion_epochs),
+            )
         )
         try:
             decision = promote_subcoordinator(role_state, now=current)
@@ -288,10 +297,14 @@ class PeerConnectionManager:
     def rejoin_as_worker(self, state: Any, node_id: NodeId, current_epoch: int) -> Any:
         """Persist the fencing result before accepting a former Coordinator."""
 
-        role_state = state if isinstance(state, RoleState) else RoleState(
-            assignments=state.role_assignments,
-            epoch=state.coordinator_epoch,
-            promotion_epochs=frozenset(state.promotion_epochs),
+        role_state = (
+            state
+            if isinstance(state, RoleState)
+            else RoleState(
+                assignments=state.role_assignments,
+                epoch=state.coordinator_epoch,
+                promotion_epochs=frozenset(state.promotion_epochs),
+            )
         )
         updated_roles = rejoin_as_worker(
             role_state, node_id=node_id, current_epoch=current_epoch

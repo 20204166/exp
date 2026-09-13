@@ -650,9 +650,7 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         )
         state = ClusterState.create_local(local_node_id="local")
         state.role_assignments = state.role_assignments + (
-            RoleAssignment(
-                frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
-            ),
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")),
         )
         state.trusted_nodes = (
             trusted_node_record(
@@ -689,7 +687,9 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window._invalidate_node_render_targets = Mock()
         provider = window._node_registry.context(NodeId("peer-a")).provider
 
-        window_node_actions.revoke_node(window, "peer-a", messagebox_module=Mock(return_value=True))
+        window_node_actions.revoke_node(
+            window, "peer-a", messagebox_module=Mock(return_value=True)
+        )
 
         peer_assignment = next(
             item
@@ -712,9 +712,7 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         )
         state = ClusterState.create_local(local_node_id="local")
         state.role_assignments = state.role_assignments + (
-            RoleAssignment(
-                frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
-            ),
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")),
         )
         state.trusted_nodes = (
             trusted_node_record(
@@ -746,7 +744,9 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         specs = node_specs.cluster_node_specs(window._node_registry)
         self.assertIn("peer-a", {spec.node_id for spec in specs})
 
-        window_node_actions.revoke_node(window, "peer-a", messagebox_module=Mock(return_value=True))
+        window_node_actions.revoke_node(
+            window, "peer-a", messagebox_module=Mock(return_value=True)
+        )
 
         specs = node_specs.cluster_node_specs(window._node_registry)
         self.assertNotIn("peer-a", {spec.node_id for spec in specs})
@@ -795,7 +795,9 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         specs = node_specs.cluster_node_specs(window._node_registry)
         self.assertIn("peer-a", {spec.node_id for spec in specs})
 
-        window_node_actions.revoke_node(window, "peer-a", messagebox_module=Mock(return_value=True))
+        window_node_actions.revoke_node(
+            window, "peer-a", messagebox_module=Mock(return_value=True)
+        )
 
         window._nodes_error.assert_not_called()
         self.assertIsNone(window._cluster_state.record("peer-a"))
@@ -808,9 +810,7 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window = _make_window(start_discovery=False)
         state = ClusterState.create_local(local_node_id="local")
         state.role_assignments = state.role_assignments + (
-            RoleAssignment(
-                frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
-            ),
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")),
         )
         window._cluster_state = state
 
@@ -844,9 +844,7 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window = _make_window(start_discovery=False)
         state = ClusterState.create_local(local_node_id="local")
         state.role_assignments = state.role_assignments + (
-            RoleAssignment(
-                frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
-            ),
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")),
         )
         window._cluster_state = state
         manager = Mock()
@@ -951,7 +949,9 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         messagebox_module = Mock()
         messagebox_module.askyesno.return_value = False
 
-        window_node_actions.revoke_node(window, "peer-a", messagebox_module=messagebox_module)
+        window_node_actions.revoke_node(
+            window, "peer-a", messagebox_module=messagebox_module
+        )
 
         self.assertIsNotNone(window._cluster_state.record("peer-a"))
         window._save_cluster_state.assert_not_called()
@@ -960,8 +960,12 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window = _make_window(start_discovery=False)
         state = ClusterState(
             role_assignments=(
-                RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("local")),
-                RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")),
+                RoleAssignment(
+                    frozenset({ClusterRole.WORKER}), node_id=NodeId("local")
+                ),
+                RoleAssignment(
+                    frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
+                ),
             ),
             coordinator_epoch=None,
         )
@@ -980,8 +984,12 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window = _make_window(start_discovery=False)
         state = ClusterState(
             role_assignments=(
-                RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("local")),
-                RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")),
+                RoleAssignment(
+                    frozenset({ClusterRole.WORKER}), node_id=NodeId("local")
+                ),
+                RoleAssignment(
+                    frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
+                ),
             ),
             coordinator_epoch=None,
         )
@@ -990,7 +998,12 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         request = _role_request(
             "remove_job",
             NodeId("local"),
-            {"target_node_id": "peer-a", "cluster_id": "c", "epoch": 0, "fencing_token": "t"},
+            {
+                "target_node_id": "peer-a",
+                "cluster_id": "c",
+                "epoch": 0,
+                "fencing_token": "t",
+            },
         )
 
         with self.assertRaises(ValueError):
@@ -1004,7 +1017,12 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         request = _role_request(
             "remove_job",
             NodeId("local"),
-            {"target_node_id": "ghost", "cluster_id": "c", "epoch": 1, "fencing_token": "t"},
+            {
+                "target_node_id": "ghost",
+                "cluster_id": "c",
+                "epoch": 1,
+                "fencing_token": "t",
+            },
         )
 
         with self.assertRaises(ValueError):
@@ -1017,7 +1035,31 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         request = _role_request(
             "remove_connection",
             NodeId("ghost"),
-            {"target_node_id": "ghost", "cluster_id": "c", "epoch": 1, "fencing_token": "t"},
+            {
+                "target_node_id": "ghost",
+                "cluster_id": "c",
+                "epoch": 1,
+                "fencing_token": "t",
+            },
+        )
+
+        with self.assertRaises(RemoteAuthError):
+            ui_window_discovery.handle_role_request(window, request)
+
+    def test_handle_role_request_rejects_caller_without_role_assignment(self) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        state.role_assignments = ()
+        window._cluster_state = state
+        request = _role_request(
+            "remove_connection",
+            NodeId("local"),
+            {
+                "target_node_id": "local",
+                "cluster_id": state.cluster_id,
+                "epoch": 1,
+                "fencing_token": "t",
+            },
         )
 
         with self.assertRaises(RemoteAuthError):
@@ -1047,10 +1089,14 @@ class WindowNodeSwitchingTests(unittest.TestCase):
     def test_upload_gate_idle_worker_uploads_two_of_ten(self) -> None:
         from maintenance.ui.window_discovery import should_upload_job
 
-        uploads = [sequence for sequence in range(1, 11) if should_upload_job(sequence, False)]
+        uploads = [
+            sequence for sequence in range(1, 11) if should_upload_job(sequence, False)
+        ]
         self.assertEqual(uploads, [5, 10])
 
-    def test_revoke_trusted_node_without_role_falls_back_to_trusted_revoke(self) -> None:
+    def test_revoke_trusted_node_without_role_falls_back_to_trusted_revoke(
+        self,
+    ) -> None:
         window = _make_window(
             _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
             start_discovery=False,
@@ -1140,9 +1186,7 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window = _make_window(start_discovery=False)
         state = ClusterState.create_local(local_node_id="local")
         state.role_assignments = state.role_assignments + (
-            RoleAssignment(
-                frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
-            ),
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")),
         )
         window._cluster_state = state
 
@@ -1172,9 +1216,7 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window = _make_window(start_discovery=False)
         state = ClusterState.create_local(local_node_id="local")
         state.role_assignments = state.role_assignments + (
-            RoleAssignment(
-                frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")
-            ),
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")),
         )
         window._cluster_state = state
         window._save_cluster_state = Mock(return_value=True)
@@ -1229,7 +1271,9 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window._invalidate_node_render_targets = Mock()
         provider = window._node_registry.context(NodeId("peer-a")).provider
 
-        window_node_actions.revoke_node(window, "peer-a", messagebox_module=Mock(return_value=True))
+        window_node_actions.revoke_node(
+            window, "peer-a", messagebox_module=Mock(return_value=True)
+        )
 
         self.assertIsNone(window._cluster_state.record("peer-a"))
         self.assertIsNone(window._cluster_state.grant("peer-a"))

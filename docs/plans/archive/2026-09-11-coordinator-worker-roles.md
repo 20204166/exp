@@ -462,8 +462,18 @@ invite hash, and raw node permissions outside this model.
 ```python
 def test_cluster_diagnostics_redact_fencing_and_invite_values(self) -> None:
     diagnostic = ClusterDiagnostic(
-        "coordinator", "coord", 8, 3.0, 100, 2_000, 20, 256, "normal", 100.0,
-        False, "none",
+        "coordinator",
+        "coord",
+        8,
+        3.0,
+        100,
+        2_000,
+        20,
+        256,
+        "normal",
+        100.0,
+        False,
+        "none",
     )
     serialized = serialize_cluster_diagnostic(diagnostic)
     self.assertNotIn("fencing-token", serialized)

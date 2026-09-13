@@ -66,22 +66,6 @@ OP_REQUIRED_PERMISSION: dict[str, NodePermission] = {
     operation: NodePermission(capability.value)
     for operation, capability in OP_REQUIRED_CAPABILITY.items()
 }
-OP_REQUIRED_PERMISSION.update(
-    {
-        "process_request_quit": NodePermission.PROCESS_TERMINATION,
-        "process_force_quit": NodePermission.PROCESS_FORCE_TERMINATION,
-        "consume_invite": NodePermission.REMOTE_MANAGEMENT,
-        "assign_role": NodePermission.REMOTE_MANAGEMENT,
-        "renew_coordinator_lease": NodePermission.REMOTE_MANAGEMENT,
-        "worker_snapshot": NodePermission.REMOTE_MANAGEMENT,
-        "standby_batch": NodePermission.REMOTE_MANAGEMENT,
-        "pause_worker": NodePermission.REMOTE_MANAGEMENT,
-        "revoke_worker": NodePermission.REMOTE_MANAGEMENT,
-        "resume_worker": NodePermission.REMOTE_MANAGEMENT,
-        "remove_connection": NodePermission.REMOTE_MANAGEMENT,
-        "remove_job": NodePermission.REMOTE_MANAGEMENT,
-    }
-)
 
 ROLE_OPERATIONS = frozenset(
     {
@@ -580,8 +564,10 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
             if not isinstance(params.get("target_node_id"), str):
                 raise RemoteProtocolError("role target is invalid")
             roles = params.get("roles")
-            if not isinstance(roles, list) or not roles or any(
-                not isinstance(role, str) for role in roles
+            if (
+                not isinstance(roles, list)
+                or not roles
+                or any(not isinstance(role, str) for role in roles)
             ):
                 raise RemoteProtocolError("role list is invalid")
             return
@@ -590,9 +576,10 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
                 raise RemoteProtocolError("role target is invalid")
             return
         if op in {"remove_connection", "remove_job"}:
-            if not isinstance(params.get("target_node_id"), str) or not params[
-                "target_node_id"
-            ]:
+            if (
+                not isinstance(params.get("target_node_id"), str)
+                or not params["target_node_id"]
+            ):
                 raise RemoteProtocolError("role target is invalid")
             return
         payload = params.get("payload")

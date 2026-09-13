@@ -65,67 +65,63 @@ No further work required in this plan.
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-    def test_reconcile_does_not_promote_when_local_is_coordinator(self) -> None:
-        window = _make_window(
-            _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
-            start_discovery=False,
-        )
-        state = ClusterState.create_local(local_node_id="local")
-        state.role_assignments = state.role_assignments + (
-            RoleAssignment(
-                frozenset({ClusterRole.SUBCOORDINATOR}),
-                node_id=NodeId("peer-a"),
-            ),
-        )
-        epoch = state.coordinator_epoch
-        state.coordinator_epoch = replace(
-            epoch, lease_expires_at=time.time() - 10.0
-        )
-        window._cluster_state = state
-        manager = Mock()
-        manager.promote_if_due.return_value = None
-        window._peer_connection_manager = manager
-        window._cluster_store = Mock()
-        window._schedule_peer_reconciliation = Mock()
-        window._schedule_timer = Mock(return_value="timer-1")
-        window._cancel_timer = Mock(return_value=True)
-        window.snapshot = None
+def test_reconcile_does_not_promote_when_local_is_coordinator(self) -> None:
+    window = _make_window(
+        _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),
+        start_discovery=False,
+    )
+    state = ClusterState.create_local(local_node_id="local")
+    state.role_assignments = state.role_assignments + (
+        RoleAssignment(
+            frozenset({ClusterRole.SUBCOORDINATOR}),
+            node_id=NodeId("peer-a"),
+        ),
+    )
+    epoch = state.coordinator_epoch
+    state.coordinator_epoch = replace(epoch, lease_expires_at=time.time() - 10.0)
+    window._cluster_state = state
+    manager = Mock()
+    manager.promote_if_due.return_value = None
+    window._peer_connection_manager = manager
+    window._cluster_store = Mock()
+    window._schedule_peer_reconciliation = Mock()
+    window._schedule_timer = Mock(return_value="timer-1")
+    window._cancel_timer = Mock(return_value=True)
+    window.snapshot = None
 
-        window._reconcile_peer_connections()
+    window._reconcile_peer_connections()
 
-        manager.promote_if_due.assert_not_called()
+    manager.promote_if_due.assert_not_called()
 ```
 
 ```python
-    def test_reconcile_renews_local_coordinator_lease(self) -> None:
-        window = _make_window(start_discovery=False)
-        state = ClusterState.create_local(local_node_id="local")
-        epoch = state.coordinator_epoch
-        state.coordinator_epoch = replace(
-            epoch, lease_expires_at=time.time() + 15.0
+def test_reconcile_renews_local_coordinator_lease(self) -> None:
+    window = _make_window(start_discovery=False)
+    state = ClusterState.create_local(local_node_id="local")
+    epoch = state.coordinator_epoch
+    state.coordinator_epoch = replace(epoch, lease_expires_at=time.time() + 15.0)
+    window._cluster_state = state
+    manager = Mock()
+    manager.renew_cluster_lease = Mock(
+        side_effect=lambda state_, **kwargs: setattr(
+            state_,
+            "coordinator_epoch",
+            replace(state_.coordinator_epoch, lease_expires_at=time.time() + 120.0),
         )
-        window._cluster_state = state
-        manager = Mock()
-        manager.renew_cluster_lease = Mock(
-            side_effect=lambda state_, **kwargs: setattr(
-                state_, "coordinator_epoch", replace(
-                    state_.coordinator_epoch, lease_expires_at=time.time() + 120.0
-                )
-            )
-        )
-        window._peer_connection_manager = manager
-        window._cluster_store = Mock()
-        window._schedule_peer_reconciliation = Mock()
-        window._schedule_timer = Mock(return_value="timer-1")
-        window._cancel_timer = Mock(return_value=True)
-        window.snapshot = None
+    )
+    window._peer_connection_manager = manager
+    window._cluster_store = Mock()
+    window._schedule_peer_reconciliation = Mock()
+    window._schedule_timer = Mock(return_value="timer-1")
+    window._cancel_timer = Mock(return_value=True)
+    window.snapshot = None
 
-        before = state.coordinator_epoch.lease_expires_at
-        window._reconcile_peer_connections()
-        after = state.coordinator_epoch.lease_expires_at
+    before = state.coordinator_epoch.lease_expires_at
+    window._reconcile_peer_connections()
+    after = state.coordinator_epoch.lease_expires_at
 
-        self.assertGreater(after, before)
-        manager.renew_cluster_lease.assert_called_once()
+    self.assertGreater(after, before)
+    manager.renew_cluster_lease.assert_called_once()
 ```
 
 Expected: both FAIL (promotion is still called for the coordinator; lease is not renewed).
@@ -143,10 +139,14 @@ Edit `maintenance/ui/window_discovery.py`. Imports already present: `ClusterRole
 def _is_local_subcoordinator(controller: Any) -> bool:
     from maintenance.components.cluster_roles import ClusterRole
 
-    return ClusterRole.SUBCOORDINATOR in controller._cluster_state.local_assignment.roles
+    return (
+        ClusterRole.SUBCOORDINATOR in controller._cluster_state.local_assignment.roles
+    )
 
 
-def _renew_local_coordinator_lease(controller: Any, manager: PeerConnectionManager) -> None:
+def _renew_local_coordinator_lease(
+    controller: Any, manager: PeerConnectionManager
+) -> None:
     from maintenance.components.cluster_roles import ClusterRole, FencingError
 
     state = controller._cluster_state
@@ -369,35 +369,31 @@ git commit -m "fix: never attempt to connect a trusted peer without an identity 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-    def test_run_text_command_forwards_creationflags(self) -> None:
-        seen: dict[str, Any] = {}
+def test_run_text_command_forwards_creationflags(self) -> None:
+    seen: dict[str, Any] = {}
 
-        def fake(command, **kwargs):
-            seen.update(kwargs)
-            return SimpleNamespace(stdout="out", returncode=0)
+    def fake(command, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(stdout="out", returncode=0)
 
-        stdout, error = run_text_command(
-            ["cmd"], runner=fake, creationflags=0x08000000
-        )
-        self.assertEqual(stdout, "out")
-        self.assertIsNone(error)
-        self.assertEqual(seen.get("creationflags"), 0x08000000)
+    stdout, error = run_text_command(["cmd"], runner=fake, creationflags=0x08000000)
+    self.assertEqual(stdout, "out")
+    self.assertIsNone(error)
+    self.assertEqual(seen.get("creationflags"), 0x08000000)
 ```
 
 ```python
-    def test_run_json_command_forwards_creationflags(self) -> None:
-        seen: dict[str, Any] = {}
+def test_run_json_command_forwards_creationflags(self) -> None:
+    seen: dict[str, Any] = {}
 
-        def fake(command, **kwargs):
-            seen.update(kwargs)
-            return SimpleNamespace(stdout='{"ok": true}', returncode=0)
+    def fake(command, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(stdout='{"ok": true}', returncode=0)
 
-        payload, error = run_json_command(
-            ["cmd"], runner=fake, creationflags=0x08000000
-        )
-        self.assertEqual(payload, {"ok": True})
-        self.assertIsNone(error)
-        self.assertEqual(seen.get("creationflags"), 0x08000000)
+    payload, error = run_json_command(["cmd"], runner=fake, creationflags=0x08000000)
+    self.assertEqual(payload, {"ok": True})
+    self.assertIsNone(error)
+    self.assertEqual(seen.get("creationflags"), 0x08000000)
 ```
 
 Expected: FAIL (`TypeError: unexpected keyword argument 'creationflags'`).
@@ -453,18 +449,16 @@ def run_json_command(
 Edit `maintenance/scanner_support/gpu.py` — add `import os` at the top, then in `_windows_gpu_read`:
 
 ```python
-        creationflags = (
-            getattr(scanner_module.subprocess, "CREATE_NO_WINDOW", 0)
-            if os.name == "nt"
-            else 0
-        )
-        controllers, error = run_json_command(
-            ["powershell", "-NoProfile", "-Command", command],
-            timeout_seconds=scanner_module.SystemScanner.GPU_COMMAND_TIMEOUT_SECONDS,
-            runner=scanner_module.subprocess.run,
-            empty_stdout_fallback="[]",
-            creationflags=creationflags,
-        )
+creationflags = (
+    getattr(scanner_module.subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+)
+controllers, error = run_json_command(
+    ["powershell", "-NoProfile", "-Command", command],
+    timeout_seconds=scanner_module.SystemScanner.GPU_COMMAND_TIMEOUT_SECONDS,
+    runner=scanner_module.subprocess.run,
+    empty_stdout_fallback="[]",
+    creationflags=creationflags,
+)
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**

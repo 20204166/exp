@@ -607,9 +607,7 @@ class NetworkDiscoveryTests(unittest.TestCase):
         info["properties"]["tls_fingerprint"] = "tls:aaaa:bbbb"
         backend.add(f"a.{SERVICE_TYPE}", info)
 
-        self.assertEqual(
-            discovery.peers()[0].transport_fingerprint, "tls:aaaa:bbbb"
-        )
+        self.assertEqual(discovery.peers()[0].transport_fingerprint, "tls:aaaa:bbbb")
 
     def test_same_hostname_different_ids_stay_separate(self) -> None:
         discovery, backend, _events, _clock = _discovery()

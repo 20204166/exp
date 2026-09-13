@@ -56,7 +56,9 @@ class SpacingTokenParityTests(unittest.TestCase):
         self.assertEqual(ui_styles.LAYOUT["fit_wrap_max"], 560)
 
     def test_scrollbar_gutter_derives_from_spacing_token(self) -> None:
-        self.assertEqual(ui_layout.SCROLLBAR_GUTTER, ui_styles.SPACING["scrollbar_gutter"])
+        self.assertEqual(
+            ui_layout.SCROLLBAR_GUTTER, ui_styles.SPACING["scrollbar_gutter"]
+        )
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
