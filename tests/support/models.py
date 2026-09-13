@@ -49,6 +49,7 @@ def make_summary(
     failed: bool = False,
     capability: CapabilityState = CapabilityState.UNKNOWN,
     temperatures: tuple[TemperatureSample, ...] = (),
+    temperature_unavailable_reason: str | None = None,
 ) -> ResourceSummary:
     """Build a valid :class:`ResourceSummary` with explicit overrides."""
 
@@ -63,6 +64,7 @@ def make_summary(
         failed=failed,
         capability=capability,
         temperatures=temperatures,
+        temperature_unavailable_reason=temperature_unavailable_reason,
     )
 
 

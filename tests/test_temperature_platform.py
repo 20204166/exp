@@ -126,6 +126,41 @@ class WindowsTemperatureProviderTests(unittest.TestCase):
 
         self.assertEqual(scan.lines, ())
         self.assertEqual(scan.samples_by_component, ())
+        self.assertIsNone(scan.unavailable_reason)
+
+    def test_acpi_access_denied_produces_a_clear_reason(self) -> None:
+        # A non-terminating Get-CimInstance error still exits 0 with empty
+        # stdout, so the command wraps it in try/catch and emits {"error":
+        # ...} on stdout instead of losing it -- this is what that looks
+        # like once ACPI is genuinely present but permission-blocked, and
+        # neither optional provider is installed.
+        def runner(
+            command: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            if "MSAcpi_ThermalZoneTemperature" in command[-1]:
+                return _completed({"error": "Access denied"})
+            raise subprocess.CalledProcessError(1, command)
+
+        scan = temperature_platform.windows_temperature_scan(runner=runner)
+
+        self.assertEqual(scan.lines, ())
+        self.assertEqual(scan.samples_by_component, ())
+        self.assertEqual(
+            scan.unavailable_reason,
+            "CPU temperature requires administrator privileges",
+        )
+
+    def test_acpi_non_permission_error_does_not_set_a_reason(self) -> None:
+        def runner(
+            command: list[str], **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            if "MSAcpi_ThermalZoneTemperature" in command[-1]:
+                return _completed({"error": "Invalid namespace"})
+            raise subprocess.CalledProcessError(1, command)
+
+        scan = temperature_platform.windows_temperature_scan(runner=runner)
+
+        self.assertIsNone(scan.unavailable_reason)
 
 
 class MacosTemperatureProviderTests(unittest.TestCase):

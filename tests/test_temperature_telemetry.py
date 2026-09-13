@@ -44,7 +44,7 @@ class TemperatureTelemetryTests(unittest.TestCase):
 
         for value in (0.1, 249.9):
             self.assertTrue(is_valid_temperature_value(value))
-        for value in (
+        for invalid in (
             0,
             250,
             -1,
@@ -54,8 +54,8 @@ class TemperatureTelemetryTests(unittest.TestCase):
             True,
             "45",
         ):
-            with self.subTest(value=value):
-                self.assertFalse(is_valid_temperature_value(value))
+            with self.subTest(value=invalid):
+                self.assertFalse(is_valid_temperature_value(invalid))
 
     def test_parse_temperature_value_handles_valid_and_malformed_text(self) -> None:
         self.assertEqual(parse_temperature_value("Temperature: 45°C"), 45.0)
@@ -250,6 +250,33 @@ class TemperatureTelemetryTests(unittest.TestCase):
         self.assertEqual(snapshot.state, TemperatureState.ERROR)
         self.assertEqual(snapshot.samples, ())
         self.assertIsNone(snapshot.current_celsius)
+
+    def test_platform_unavailable_reason_marks_error_state_immediately(self) -> None:
+        # A permission-denied provider (e.g. Windows ACPI without admin
+        # rights) must not wait through several empty reads before saying
+        # anything, and must not be confused with genuinely unsupported
+        # hardware -- it needs to be visible as an actionable error on the
+        # very first read.
+        telemetry = TemperatureTelemetry()
+        telemetry.record_summary(
+            "cpu",
+            make_summary(
+                "cpu",
+                "CPU",
+                value="45%",
+                capability=CapabilityState.SUPPORTED,
+                temperature_unavailable_reason=(
+                    "CPU temperature requires administrator privileges"
+                ),
+            ),
+        )
+
+        snapshot = telemetry.series_snapshot("cpu")
+        self.assertEqual(snapshot.state, TemperatureState.ERROR)
+        self.assertEqual(
+            snapshot.error, "CPU temperature requires administrator privileges"
+        )
+        self.assertEqual(snapshot.samples, ())
 
     def test_unknown_summary_marks_no_data_state(self) -> None:
         telemetry = TemperatureTelemetry()

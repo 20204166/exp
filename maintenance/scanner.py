@@ -317,6 +317,7 @@ class SystemScanner(DashboardMixin, GpuMixin, ProcessesMixin, StorageMixin, Path
                     frequency,
                     list(temperature_scan.lines),
                     temperature_scan.samples_for("cpu"),
+                    temperature_unavailable_reason=temperature_scan.unavailable_reason,
                 ),
                 "cpu",
                 self._component_title("cpu"),

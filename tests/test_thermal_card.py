@@ -148,6 +148,32 @@ class TemperatureLinesTests(unittest.TestCase):
         self.assertEqual(scan.samples_by_component, ())
         self.assertEqual(probed, [], "sensors must never be probed off Linux")
 
+    def test_cpu_resource_carries_the_unavailable_reason_through(self) -> None:
+        scanner = make_scanner()
+
+        summary = scanner._cpu_resource(
+            50.0,
+            None,
+            [],
+            (),
+            temperature_unavailable_reason=(
+                "CPU temperature requires administrator privileges"
+            ),
+        )
+
+        self.assertEqual(
+            summary.temperature_unavailable_reason,
+            "CPU temperature requires administrator privileges",
+        )
+        self.assertEqual(summary.temperatures, ())
+
+    def test_cpu_resource_defaults_to_no_unavailable_reason(self) -> None:
+        scanner = make_scanner()
+
+        summary = scanner._cpu_resource(50.0, None, [], ())
+
+        self.assertIsNone(summary.temperature_unavailable_reason)
+
     def test_temperature_scan_reads_windows_acpi_zone(self) -> None:
         result = SimpleNamespace(
             stdout=json.dumps(

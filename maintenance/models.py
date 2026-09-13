@@ -51,6 +51,7 @@ class ResourceSummary:
     failed: bool = False
     capability: CapabilityState = CapabilityState.UNKNOWN
     temperatures: tuple[TemperatureSample, ...] = ()
+    temperature_unavailable_reason: str | None = None
 
 
 def unavailable_summary(

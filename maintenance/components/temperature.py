@@ -121,6 +121,7 @@ class TemperatureSeriesSnapshot:
     samples: tuple[TemperatureSample, ...]
     events: tuple[TemperatureEvent, ...]
     severity: str = "normal"
+    error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +153,7 @@ class TemperatureScan:
     captured_monotonic: float
     lines: tuple[str, ...]
     samples_by_component: tuple[tuple[str, tuple[TemperatureSample, ...]], ...]
+    unavailable_reason: str | None = None
 
     def samples_for(self, component: str) -> tuple[TemperatureSample, ...]:
         for key, samples in self.samples_by_component:
@@ -218,7 +220,14 @@ class TemperatureTelemetry:
             telemetry.empty_reads = 0
         else:
             self._settle_inactive_event(telemetry)
-            if summary.capability == CapabilityState.UNSUPPORTED:
+            if summary.temperature_unavailable_reason is not None:
+                # A platform provider identified a specific, actionable
+                # reason (e.g. a permission wall) -- this is stronger than
+                # "no data yet" and must not wait for empty_reads to confirm
+                # unsupported hardware, since the hardware isn't unsupported.
+                telemetry.state = TemperatureState.ERROR
+                telemetry.last_error = summary.temperature_unavailable_reason
+            elif summary.capability == CapabilityState.UNSUPPORTED:
                 telemetry.state = TemperatureState.UNSUPPORTED
             elif summary.failed:
                 telemetry.state = TemperatureState.ERROR
@@ -271,6 +280,7 @@ class TemperatureTelemetry:
             samples=tuple(telemetry.history),
             events=tuple(telemetry.events),
             severity=self._severity_for(telemetry, values),
+            error=telemetry.last_error,
         )
 
     def recent_events(self, component: str) -> tuple[TemperatureEvent, ...]:

@@ -179,7 +179,7 @@ class TelemetryMiniGraph(tk.Frame):
                 canvas,
                 width,
                 height,
-                "Temperature temporarily unavailable",
+                snapshot.error or "Temperature temporarily unavailable",
             )
             return
         if snapshot.state is TemperatureState.NO_DATA or not snapshot.samples:

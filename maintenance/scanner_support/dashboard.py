@@ -404,6 +404,8 @@ class DashboardMixin:
         frequency: Any,
         temperature_lines: list[str],
         temperature_samples: tuple[TemperatureSample, ...] = (),
+        *,
+        temperature_unavailable_reason: str | None = None,
     ) -> ResourceSummary:
         physical_cores, logical_cores = self._cpu_core_counts()
         details: tuple[str, ...] = (
@@ -425,6 +427,7 @@ class DashboardMixin:
             actionable=True,
             capability=CapabilityState.SUPPORTED,
             temperatures=temperature_samples,
+            temperature_unavailable_reason=temperature_unavailable_reason,
         )
 
     @staticmethod

@@ -20,11 +20,14 @@ from maintenance.scanner_support.smc import COMPONENT_LABELS, read_smc_temperatu
 RawReadings = dict[str, list[tuple[str, str, float]]]
 
 _ACPI_COMMAND = (
-    "Get-CimInstance -Namespace root/WMI -ClassName "
-    "MSAcpi_ThermalZoneTemperature | Select-Object "
-    "InstanceName,CurrentTemperature | ConvertTo-Json"
+    "try { Get-CimInstance -Namespace root/WMI -ClassName "
+    "MSAcpi_ThermalZoneTemperature -ErrorAction Stop | Select-Object "
+    "InstanceName,CurrentTemperature | ConvertTo-Json } "
+    "catch { @{ error = $_.Exception.Message } | ConvertTo-Json }"
 )
 _OPTIONAL_PROVIDER_FIELDS = "Name,SensorType,Value,Identifier,Parent"
+_ACPI_ACCESS_DENIED_REASON = "CPU temperature requires administrator privileges"
+_OPTIONAL_ACCESS_DENIED_REASON = "Thermal sensors require administrator privileges"
 _COMPONENT_NAME_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("gpu", ("gpu",)),
     ("cpu", ("cpu", "core", "package")),
@@ -37,9 +40,9 @@ def _creationflags() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
 
-def _empty_scan() -> TemperatureScan:
+def _empty_scan(*, unavailable_reason: str | None = None) -> TemperatureScan:
     captured_at = datetime.now(timezone.utc).astimezone()
-    return TemperatureScan(captured_at, time.monotonic(), (), ())
+    return TemperatureScan(captured_at, time.monotonic(), (), (), unavailable_reason)
 
 
 def _scan_from_readings(readings: RawReadings) -> TemperatureScan:
@@ -93,12 +96,35 @@ def _records(payload: Any) -> list[dict[str, Any]]:
     return [value for value in values if isinstance(value, dict)]
 
 
-def _acpi_readings(*, runner: CommandRunner | None) -> RawReadings:
+def _permission_denied_reason(payload: Any, *, reason: str) -> str | None:
+    """Detect the try/catch error payload, distinct from "not installed".
+
+    ``Get-CimInstance`` raises a non-terminating error by default, which
+    would otherwise exit 0 with empty stdout and silently look identical to
+    "no thermal zones on this hardware" -- ``-ErrorAction Stop`` plus a
+    catch block turns that into a ``{"error": ...}`` payload instead so a
+    genuine permission wall isn't confused with unsupported hardware.
+    English-only message matching; a differently localized Windows install
+    would fall back to the ordinary "no data" behavior rather than raise.
+    """
+
+    if not isinstance(payload, dict) or "error" not in payload:
+        return None
+    message = str(payload.get("error", ""))
+    if "denied" in message.casefold():
+        return reason
+    return None
+
+
+def _acpi_readings(*, runner: CommandRunner | None) -> tuple[RawReadings, str | None]:
     payload, error = _read_json(
         ["powershell", "-NoProfile", "-Command", _ACPI_COMMAND], runner=runner
     )
     if error is not None:
-        return {}
+        return {}, None
+    reason = _permission_denied_reason(payload, reason=_ACPI_ACCESS_DENIED_REASON)
+    if reason is not None:
+        return {}, reason
     readings: list[tuple[str, str, float]] = []
     for zone in _records(payload):
         raw = zone.get("CurrentTemperature")
@@ -108,7 +134,7 @@ def _acpi_readings(*, runner: CommandRunner | None) -> RawReadings:
         if is_valid_temperature_value(value):
             name = str(zone.get("InstanceName") or "ThermalZone")
             readings.append((f"acpi:{name}", name, value))
-    return {"cpu": readings} if readings else {}
+    return ({"cpu": readings} if readings else {}), None
 
 
 def _classify(name: str) -> str | None:
@@ -121,16 +147,20 @@ def _classify(name: str) -> str | None:
 
 def _optional_readings(
     namespace: str, prefix: str, *, runner: CommandRunner | None
-) -> RawReadings:
+) -> tuple[RawReadings, str | None]:
     command_text = (
-        f"Get-CimInstance -Namespace root\\{namespace} -ClassName Sensor | "
-        f"Select-Object {_OPTIONAL_PROVIDER_FIELDS} | ConvertTo-Json"
+        f"try {{ Get-CimInstance -Namespace root\\{namespace} -ClassName Sensor "
+        f"-ErrorAction Stop | Select-Object {_OPTIONAL_PROVIDER_FIELDS} | "
+        "ConvertTo-Json } catch { @{ error = $_.Exception.Message } | ConvertTo-Json }"
     )
     payload, error = _read_json(
         ["powershell", "-NoProfile", "-Command", command_text], runner=runner
     )
     if error is not None:
-        return {}
+        return {}, None
+    reason = _permission_denied_reason(payload, reason=_OPTIONAL_ACCESS_DENIED_REASON)
+    if reason is not None:
+        return {}, reason
     readings: RawReadings = {}
     for record in _records(payload):
         if str(record.get("SensorType", "")).casefold() != "temperature":
@@ -144,21 +174,23 @@ def _optional_readings(
         readings.setdefault(component, []).append(
             (f"{prefix}:{identity}", name, float(value))
         )
-    return readings
+    return readings, None
 
 
 def windows_temperature_scan(*, runner: CommandRunner | None = None) -> TemperatureScan:
     """Read Windows temperatures using ACPI, then installed monitor providers."""
 
+    reason: str | None = None
     for provider in (
         lambda: _acpi_readings(runner=runner),
         lambda: _optional_readings("LibreHardwareMonitor", "lhm", runner=runner),
         lambda: _optional_readings("OpenHardwareMonitor", "ohm", runner=runner),
     ):
-        readings = provider()
+        readings, provider_reason = provider()
         if readings:
             return _scan_from_readings(readings)
-    return _empty_scan()
+        reason = reason or provider_reason
+    return _empty_scan(unavailable_reason=reason)
 
 
 def macos_temperature_scan(
