@@ -1212,6 +1212,26 @@ class RemoteProtocolCapabilityWiringTests(unittest.TestCase):
             "that requires it, or add it to `exempt` above with a reason.",
         )
 
+    def test_capability_grant_params_require_scoped_identities_and_expiry(self) -> None:
+        base = {
+            "cluster_id": "cluster",
+            "epoch": 1,
+            "fencing_token": "token",
+            "subject_node_id": "sub",
+            "target_node_id": "worker",
+            "permissions": [NodePermission.COMPONENT_READ.value],
+            "expires_at": 100.0,
+        }
+        protocol.validate_operation_params("grant_capabilities", base)
+        with self.assertRaises(RemoteProtocolError):
+            protocol.validate_operation_params(
+                "grant_capabilities", {**base, "permissions": []}
+            )
+        with self.assertRaises(RemoteProtocolError):
+            protocol.validate_operation_params(
+                "revoke_capabilities", {**base, "expires_at": None}
+            )
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:

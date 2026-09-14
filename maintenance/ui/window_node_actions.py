@@ -81,6 +81,7 @@ def _role_state(controller: Any) -> RoleState:
         assignments=state.role_assignments,
         epoch=state.coordinator_epoch,
         promotion_epochs=state.promotion_epochs,
+        capability_grants=state.capability_grants,
     )
 
 
@@ -89,6 +90,7 @@ def _save_role_state(controller: Any, state: RoleState) -> bool:
         controller._cluster_state,
         role_assignments=state.assignments,
         coordinator_epoch=state.epoch,
+        capability_grants=state.capability_grants,
     )
     if not controller._save_cluster_state(updated):
         controller._nodes_error("Cluster settings could not be saved")

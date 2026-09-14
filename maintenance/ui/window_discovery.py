@@ -250,7 +250,11 @@ def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, An
     )
     if actor is None:
         raise RemoteAuthError("role caller is not enrolled")
-    role_state = RoleState(state.role_assignments, state.coordinator_epoch)
+    role_state = RoleState(
+        state.role_assignments,
+        state.coordinator_epoch,
+        capability_grants=state.capability_grants,
+    )
     if request.op == "assign_role":
         if state.record(request.params["target_node_id"]) is None and not any(
             item.node_id == NodeId(request.params["target_node_id"])
@@ -290,10 +294,33 @@ def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, An
         updated = role_state.remove_job(
             actor=actor, target=NodeId(request.params["target_node_id"])
         )
+    elif request.op == "grant_capabilities":
+        from maintenance.nodes import NodePermission
+
+        updated = role_state.grant_capabilities(
+            actor=actor,
+            subject=NodeId(request.params["subject_node_id"]),
+            target=NodeId(request.params["target_node_id"]),
+            permissions=frozenset(
+                NodePermission(value) for value in request.params["permissions"]
+            ),
+            now=time.time(),
+            expires_at=float(request.params["expires_at"]),
+        )
+    elif request.op == "revoke_capabilities":
+        updated = role_state.revoke_capabilities(
+            actor=actor,
+            subject=NodeId(request.params["subject_node_id"]),
+            target=NodeId(request.params["target_node_id"]),
+        )
     else:
         raise RemoteAuthError("unknown role operation")
     if not controller._save_cluster_state(
-        replace(state, role_assignments=updated.assignments)
+        replace(
+            state,
+            role_assignments=updated.assignments,
+            capability_grants=updated.capability_grants,
+        )
     ):
         raise RemoteAuthError("role state could not be saved")
     return {"ok": True}

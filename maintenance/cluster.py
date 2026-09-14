@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from maintenance.components.cluster_roles import (
+    CapabilityGrant,
     ClusterRole,
     CoordinatorEpoch,
     RoleAssignment,
@@ -543,6 +544,7 @@ class ClusterState:
     coordinator_epoch: CoordinatorEpoch | None = None
     active_invites: tuple[InviteRecord, ...] = ()
     promotion_epochs: frozenset[int] = frozenset()
+    capability_grants: tuple[CapabilityGrant, ...] = ()
 
     @classmethod
     def create_local(cls, *, local_node_id: str | None = None) -> ClusterState:
@@ -798,6 +800,21 @@ class ClusterStore:
             if isinstance(raw_promotion_epochs, list)
             else frozenset()
         )
+        capability_grants_data = data.get("capability_grants", [])
+        capability_grants = (
+            tuple(
+                capability_grant
+                for item in capability_grants_data
+                if (capability_grant := self._parse_capability_grant(item)) is not None
+            )
+            if isinstance(capability_grants_data, list)
+            else ()
+        )
+        grant_keys = [
+            (item.subject.value, item.target.value) for item in capability_grants
+        ]
+        if len(set(grant_keys)) != len(grant_keys):
+            capability_grants = ()
         return ClusterState(
             discovery_enabled=discovery,
             trusted_nodes=records,
@@ -812,6 +829,7 @@ class ClusterStore:
             coordinator_epoch=epoch,
             active_invites=invites,
             promotion_epochs=promotion_epochs,
+            capability_grants=capability_grants,
         )
 
     @staticmethod
@@ -1009,6 +1027,43 @@ class ClusterStore:
         )
 
     @staticmethod
+    def _parse_capability_grant(item: Any) -> CapabilityGrant | None:
+        if not isinstance(item, dict):
+            return None
+        subject = item.get("subject")
+        target = item.get("target")
+        permissions = item.get("permissions")
+        issued_at = item.get("issued_at")
+        expires_at = item.get("expires_at")
+        known = {permission.value for permission in NodePermission}
+        if (
+            not isinstance(subject, str)
+            or not subject
+            or not isinstance(target, str)
+            or not target
+            or not isinstance(permissions, list)
+            or any(
+                not isinstance(value, str) or value not in known
+                for value in permissions
+            )
+            or not isinstance(issued_at, (int, float))
+            or isinstance(issued_at, bool)
+            or not isinstance(expires_at, (int, float))
+            or isinstance(expires_at, bool)
+        ):
+            return None
+        try:
+            return CapabilityGrant(
+                NodeId(subject),
+                NodeId(target),
+                frozenset(NodePermission(value) for value in permissions),
+                float(issued_at),
+                float(expires_at),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def _serialize(state: ClusterState) -> str:
         payload: dict[str, Any] = {
             "schema_version": CLUSTER_SCHEMA_VERSION,
@@ -1037,6 +1092,18 @@ class ClusterStore:
                 if state.coordinator_epoch is not None
                 else None
             ),
+            "capability_grants": [
+                {
+                    "subject": item.subject.value,
+                    "target": item.target.value,
+                    "permissions": sorted(
+                        permission.value for permission in item.permissions
+                    ),
+                    "issued_at": item.issued_at,
+                    "expires_at": item.expires_at,
+                }
+                for item in state.capability_grants
+            ],
             "active_invites": [
                 {
                     "token_hash": invite.token_hash,

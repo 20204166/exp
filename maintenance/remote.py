@@ -741,6 +741,50 @@ class AuthenticatedNodeProvider:
             },
         )
 
+    def grant_capabilities(
+        self,
+        subject_node_id: str,
+        target_node_id: str,
+        permissions: list[str],
+        *,
+        expires_at: float,
+        cluster_id: str,
+        epoch: int,
+        fencing_token: str,
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "grant_capabilities",
+            {
+                "subject_node_id": subject_node_id,
+                "target_node_id": target_node_id,
+                "permissions": permissions,
+                "expires_at": expires_at,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
+    def revoke_capabilities(
+        self,
+        subject_node_id: str,
+        target_node_id: str,
+        *,
+        cluster_id: str,
+        epoch: int,
+        fencing_token: str,
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "revoke_capabilities",
+            {
+                "subject_node_id": subject_node_id,
+                "target_node_id": target_node_id,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
     def terminate(self, request: ProcessTerminationRequest) -> ProcessActionResult:
         if request.target_node_id != self._node_id:
             raise RemoteAuthError("process request target does not match provider")

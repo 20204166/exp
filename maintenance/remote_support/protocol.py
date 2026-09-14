@@ -60,6 +60,8 @@ OP_REQUIRED_CAPABILITY: dict[str, NodeCapability] = {
     "resume_worker": NodeCapability.REMOTE_MANAGEMENT,
     "remove_connection": NodeCapability.REMOTE_MANAGEMENT,
     "remove_job": NodeCapability.REMOTE_MANAGEMENT,
+    "grant_capabilities": NodeCapability.REMOTE_MANAGEMENT,
+    "revoke_capabilities": NodeCapability.REMOTE_MANAGEMENT,
 }
 
 OP_REQUIRED_PERMISSION: dict[str, NodePermission] = {
@@ -79,6 +81,8 @@ ROLE_OPERATIONS = frozenset(
         "resume_worker",
         "remove_connection",
         "remove_job",
+        "grant_capabilities",
+        "revoke_capabilities",
     }
 )
 
@@ -542,6 +546,8 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
         "resume_worker",
         "remove_connection",
         "remove_job",
+        "grant_capabilities",
+        "revoke_capabilities",
     }:
         required = {"cluster_id", "epoch", "fencing_token"}
         if not required <= set(params):
@@ -581,6 +587,44 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
                 or not params["target_node_id"]
             ):
                 raise RemoteProtocolError("role target is invalid")
+            return
+        if op in {"grant_capabilities", "revoke_capabilities"}:
+            expected_fields = {
+                "cluster_id",
+                "epoch",
+                "fencing_token",
+                "subject_node_id",
+                "target_node_id",
+                "permissions",
+                "expires_at",
+            }
+            if op == "revoke_capabilities":
+                expected_fields -= {"permissions", "expires_at"}
+            if set(params) != expected_fields:
+                raise RemoteProtocolError(f"{op} has unexpected parameters")
+            for field in ("subject_node_id", "target_node_id"):
+                if not isinstance(params.get(field), str) or not params[field]:
+                    raise RemoteProtocolError(f"{op} target identity is invalid")
+            if op == "grant_capabilities":
+                permissions = params.get("permissions")
+                known = {item.value for item in NodePermission}
+                if (
+                    not isinstance(permissions, list)
+                    or not permissions
+                    or any(
+                        not isinstance(item, str) or item not in known
+                        for item in permissions
+                    )
+                ):
+                    raise RemoteProtocolError(
+                        "capability grant permissions are invalid"
+                    )
+                if (
+                    not isinstance(params.get("expires_at"), (int, float))
+                    or isinstance(params["expires_at"], bool)
+                    or not math.isfinite(float(params["expires_at"]))
+                ):
+                    raise RemoteProtocolError("capability grant expiry is invalid")
             return
         payload = params.get("payload")
         if not isinstance(payload, dict):

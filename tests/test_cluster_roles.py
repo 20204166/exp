@@ -11,7 +11,7 @@ from maintenance.components.cluster_roles import (
     rejoin_as_worker,
     renew_lease,
 )
-from maintenance.nodes import NodeId
+from maintenance.nodes import NodeId, NodePermission
 
 
 class ClusterRoleTests(unittest.TestCase):
@@ -206,6 +206,74 @@ class ClusterRoleTests(unittest.TestCase):
         state = RoleState(assignments=(self.coordinator, self.worker))
         with self.assertRaises(RoleAuthorizationError):
             state.assign_job(actor=self.coordinator, target=NodeId("ghost"))
+
+    def test_coordinator_can_grant_scoped_subcoordinator_permissions(self) -> None:
+        state = RoleState(assignments=(self.coordinator, self.sub, self.worker))
+
+        updated = state.grant_capabilities(
+            actor=self.coordinator,
+            subject=NodeId("sub"),
+            target=NodeId("worker"),
+            permissions=frozenset(
+                {NodePermission.COMPONENT_READ, NodePermission.STORAGE_REVIEW}
+            ),
+            now=10.0,
+            expires_at=100.0,
+        )
+
+        grant = updated.capability_grant(NodeId("sub"), NodeId("worker"))
+        self.assertIsNotNone(grant)
+        assert grant is not None
+        self.assertEqual(
+            grant.permissions,
+            frozenset({NodePermission.COMPONENT_READ, NodePermission.STORAGE_REVIEW}),
+        )
+
+    def test_subcoordinator_cannot_grant_or_target_outside_cluster(self) -> None:
+        state = RoleState(assignments=(self.coordinator, self.sub, self.worker))
+        with self.assertRaises(RoleAuthorizationError):
+            state.grant_capabilities(
+                actor=self.sub,
+                subject=NodeId("sub"),
+                target=NodeId("worker"),
+                permissions=frozenset({NodePermission.COMPONENT_READ}),
+                now=10.0,
+                expires_at=100.0,
+            )
+
+    def test_revoking_scoped_capabilities_is_immediate(self) -> None:
+        state = RoleState(assignments=(self.coordinator, self.sub, self.worker))
+        state = state.grant_capabilities(
+            actor=self.coordinator,
+            subject=NodeId("sub"),
+            target=NodeId("worker"),
+            permissions=frozenset({NodePermission.COMPONENT_READ}),
+            now=10.0,
+            expires_at=100.0,
+        )
+
+        updated = state.revoke_capabilities(
+            actor=self.coordinator,
+            subject=NodeId("sub"),
+            target=NodeId("worker"),
+        )
+
+        self.assertIsNone(updated.capability_grant(NodeId("sub"), NodeId("worker")))
+
+    def test_revoking_a_node_removes_related_capability_grants(self) -> None:
+        state = RoleState(assignments=(self.coordinator, self.sub, self.worker))
+        state = state.grant_capabilities(
+            actor=self.coordinator,
+            subject=NodeId("sub"),
+            target=NodeId("worker"),
+            permissions=frozenset({NodePermission.COMPONENT_READ}),
+            now=10.0,
+            expires_at=100.0,
+        )
+
+        updated = state.revoke(actor=self.coordinator, target=NodeId("worker"))
+
+        self.assertEqual(updated.capability_grants, ())
 
     def test_remove_job_paused_worker_is_allowed(self) -> None:
         paused = RoleAssignment(

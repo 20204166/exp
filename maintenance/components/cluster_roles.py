@@ -14,7 +14,7 @@ import secrets
 from dataclasses import dataclass, replace
 from enum import Enum
 
-from maintenance.nodes import NodeId
+from maintenance.nodes import NodeId, NodePermission
 
 HEARTBEAT_TIMEOUT_SECONDS = 120.0
 
@@ -97,6 +97,25 @@ class RoleChange:
 
 
 @dataclass(frozen=True, slots=True)
+class CapabilityGrant:
+    """Scoped authority delegated to one Subcoordinator for one target."""
+
+    subject: NodeId
+    target: NodeId
+    permissions: frozenset[NodePermission]
+    issued_at: float
+    expires_at: float
+
+    def __post_init__(self) -> None:
+        if not self.permissions:
+            raise ValueError("a capability grant must contain a permission")
+        if not math.isfinite(self.issued_at) or not math.isfinite(self.expires_at):
+            raise ValueError("capability grant times must be finite")
+        if self.expires_at <= self.issued_at:
+            raise ValueError("capability grant must expire after issuance")
+
+
+@dataclass(frozen=True, slots=True)
 class PromotionDecision:
     role_assignment: RoleAssignment
     epoch: CoordinatorEpoch
@@ -112,6 +131,7 @@ class RoleState:
     assignments: tuple[RoleAssignment, ...] = ()
     epoch: CoordinatorEpoch | None = None
     promotion_epochs: frozenset[int] = frozenset()
+    capability_grants: tuple[CapabilityGrant, ...] = ()
 
     def __post_init__(self) -> None:
         assignments = [item for item in self.assignments if item.node_id is not None]
@@ -131,10 +151,80 @@ class RoleState:
             raise ValueError("only one active Coordinator is allowed")
         if len(active_subcoordinators) > 1:
             raise ValueError("only one active Subcoordinator is allowed")
+        grant_keys = [(grant.subject, grant.target) for grant in self.capability_grants]
+        if len(set(grant_keys)) != len(grant_keys):
+            raise ValueError("duplicate capability grant")
 
     def assignment_for(self, node_id: NodeId) -> RoleAssignment | None:
         return next(
             (item for item in self.assignments if item.node_id == node_id), None
+        )
+
+    def capability_grant(
+        self, subject: NodeId, target: NodeId, *, now: float | None = None
+    ) -> CapabilityGrant | None:
+        grant = next(
+            (
+                item
+                for item in self.capability_grants
+                if item.subject == subject and item.target == target
+            ),
+            None,
+        )
+        if grant is not None and now is not None and now >= grant.expires_at:
+            return None
+        return grant
+
+    def grant_capabilities(
+        self,
+        *,
+        actor: RoleAssignment,
+        subject: NodeId,
+        target: NodeId,
+        permissions: frozenset[NodePermission],
+        now: float,
+        expires_at: float,
+    ) -> RoleState:
+        self._assert_control(actor)
+        subject_assignment = self.assignment_for(subject)
+        target_assignment = self.assignment_for(target)
+        if (
+            subject_assignment is None
+            or subject_assignment.revoked
+            or ClusterRole.SUBCOORDINATOR not in subject_assignment.roles
+        ):
+            raise RoleAuthorizationError(
+                "capability subject is not an active Subcoordinator"
+            )
+        if (
+            target_assignment is None
+            or target_assignment.revoked
+            or ClusterRole.WORKER not in target_assignment.roles
+            or subject == target
+        ):
+            raise RoleAuthorizationError("capability target is not an active Worker")
+        grant = CapabilityGrant(subject, target, permissions, now, expires_at)
+        return replace(
+            self,
+            capability_grants=tuple(
+                item
+                for item in self.capability_grants
+                if (item.subject, item.target) != (subject, target)
+            )
+            + (grant,),
+        )
+
+    def revoke_capabilities(
+        self, *, actor: RoleAssignment, subject: NodeId, target: NodeId
+    ) -> RoleState:
+        self._assert_control(actor)
+        return replace(
+            self,
+            capability_grants=tuple(
+                item
+                for item in self.capability_grants
+                if (item.subject, item.target) != (subject, target)
+            ),
         )
 
     def active_coordinator(self) -> RoleAssignment | None:
@@ -226,7 +316,15 @@ class RoleState:
         current = self.assignment_for(target)
         if current is None or current.revoked:
             raise RoleAuthorizationError("unknown or revoked node")
-        return self._replace_assignment(replace(current, revoked=True))
+        updated = self._replace_assignment(replace(current, revoked=True))
+        return replace(
+            updated,
+            capability_grants=tuple(
+                item
+                for item in updated.capability_grants
+                if item.subject != target and item.target != target
+            ),
+        )
 
     def remove_job(self, *, actor: RoleAssignment, target: NodeId) -> RoleState:
         self._assert_control(actor)

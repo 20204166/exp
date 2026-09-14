@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 
 from maintenance.cluster import ClusterState, ClusterStore, InviteExpiredError
-from maintenance.components.cluster_roles import ClusterRole
-from maintenance.nodes import NodeId
+from maintenance.components.cluster_roles import CapabilityGrant, ClusterRole
+from maintenance.nodes import NodeId, NodePermission
 
 
 class ClusterRolePersistenceTests(unittest.TestCase):
@@ -241,3 +241,42 @@ class ClusterRolePersistenceTests(unittest.TestCase):
         assert state.coordinator_epoch is not None
         self.assertTrue(math.isfinite(state.coordinator_epoch.lease_expires_at))
         self.assertIn(ClusterRole.COORDINATOR, state.local_assignment.roles)
+
+    def test_capability_grant_round_trips(self) -> None:
+        grant = CapabilityGrant(
+            NodeId("sub"),
+            NodeId("worker"),
+            frozenset({NodePermission.COMPONENT_READ, NodePermission.CLEANUP}),
+            10.0,
+            100.0,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            store = ClusterStore(path)
+            store.save(ClusterState(capability_grants=(grant,)))
+            loaded = store.load()
+        self.assertEqual(loaded.capability_grants, (grant,))
+
+    def test_malformed_capability_grants_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "local_node_id": "coord",
+                        "capability_grants": [
+                            {
+                                "subject": "sub",
+                                "target": "worker",
+                                "permissions": [],
+                                "issued_at": 10.0,
+                                "expires_at": 100.0,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            loaded = ClusterStore(path).load()
+        self.assertEqual(loaded.capability_grants, ())
