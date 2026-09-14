@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 from .catalog import ResourceFeature, ResourceFeatureCatalog
 from .cluster_roles import (
+    CapabilityGrant,
     ClusterRole,
     CoordinatorEpoch,
     CoordinatorLease,
@@ -103,6 +104,7 @@ __all__ = [
     "PROTECTED_PROCESS_NAMES",
     "SERVICE_TYPE",
     "BackgroundTaskRunner",
+    "CapabilityGrant",
     "ClusterRole",
     "CoordinatorEpoch",
     "CoordinatorLease",
