@@ -70,7 +70,7 @@ session caused. Flagged to you separately in chat; not touched here unless you a
 
 ---
 
-## PlacementPolicy — what it is, and why it's untouched
+## PlacementPolicy — now composed into two real production call sites
 
 `maintenance/components/placement.py` is a fully built, tested **node picker**: given a
 description of a job (what it needs, whether it can run anywhere or only on one specific machine,
@@ -79,19 +79,53 @@ right capability and permission? how loaded? how fresh is its last report? how f
 (latency)? — and returns either the single best node to run that job on, or a clear rejection
 reason if none qualify.
 
-**Nothing in the app calls it.** There is no point today where the app itself decides which node
-should run a piece of work — every scan, dialog, and action runs on whatever node the user
-manually selected. The engine is real and correct; it's just never bolted into anything. Wiring it
-up means choosing a specific action that should get "auto-pick the best node" behavior instead of
-"whatever the user clicked" — that's a product decision (which job? does it override manual
-selection or only apply when nothing is selected? what happens if the "best" node isn't the one
-the user expected?), not a bug fix, so it hasn't been implemented pending that decision.
+**As of 2026-09-14, it has real callers.** The audit that found "nothing calls it" also found that
+every current job in this app is either LOCAL_BOUND (never modelled as a node operation, so it
+never needs placement) or TARGET_BOUND (the user's manually selected node *is* the logical target —
+there is nothing to "auto-pick"). No MOVABLE job exists yet, so `PlacementPolicy`'s locality/latency
+ranking path still only runs under its own unit tests; that part of the engine stays dormant on
+purpose rather than being exercised by an invented benchmark job.
 
-**Status: open.** No code changed for this finding. If a decision is made later, the natural
-places to look are `AppCoordinator.choose_placement()` (the entry point already exposed) and
-`maintenance/ui/cluster_page.py`'s "Remove job" button (`on_remove_job`) as the nearest existing
-example of a job-lifecycle action in the UI — an "Assign job" counterpart doesn't currently exist
-either.
+What changed is that the two places that actually launch node-targeted work now ask
+`PlacementPolicy` to validate the target *before* doing so, through one shared helper,
+`maintenance/ui/window_placement.py::validate_target_placement`:
+
+- `maintenance/ui/window_components.py::launch_component_scan` — every dashboard component read
+  (CPU/memory/storage/GPU/network/battery, and by extension thermal telemetry, which is derived
+  from those same six reads) validates `NodeCapability.COMPONENT_READ` against the selected node
+  before submitting the scan to `AppCoordinator`.
+- `maintenance/ui/window_scan.py::handle_analyze` — the manual "Analyze" / full dashboard snapshot
+  validates `NodeCapability.DASHBOARD_READ` the same way before starting the scan lifecycle.
+
+Both call `AppCoordinator.choose_placement()` — the entry point that was already exposed — with a
+`JobClass.TARGET_BOUND` request naming the selected node (or the local node, if nothing is
+explicitly selected) as the only legitimate target. If the target is ineligible (offline,
+untrusted, missing the capability/permission, identity mismatch), the operation fails immediately
+with the placement engine's own reason instead of being attempted and failing later inside the
+provider/transport call — behavior is otherwise unchanged; this only makes an existing failure mode
+faster and gives it one canonical, diagnosable reason string. The last decision is also recorded
+into the existing `DiagnosticsSnapshot.placement` field (already modelled in
+`maintenance/diagnostics.py`, previously always `None` in production because nothing ever populated
+it).
+
+`maintenance/ui/window_presentation.py::open_resource` (the entry point for the Processes and
+Storage dialogs) was **deliberately left alone**: it already has its own established eligibility
+gate, `maintenance/ui/target_state.py::render_target_state` (`TargetPresentation.can_review`),
+which predates this work, serves UI-presentation needs placement doesn't (labels like "Remote
+read-only", `can_quit`/`can_cleanup` affordances), and covers the same ground (trust/online/
+capability/permission). Duplicating a second, differently-shaped eligibility check next to it would
+have been redundant rather than additive, so it was kept as the one canonical owner for that
+surface rather than merged or replaced — a scoped, deliberate decision, not an oversight.
+
+Cluster membership/worker-role eligibility (`RoleState`, coordinator epoch/fencing) was **not**
+folded into `PlacementView`/`PlacementPolicy` in this pass: it only matters for choosing *among*
+several candidates for MOVABLE work, and a TARGET_BOUND request has exactly one legitimate
+candidate (the caller's explicit target), so there was nothing for it to filter yet. That remains
+the next real gap to close before any MOVABLE job is wired.
+
+**Status: composed for TARGET_BOUND; MOVABLE stays dormant by design.** See
+`maintenance/ui/window_placement.py` for the shared helper and
+`tests/test_window_placement.py`, `tests/test_window_nodes.py` for coverage.
 
 ---
 
@@ -155,7 +189,7 @@ one-line default swap. Left unchanged pending a decision on the intended behavio
 | D-2 | `record_scan` doesn't reset empty-read counter | **Fixed** |
 | F-1 | No drift test for remote capability/permission maps | **Fixed** |
 | G-1 | Pairing secrets file permissions not explicit | **Fixed** |
-| E-2 | PlacementPolicy has no caller | **Open — awaiting your decision on a trigger point** |
+| E-2 | PlacementPolicy has no caller | **Fixed — wired into component refresh + manual Analyze (TARGET_BOUND only)** |
 | E-3 | No UI to create/consume cluster invites | **Left as-is, by your request** |
 | D-1 | Thermal "unsupported" shown inconsistently across components | **Left as-is, documented** |
 | A-2 | Cluster page back button always goes to Dashboard | **Left as-is, documented** |
