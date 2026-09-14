@@ -29,6 +29,7 @@ from maintenance.models import (
     ResourceSummary,
 )
 from maintenance.nodes import (
+    READ_PERMISSIONS,
     NodeCapability,
     NodeId,
     NodePermission,
@@ -49,6 +50,7 @@ from maintenance.remote import (
     RemoteAuthorizationError,
     RemoteExecutionError,
     RemoteProtocolError,
+    RemoteRequest,
     RemoteService,
     RemoteSocketServer,
     RemoteTransportError,
@@ -324,6 +326,115 @@ class SigningAndVerificationTests(unittest.TestCase):
 
 
 class RemoteServiceRoundTripTests(unittest.TestCase):
+    def test_target_owned_grant_expiry_is_enforced(self) -> None:
+        now = [100.0]
+        service = RemoteService(
+            node_id=NodeId("target"),
+            display_name="Target",
+            hostname="target-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=READ_CAPABILITIES,
+            provider=FakeProvider(),
+            secret=SECRET,
+            clock=lambda: now[0],
+            grants={
+                NodeId("caller"): PeerGrant(
+                    NodeId("caller"),
+                    SECRET,
+                    frozenset({NodePermission.DASHBOARD_READ}),
+                    expires_at=101.0,
+                )
+            },
+        )
+        client = AuthenticatedNodeProvider(
+            node_id=NodeId("target"),
+            caller_node_id=NodeId("caller"),
+            secret=SECRET,
+            transport=MemoryRemoteTransport(service),
+            clock=lambda: now[0],
+        )
+
+        self.assertTrue(client.hello()["ok"])
+        now[0] = 101.0
+        with self.assertRaises(RemoteAuthError):
+            client.hello()
+
+    def test_authenticated_coordinator_can_propagate_target_acl(self) -> None:
+        calls: list[RemoteRequest] = []
+
+        def role_handler(request: RemoteRequest) -> dict[str, Any]:
+            calls.append(request)
+            return {"ok": True}
+
+        service = RemoteService(
+            node_id=NodeId("target"),
+            display_name="Target",
+            hostname="target-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=frozenset({NodeCapability.REMOTE_MANAGEMENT}),
+            permissions=frozenset({NodePermission.REMOTE_MANAGEMENT}),
+            provider=FakeProvider(),
+            secret=SECRET,
+            expected_caller_id=NodeId("coordinator"),
+            role_handler=role_handler,
+        )
+        client = AuthenticatedNodeProvider(
+            node_id=NodeId("target"),
+            caller_node_id=NodeId("coordinator"),
+            secret=SECRET,
+            transport=MemoryRemoteTransport(service),
+        )
+
+        result = client.sync_capability_grant(
+            subject_node_id="subcoordinator",
+            target_node_id="target",
+            permissions=[NodePermission.COMPONENT_READ.value],
+            expires_at=200.0,
+            cluster_id="cluster",
+            epoch=3,
+            fencing_token="fence",
+        )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(calls[0].op, "sync_capability_grant")
+
+    def test_dashboard_share_requires_explicit_start_and_expires(self) -> None:
+        now = [100.0]
+        service = RemoteService(
+            node_id=NodeId("target"),
+            display_name="Target",
+            hostname="target-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=READ_CAPABILITIES,
+            provider=FakeProvider(),
+            secret=SECRET,
+            clock=lambda: now[0],
+            grants={
+                NodeId("viewer"): PeerGrant(
+                    NodeId("viewer"), SECRET, frozenset(READ_PERMISSIONS)
+                )
+            },
+            require_dashboard_share=True,
+        )
+        viewer = AuthenticatedNodeProvider(
+            node_id=NodeId("target"),
+            caller_node_id=NodeId("viewer"),
+            secret=SECRET,
+            transport=MemoryRemoteTransport(service),
+            clock=lambda: now[0],
+        )
+
+        with self.assertRaises(RemoteAuthorizationError):
+            viewer.dashboard_snapshot()
+        viewer.start_dashboard_share(expires_at=101.0)
+        self.assertEqual(viewer.dashboard_snapshot().system_label, "peer-host")
+        viewer.stop_dashboard_share()
+        with self.assertRaises(RemoteAuthorizationError):
+            viewer.dashboard_snapshot()
+
     def test_signed_dashboard_drops_invalid_samples_and_preserves_resources(
         self,
     ) -> None:

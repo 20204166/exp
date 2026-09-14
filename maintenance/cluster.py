@@ -528,6 +528,7 @@ class PeerGrantRecord:
     caller_node_id: str
     secret: str
     permissions: frozenset[NodePermission]
+    expires_at: float | None = None
 
 
 @dataclass(slots=True)
@@ -1020,10 +1021,19 @@ class ClusterStore:
         ):
             LOGGER.warning("Ignoring malformed permissions for peer grant %s", caller)
             return None
+        raw_expiry = item.get("expires_at")
+        if raw_expiry is not None and (
+            not isinstance(raw_expiry, (int, float))
+            or isinstance(raw_expiry, bool)
+            or not math.isfinite(float(raw_expiry))
+        ):
+            LOGGER.warning("Ignoring malformed expiry for peer grant %s", caller)
+            return None
         return PeerGrantRecord(
             caller_node_id=caller,
             secret=secret,
             permissions=frozenset(NodePermission(raw) for raw in raw_permissions),
+            expires_at=float(raw_expiry) if raw_expiry is not None else None,
         )
 
     @staticmethod
@@ -1141,6 +1151,11 @@ class ClusterStore:
                     "secret": grant.secret,
                     "permissions": sorted(
                         permission.value for permission in grant.permissions
+                    ),
+                    **(
+                        {"expires_at": grant.expires_at}
+                        if grant.expires_at is not None
+                        else {}
                     ),
                 }
                 for grant in state.peer_grants

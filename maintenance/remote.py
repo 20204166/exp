@@ -24,6 +24,7 @@ import hmac
 import inspect
 import json
 import logging
+import math
 import secrets
 import threading
 import time
@@ -66,6 +67,7 @@ from maintenance.remote_support.protocol import (
     READ_CAPABILITIES,
     REMOTE_PROTOCOL_VERSION,
     ROLE_OPERATIONS,
+    CapabilityElevationRequest,
     PairingRequest,
     PeerGrant,
     RemoteAuthError,
@@ -106,26 +108,21 @@ __all__ = [
     "OP_REQUIRED_CAPABILITY",
     "OP_REQUIRED_PERMISSION",
     "READ_CAPABILITIES",
-    # protocol envelope constants
     "REMOTE_PROTOCOL_VERSION",
     "ROLE_OPERATIONS",
     "AuthenticatedNodeProvider",
-    # transports
+    "CapabilityElevationRequest",
     "MemoryRemoteTransport",
     "PairingRequest",
-    # protocol models and helpers
     "PeerGrant",
     "RemoteAuthError",
     "RemoteAuthorizationError",
     "RemoteExecutionError",
     "RemoteProcessActionBackend",
-    # protocol envelope errors
     "RemoteProtocolError",
     "RemoteRequest",
     "RemoteResponse",
-    # high-level remote surface
     "RemoteService",
-    # listening server
     "RemoteSocketServer",
     "RemoteTransportError",
     "RemoteUnavailableError",
@@ -176,6 +173,7 @@ class RemoteService:
         coordinator_epoch: int | None = None,
         fencing_token: str | None = None,
         role_handler: Callable[[RemoteRequest], dict[str, Any]] | None = None,
+        require_dashboard_share: bool = False,
     ) -> None:
         self._node_id = node_id
         self._display_name = display_name
@@ -196,6 +194,10 @@ class RemoteService:
         self._grants = dict(grants or {})
         for grant in self._grants.values():
             self._validate_secret(grant.secret)
+            if grant.expires_at is not None and not math.isfinite(
+                float(grant.expires_at)
+            ):
+                raise ValueError("peer grant expiry must be finite")
         self._app_version = app_version
         self._clock = clock
         self._freshness_seconds = freshness_seconds
@@ -221,6 +223,8 @@ class RemoteService:
         self._coordinator_epoch = coordinator_epoch
         self._fencing_token = fencing_token
         self._role_handler = role_handler
+        self._require_dashboard_share = require_dashboard_share
+        self._dashboard_shares: dict[NodeId, float] = {}
 
     @staticmethod
     def _validate_secret(secret: str) -> None:
@@ -246,6 +250,8 @@ class RemoteService:
                 grant = self._grants.get(caller_node_id)
                 if grant is None:
                     raise RemoteAuthError("request caller identity is unknown")
+                if grant.expires_at is not None and self._clock() >= grant.expires_at:
+                    raise RemoteAuthError("request caller grant has expired")
                 credential = grant.secret
         request = verify_request(
             envelope,
@@ -330,6 +336,10 @@ class RemoteService:
         validated = dict(grants)
         for grant in validated.values():
             self._validate_secret(grant.secret)
+            if grant.expires_at is not None and not math.isfinite(
+                float(grant.expires_at)
+            ):
+                raise ValueError("peer grant expiry must be finite")
         with self._grant_lock:
             self._grant_mode = True
             self._grants = validated
@@ -370,8 +380,30 @@ class RemoteService:
                 ),
             }
         if request.op == "dashboard_snapshot":
+            if (
+                self._require_dashboard_share
+                and request.caller_node_id not in self._dashboard_shares
+            ):
+                raise RemoteAuthorizationError("dashboard share is not active")
+            if request.caller_node_id is not None:
+                expiry = self._dashboard_shares.get(request.caller_node_id)
+                if expiry is not None and self._clock() >= expiry:
+                    self._dashboard_shares.pop(request.caller_node_id, None)
+                    raise RemoteAuthorizationError("dashboard share has expired")
             snapshot = self._dashboard_snapshot()
             return {"snapshot": node_snapshot_to_dict(snapshot)}
+        if request.op == "start_dashboard_share":
+            if request.caller_node_id is None:
+                raise RemoteAuthError("dashboard share caller is required")
+            expiry = float(request.params["expires_at"])
+            if expiry <= self._clock():
+                raise RemoteAuthorizationError("dashboard share expiry is invalid")
+            self._dashboard_shares[request.caller_node_id] = expiry
+            return {"ok": True, "expires_at": expiry}
+        if request.op == "stop_dashboard_share":
+            if request.caller_node_id is not None:
+                self._dashboard_shares.pop(request.caller_node_id, None)
+            return {"ok": True}
         if request.op == "component_summary":
             resource = self._provider.component_summary(request.params["key"])
             return {
@@ -447,6 +479,19 @@ class RemoteService:
         self._coordinator_epoch = coordinator_epoch
         self._fencing_token = fencing_token
 
+    def clear_dashboard_share(self, caller_node_id: NodeId) -> None:
+        self._dashboard_shares.pop(caller_node_id, None)
+
+    def start_dashboard_share_for(
+        self, caller_node_id: NodeId, *, expires_at: float
+    ) -> None:
+        if expires_at <= self._clock():
+            raise RemoteAuthorizationError("dashboard share expiry is invalid")
+        self._dashboard_shares[caller_node_id] = expires_at
+
+    def stop_dashboard_shares(self) -> None:
+        self._dashboard_shares.clear()
+
     def _dashboard_snapshot(self) -> NodeSnapshot:
         dashboard = self._provider.dashboard_snapshot()
         return NodeSnapshot(
@@ -521,6 +566,37 @@ class AuthenticatedNodeProvider:
             }
         )
         response = json.loads(transport.request(envelope))
+        return isinstance(response, dict) and response.get("approved") is True
+
+    @staticmethod
+    def request_elevation(
+        *,
+        transport: Any,
+        caller_node_id: NodeId,
+        identity_fingerprint: str,
+        transport_fingerprint: str,
+        current_secret: str,
+        proposed_secret: str,
+        permissions: frozenset[NodePermission],
+    ) -> bool:
+        """Request target approval for permissions beyond read-only pairing."""
+        response = json.loads(
+            transport.request(
+                json.dumps(
+                    {
+                        "op": "elevation_request",
+                        "caller_node_id": caller_node_id.value,
+                        "identity_fingerprint": identity_fingerprint,
+                        "transport_fingerprint": transport_fingerprint,
+                        "current_secret": current_secret,
+                        "secret": proposed_secret,
+                        "permissions": sorted(
+                            permission.value for permission in permissions
+                        ),
+                    }
+                )
+            )
+        )
         return isinstance(response, dict) and response.get("approved") is True
 
     def dashboard_snapshot(
@@ -784,6 +860,36 @@ class AuthenticatedNodeProvider:
                 "fencing_token": fencing_token,
             },
         )
+
+    def sync_capability_grant(
+        self,
+        subject_node_id: str,
+        target_node_id: str,
+        permissions: list[str],
+        *,
+        expires_at: float,
+        cluster_id: str,
+        epoch: int,
+        fencing_token: str,
+    ) -> dict[str, Any]:
+        return self._role_request(
+            "sync_capability_grant",
+            {
+                "subject_node_id": subject_node_id,
+                "target_node_id": target_node_id,
+                "permissions": permissions,
+                "expires_at": expires_at,
+                "cluster_id": cluster_id,
+                "epoch": epoch,
+                "fencing_token": fencing_token,
+            },
+        )
+
+    def start_dashboard_share(self, *, expires_at: float) -> dict[str, Any]:
+        return self._request("start_dashboard_share", {"expires_at": expires_at})
+
+    def stop_dashboard_share(self) -> dict[str, Any]:
+        return self._request("stop_dashboard_share", {})
 
     def terminate(self, request: ProcessTerminationRequest) -> ProcessActionResult:
         if request.target_node_id != self._node_id:

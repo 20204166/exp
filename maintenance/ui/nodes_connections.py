@@ -658,6 +658,9 @@ class NodesConnectionsPage:
             on_permissions = self.callbacks.on_permissions
             permission_values: dict[str, Any] = {}
             for permission, label in (
+                ("dashboard_read", "View dashboard"),
+                ("component_read", "View components"),
+                ("storage_review", "Review storage"),
                 ("process_review", "Review processes"),
                 ("process_termination", "Terminate processes"),
                 ("process_force_termination", "Force terminate"),
@@ -671,7 +674,8 @@ class NodesConnectionsPage:
                     variable=variable,
                     style=(
                         ui_styles.STYLE_DANGER_CHECKBUTTON
-                        if permission != "process_review"
+                        if permission
+                        in {"process_termination", "process_force_termination"}
                         else ui_styles.STYLE_CHECKBUTTON
                     ),
                     command=lambda: on_permissions(

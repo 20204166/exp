@@ -283,6 +283,7 @@ def timer_delivery_for_window(controller: Any) -> TimerDelivery:
 def finalize_shutdown(controller: Any) -> None:
     peer_server = controller.__dict__.get("_peer_server")
     controller.__dict__["_peer_server"] = None
+    controller.__dict__["_peer_service"] = None
     if peer_server is not None:
         peer_server.stop()
     controller._stop_discovery()

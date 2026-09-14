@@ -432,10 +432,11 @@ class LiveWindowWiringTests(unittest.TestCase):
             "nodes",
             "cluster",
             "thermals",
-            "diagnostics",
             "help",
             *(f"help:{topic.key}" for topic in HELP_TOPICS),
         }
+        if self.window._developer_mode:
+            expected.add("diagnostics")
         registered = set(self.window._page_router.registered_keys)
         missing = expected - registered
         self.assertEqual(
@@ -454,14 +455,14 @@ class LiveWindowWiringTests(unittest.TestCase):
             "settings:category:preferences",
             "settings:category:nodes",
             "settings:category:cluster",
-            "settings:category:diagnostics",
             "settings:category:help",
             "thermals:learn-more",
             "nodes:learn-pairing",
-            "diagnostics:copy",
             "preferences:full-system-scan",
             *(f"help:topic:{topic.key}" for topic in HELP_TOPICS),
         }
+        if self.window._developer_mode:
+            expected.update({"settings:category:diagnostics", "diagnostics:copy"})
         missing = expected - registered
         self.assertEqual(
             missing,

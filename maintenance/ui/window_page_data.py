@@ -1,5 +1,6 @@
 """Page data and selected-theme adapters for ``AppWindow``."""
 
+import time
 from typing import Any
 
 from maintenance.preferences import INTERVAL_POLICIES
@@ -23,9 +24,9 @@ def colors(controller: Any) -> dict[str, str]:
 
 
 def settings_categories(
-    _controller: Any,
+    controller: Any,
 ) -> list[ui_settings_home.SettingsCategorySpec]:
-    return [
+    categories = [
         ui_settings_home.SettingsCategorySpec(
             "preferences",
             "Preferences",
@@ -53,6 +54,9 @@ def settings_categories(
             "clusters, and troubleshooting.",
         ),
     ]
+    if not controller.__dict__.get("_developer_mode", False):
+        categories = [item for item in categories if item.key != "diagnostics"]
+    return categories
 
 
 def interval_specs(controller: Any) -> list[ui_preferences.IntervalControlSpec]:
@@ -124,5 +128,9 @@ def cluster_specs(controller: Any) -> list[ui_cluster.ClusterNodeSpec]:
                 role.value == "coordinator"
                 for role in controller._cluster_state.local_assignment.roles
             ),
+            dashboard_share_active=controller.__dict__.get(
+                "_dashboard_share_expires_at", 0.0
+            )
+            > time.time(),
         )
     )

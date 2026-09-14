@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import subprocess
@@ -24,10 +25,12 @@ from maintenance.nodes import (
     NodeContext,
     NodeId,
     NodeIdentityStatus,
+    NodePermission,
     NodeStatus,
 )
 from maintenance.remote import (
     AuthenticatedNodeProvider,
+    CapabilityElevationRequest,
     PairingRequest,
     PeerGrant,
     RemoteAuthError,
@@ -105,6 +108,7 @@ def start_peer_listener(controller: Any) -> None:
             caller_node_id=NodeId(grant.caller_node_id),
             secret=grant.secret,
             permissions=grant.permissions,
+            expires_at=grant.expires_at,
         )
         for grant in controller._cluster_state.peer_grants
     }
@@ -138,6 +142,7 @@ def start_peer_listener(controller: Any) -> None:
             else None
         ),
         role_handler=lambda request: handle_role_request(controller, request),
+        require_dashboard_share=True,
     )
     try:
         material = ensure_tls_material(
@@ -152,6 +157,7 @@ def start_peer_listener(controller: Any) -> None:
         host="0.0.0.0",
         ssl_context=tls_context,
         pairing_handler=lambda request: handle_pairing_request(controller, request),
+        elevation_handler=lambda request: handle_elevation_request(controller, request),
     )
     try:
         server.start()
@@ -159,6 +165,7 @@ def start_peer_listener(controller: Any) -> None:
         LOGGER.warning("Remote peer listener unavailable: %s", error)
         return
     controller._peer_server = server
+    controller._peer_service = service
     controller._tls_fingerprint = material.fingerprint
 
 
@@ -295,8 +302,6 @@ def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, An
             actor=actor, target=NodeId(request.params["target_node_id"])
         )
     elif request.op == "grant_capabilities":
-        from maintenance.nodes import NodePermission
-
         updated = role_state.grant_capabilities(
             actor=actor,
             subject=NodeId(request.params["subject_node_id"]),
@@ -313,6 +318,41 @@ def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, An
             subject=NodeId(request.params["subject_node_id"]),
             target=NodeId(request.params["target_node_id"]),
         )
+    elif request.op == "sync_capability_grant":
+        if ClusterRole.COORDINATOR not in actor.roles:
+            raise RemoteAuthError("only the active Coordinator may sync grants")
+        target = NodeId(request.params["target_node_id"])
+        if target != NodeId(state.local_node_id):
+            raise RemoteAuthError("grant target does not match this node")
+        subject = NodeId(request.params["subject_node_id"])
+        subject_assignment = role_state.assignment_for(subject)
+        if (
+            subject_assignment is None
+            or subject_assignment.revoked
+            or ClusterRole.SUBCOORDINATOR not in subject_assignment.roles
+        ):
+            raise RemoteAuthError("grant subject is not an active Subcoordinator")
+        permissions = frozenset(
+            NodePermission(value) for value in request.params["permissions"]
+        )
+        peer_grants = tuple(
+            replace(
+                grant,
+                permissions=permissions,
+                expires_at=float(request.params["expires_at"]) if permissions else None,
+            )
+            if grant.caller_node_id == subject.value
+            else grant
+            for grant in state.peer_grants
+        )
+        if not any(
+            grant.caller_node_id == subject.value for grant in state.peer_grants
+        ):
+            raise RemoteAuthError("grant subject is not paired with this target")
+        updated = replace(state, peer_grants=peer_grants)
+        if not controller._save_cluster_state(updated):
+            raise RemoteAuthError("target grant could not be saved")
+        return {"ok": True}
     else:
         raise RemoteAuthError("unknown role operation")
     if not controller._save_cluster_state(
@@ -371,6 +411,41 @@ def handle_pairing_request(controller: Any, request: PairingRequest) -> bool:
         return bool(result["approved"])
     finally:
         pairing_lock.release()
+
+
+def handle_elevation_request(
+    controller: Any, request: CapabilityElevationRequest
+) -> bool:
+    """Approve a paired caller's ACL widening at the target UI boundary."""
+
+    prior = controller._cluster_state.grant(request.caller_node_id.value)
+    if prior is None or not hmac.compare_digest(prior.secret, request.current_secret):
+        return False
+    window = _window_symbols()
+    approved = window.messagebox.askyesno(
+        "Approve permission elevation",
+        (
+            f"Allow {request.caller_node_id.value} additional access?\n\n"
+            f"Requested permissions: {', '.join(sorted(p.value for p in request.permissions))}"
+        ),
+        parent=controller.master,
+    )
+    if not approved:
+        return False
+    current = controller._cluster_state
+    updated = replace(
+        current,
+        peer_grants=tuple(
+            replace(
+                grant,
+                permissions=request.permissions,
+            )
+            if grant.caller_node_id == request.caller_node_id.value
+            else grant
+            for grant in current.peer_grants
+        ),
+    )
+    return controller._save_cluster_state(updated)
 
 
 def start_discovery(controller: Any) -> None:
@@ -538,6 +613,12 @@ def detach_peer(controller: Any, context: NodeContext) -> None:
     context.scheduler = None
     context.coordinator = None
     context.descriptor = replace(context.descriptor, status=NodeStatus.OFFLINE)
+    shares = controller.__dict__.get("_dashboard_shares")
+    if shares is not None:
+        shares.pop(context.node_id, None)
+    service = controller.__dict__.get("_peer_service")
+    if service is not None:
+        service.clear_dashboard_share(context.node_id)
     controller._refresh_nodes_page()
 
 

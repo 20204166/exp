@@ -149,6 +149,7 @@ def cluster_node_specs(
     *,
     cluster_state: Any = None,
     role_editable: bool = False,
+    dashboard_share_active: bool = False,
 ) -> list[ui_cluster.ClusterNodeSpec]:
     """Project registered contexts and untrusted observations for All Systems."""
 
@@ -190,6 +191,7 @@ def cluster_node_specs(
                     else None
                 ),
                 target_state=presentation.label,
+                share_active=dashboard_share_active if descriptor.is_local else False,
                 role=descriptor.role,
                 role_editable=role_editable,
                 has_active_job=(

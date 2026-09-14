@@ -63,6 +63,7 @@ class ClusterNodeSpec:
     paused: bool = False
     role_editable: bool = False
     has_active_job: bool = True
+    share_active: bool = False
 
 
 class ClusterPage:
@@ -159,6 +160,7 @@ class ClusterPage:
         "is_local",
         "pairing_state",
         "target_state",
+        "share_active",
     )
 
     def refresh_nodes(self, nodes: list[ClusterNodeSpec]) -> None:
@@ -335,7 +337,7 @@ class ClusterPage:
         if spec.is_local and on_share_dashboard is not None:
             share = self.button_cls(
                 row,
-                text="Share dashboard",
+                text="Stop sharing" if spec.share_active else "Share dashboard",
                 command=on_share_dashboard,
                 style=ui_styles.STYLE_NEUTRAL_BUTTON,
             )

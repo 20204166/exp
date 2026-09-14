@@ -66,6 +66,7 @@ def sync_peer_listener_grants(controller: Any) -> None:
             caller_node_id=window.NodeId(grant.caller_node_id),
             secret=grant.secret,
             permissions=grant.permissions,
+            expires_at=grant.expires_at,
         )
         for grant in controller._cluster_state.peer_grants
     }

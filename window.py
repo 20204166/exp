@@ -1,5 +1,6 @@
 import functools
 import logging
+import os
 import threading
 import time
 import tkinter as tk
@@ -55,6 +56,7 @@ from maintenance.components.temperature import (
 from maintenance.diagnostics import (
     ClusterDiagnostic,
     build_diagnostics_snapshot,
+    developer_mode_enabled,
     serialize_diagnostics,
 )
 from maintenance.dialogs import (
@@ -211,6 +213,7 @@ class AppWindow:
             else None
         )
         self._provision_target_grant = provision_target_grant
+        self._developer_mode = developer_mode_enabled(os.environ)
         self.snapshot: DashboardSnapshot | None = None
         self._is_closing = False
         self._pending_after_ids: set[str] = set()
@@ -314,9 +317,10 @@ class AppWindow:
         self._page_router.register(PageSpec(NODES_PAGE, self._build_nodes_page))
         self._page_router.register(PageSpec(CLUSTER_PAGE, self._build_cluster_page))
         self._page_router.register(PageSpec(THERMALS_PAGE, self._build_thermals_page))
-        self._page_router.register(
-            PageSpec(DIAGNOSTICS_PAGE, self._build_diagnostics_page)
-        )
+        if self._developer_mode:
+            self._page_router.register(
+                PageSpec(DIAGNOSTICS_PAGE, self._build_diagnostics_page)
+            )
         self.help_topic_pages: dict[str, Any] = {}
         self._page_router.register(PageSpec(HELP_PAGE, self._build_help_page))
         for topic in HELP_TOPICS:
@@ -378,6 +382,8 @@ class AppWindow:
         ui_window_pages.show_page(self, PREFERENCES_PAGE, "preferences_page")
 
     def _show_diagnostics_page(self) -> None:
+        if not getattr(self, "_developer_mode", True):
+            return
         ui_window_pages.show_page(self, DIAGNOSTICS_PAGE, "diagnostics_page")
 
     def _build_help_page(self, parent: Any) -> Any:
@@ -465,6 +471,8 @@ class AppWindow:
 
     def _save_performance_capture(self) -> str | None:
         """Persist one explicit, bounded observer capture under the repo root."""
+        if not getattr(self, "_developer_mode", True):
+            return None
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         path = PERFORMANCE_CAPTURE_DIRECTORY / f"observability-{timestamp}.json"
@@ -605,7 +613,39 @@ class AppWindow:
         ui_node_actions.remove_job_node(self, node_id)
 
     def _share_dashboard(self) -> None:
+        service = self.__dict__.get("_peer_service")
+        active_until = self.__dict__.get("_dashboard_share_expires_at", 0.0)
+        if service is not None and active_until > time.time():
+            service.stop_dashboard_shares()
+            self.__dict__["_dashboard_share_expires_at"] = 0.0
+            self._cancel_timer(self.__dict__.get("_dashboard_share_timer_id"))
+            self.__dict__["_dashboard_share_timer_id"] = None
+            self._nodes_status("Dashboard sharing stopped")
+        else:
+            if service is None:
+                self._start_peer_listener()
+                service = self.__dict__.get("_peer_service")
+            if service is not None:
+                expires_at = time.time() + 300.0
+                for grant in self._cluster_state.peer_grants:
+                    service.start_dashboard_share_for(
+                        NodeId(grant.caller_node_id), expires_at=expires_at
+                    )
+                self.__dict__["_dashboard_share_expires_at"] = expires_at
+                self.__dict__["_dashboard_share_timer_id"] = self._schedule_timer(
+                    300_000, self._expire_dashboard_share
+                )
+                self._nodes_status("Dashboard shared read-only for 5 minutes")
+        self._refresh_cluster_page()
         self._show_dashboard_page()
+
+    def _expire_dashboard_share(self) -> None:
+        service = self.__dict__.get("_peer_service")
+        if service is not None:
+            service.stop_dashboard_shares()
+        self.__dict__["_dashboard_share_expires_at"] = 0.0
+        self.__dict__["_dashboard_share_timer_id"] = None
+        self._refresh_cluster_page()
 
     def _set_node_color(self, node_id: str, color: str) -> None:
         ui_node_actions.set_node_color(self, node_id, color)

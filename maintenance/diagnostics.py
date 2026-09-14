@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -12,6 +14,12 @@ from maintenance.components.placement import PlacementDecision
 from maintenance.observability import ObservabilitySnapshot, ObservabilityWatcher
 
 MAX_DETAIL_LENGTH = 160
+
+
+def developer_mode_enabled(environment: Mapping[str, str] | None = None) -> bool:
+    """Return true only for the explicit developer launch configuration."""
+    values = os.environ if environment is None else environment
+    return values.get("SYSTEM_ANALYZER_DEVELOPER_MODE") == "1"
 
 
 def truncate_detail(value: str | None) -> str | None:

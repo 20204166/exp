@@ -237,7 +237,11 @@ class LiveResizeTests(unittest.TestCase):
             )
             self.assertEqual(
                 home.category_keys,
-                ("preferences", "nodes", "cluster", "diagnostics", "help"),
+                (
+                    ("preferences", "nodes", "cluster", "diagnostics", "help")
+                    if window._developer_mode
+                    else ("preferences", "nodes", "cluster", "help")
+                ),
             )
 
             # Settings Home -> Preferences page (real navigation via the card button)
@@ -303,7 +307,7 @@ class LiveResizeTests(unittest.TestCase):
                     "nodes",
                     "cluster",
                     "thermals",
-                    "diagnostics",
+                    *(("diagnostics",) if window._developer_mode else ()),
                     "help",
                     *(f"help:{topic.key}" for topic in HELP_TOPICS),
                 ),

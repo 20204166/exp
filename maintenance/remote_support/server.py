@@ -18,6 +18,7 @@ from maintenance.nodes import NodeId, NodePermission
 from maintenance.remote_support.protocol import (
     DEFAULT_MAX_ACTIVE_HANDLERS,
     MAX_ENVELOPE_BYTES,
+    CapabilityElevationRequest,
     PairingRequest,
     PeerGrant,
     RemoteProtocolError,
@@ -45,6 +46,7 @@ class RemoteSocketServer:
         max_active_handlers: int = DEFAULT_MAX_ACTIVE_HANDLERS,
         ssl_context: ssl.SSLContext | None = None,
         pairing_handler: Callable[[PairingRequest], bool] | None = None,
+        elevation_handler: Callable[[CapabilityElevationRequest], bool] | None = None,
     ) -> None:
         if max_active_handlers < 1:
             raise ValueError("max_active_handlers must be positive")
@@ -55,6 +57,7 @@ class RemoteSocketServer:
         self._max_active_handlers = max_active_handlers
         self._ssl_context = ssl_context
         self._pairing_handler = pairing_handler
+        self._elevation_handler = elevation_handler
         self._server: Any = None
         self._thread: Any = None
         self._admission: threading.BoundedSemaphore | None = None
@@ -95,6 +98,13 @@ class RemoteSocketServer:
                                 and raw.get("op") == "pair_request"
                             ):
                                 response = _handle_pairing_request(raw, pairing_handler)
+                            elif (
+                                isinstance(raw, dict)
+                                and raw.get("op") == "elevation_request"
+                            ):
+                                response = _handle_elevation_request(
+                                    raw, elevation_handler
+                                )
                             else:
                                 response = service.handle(text)
                         except Exception:  # noqa: BLE001 - auth failures close silently.
@@ -115,6 +125,7 @@ class RemoteSocketServer:
         service_timeout = self._timeout
         ssl_context = self._ssl_context
         pairing_handler = self._pairing_handler
+        elevation_handler = self._elevation_handler
 
         class _Server(socketserver.ThreadingTCPServer):
             allow_reuse_address = True
@@ -194,6 +205,42 @@ def _handle_pairing_request(
             caller_node_id=NodeId(raw["caller_node_id"]),
             identity_fingerprint=raw["identity_fingerprint"],
             transport_fingerprint=raw["transport_fingerprint"],
+            proposed_secret=raw["secret"],
+            permissions=frozenset(NodePermission(item) for item in permissions),
+        )
+        approved = handler(request)
+    except (KeyError, TypeError, ValueError, RemoteProtocolError):
+        approved = False
+    return json.dumps(
+        {"approved": bool(approved), "error": None if approved else "denied"}
+    )
+
+
+def _handle_elevation_request(
+    raw: dict[str, Any],
+    handler: Callable[[CapabilityElevationRequest], bool] | None,
+) -> str:
+    if handler is None or set(raw) != {
+        "op",
+        "caller_node_id",
+        "identity_fingerprint",
+        "transport_fingerprint",
+        "current_secret",
+        "secret",
+        "permissions",
+    }:
+        return json.dumps({"approved": False, "error": "elevation_unavailable"})
+    permissions = raw["permissions"]
+    if not isinstance(permissions, list) or any(
+        not isinstance(item, str) for item in permissions
+    ):
+        return json.dumps({"approved": False, "error": "invalid_elevation"})
+    try:
+        request = CapabilityElevationRequest(
+            caller_node_id=NodeId(raw["caller_node_id"]),
+            identity_fingerprint=raw["identity_fingerprint"],
+            transport_fingerprint=raw["transport_fingerprint"],
+            current_secret=raw["current_secret"],
             proposed_secret=raw["secret"],
             permissions=frozenset(NodePermission(item) for item in permissions),
         )

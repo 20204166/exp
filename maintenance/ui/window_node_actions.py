@@ -6,6 +6,7 @@ keeping node administration out of the window's composition code.
 """
 
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from tkinter import messagebox, simpledialog
@@ -114,7 +115,57 @@ def _save_role_state(controller: Any, state: RoleState) -> bool:
             context.descriptor = replace(context.descriptor, role=role)
     controller._refresh_nodes_page()
     controller._refresh_cluster_page()
+    _propagate_capability_grants(controller, state)
     return True
+
+
+def _propagate_capability_grants(controller: Any, state: RoleState) -> None:
+    """Push durable grants to reachable targets through their ACL owner."""
+    registry = controller.__dict__.get("_node_registry")
+    epoch = state.epoch
+    if registry is None or epoch is None:
+        return
+    for target in state.assignments:
+        if target.node_id is None or target.node_id.value == epoch.coordinator_id.value:
+            continue
+        try:
+            context = registry.context(target.node_id)
+        except KeyError:
+            continue
+        provider = context.provider
+        if provider is None or not hasattr(provider, "sync_capability_grant"):
+            continue
+        for subject in state.assignments:
+            if (
+                subject.node_id is None
+                or subject.node_id == target.node_id
+                or ClusterRole.SUBCOORDINATOR not in subject.roles
+                or subject.revoked
+            ):
+                continue
+            grant = state.capability_grant(
+                subject.node_id, target.node_id, now=time.time()
+            )
+            permissions = (
+                []
+                if grant is None
+                else sorted(permission.value for permission in grant.permissions)
+            )
+            expires_at = time.time() + 1.0 if grant is None else grant.expires_at
+            try:
+                provider.sync_capability_grant(
+                    subject.node_id.value,
+                    target.node_id.value,
+                    permissions,
+                    expires_at=expires_at,
+                    cluster_id=controller._cluster_state.cluster_id,
+                    epoch=epoch.epoch,
+                    fencing_token=epoch.fencing_token,
+                )
+            except Exception as error:  # noqa: BLE001 - target remains fail-closed.
+                controller._nodes_error(
+                    f"Could not update permissions on {target.node_id}: {error}"
+                )
 
 
 def set_node_roles(controller: Any, node_id: str, roles: frozenset[str]) -> None:
@@ -486,6 +537,38 @@ def set_node_permissions(
         return
     allowed = {permission.value for permission in NodePermission}
     previous = context.descriptor.permissions
+    subcoordinator = next(
+        (
+            assignment
+            for assignment in controller._cluster_state.role_assignments
+            if assignment.node_id is not None
+            and ClusterRole.SUBCOORDINATOR in assignment.roles
+            and not assignment.revoked
+        ),
+        None,
+    )
+    if (
+        ClusterRole.COORDINATOR in controller._cluster_state.local_assignment.roles
+        and subcoordinator is not None
+        and subcoordinator.node_id != NodeId(node_id)
+    ):
+        try:
+            updated = _role_state(controller).grant_capabilities(
+                actor=controller._cluster_state.local_assignment,
+                subject=subcoordinator.node_id or NodeId(""),
+                target=NodeId(node_id),
+                permissions=frozenset(
+                    NodePermission(value)
+                    for value in raw_permissions
+                    if value in {permission.value for permission in NodePermission}
+                ),
+                now=time.time(),
+                expires_at=time.time() + 3600.0,
+            )
+            _save_role_state(controller, updated)
+        except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
+            controller._nodes_error(str(error))
+        return
     process_permissions = {
         NodePermission.PROCESS_REVIEW,
         NodePermission.PROCESS_TERMINATION,

@@ -62,6 +62,9 @@ OP_REQUIRED_CAPABILITY: dict[str, NodeCapability] = {
     "remove_job": NodeCapability.REMOTE_MANAGEMENT,
     "grant_capabilities": NodeCapability.REMOTE_MANAGEMENT,
     "revoke_capabilities": NodeCapability.REMOTE_MANAGEMENT,
+    "sync_capability_grant": NodeCapability.REMOTE_MANAGEMENT,
+    "start_dashboard_share": NodeCapability.DASHBOARD_READ,
+    "stop_dashboard_share": NodeCapability.DASHBOARD_READ,
 }
 
 OP_REQUIRED_PERMISSION: dict[str, NodePermission] = {
@@ -83,6 +86,7 @@ ROLE_OPERATIONS = frozenset(
         "remove_job",
         "grant_capabilities",
         "revoke_capabilities",
+        "sync_capability_grant",
     }
 )
 
@@ -161,6 +165,7 @@ class PeerGrant:
     caller_node_id: NodeId
     secret: str
     permissions: frozenset[NodePermission]
+    expires_at: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +186,28 @@ class PairingRequest:
         _validate_secret(self.proposed_secret)
         if not self.permissions <= frozenset(READ_PERMISSIONS):
             raise RemoteAuthorizationError("pairing is read-only")
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityElevationRequest:
+    """Authenticated peer request for target-side permission elevation."""
+
+    caller_node_id: NodeId
+    identity_fingerprint: str
+    transport_fingerprint: str
+    current_secret: str
+    proposed_secret: str
+    permissions: frozenset[NodePermission]
+
+    def __post_init__(self) -> None:
+        if not self.caller_node_id.value or not self.identity_fingerprint:
+            raise RemoteAuthError("elevation identity is missing")
+        if not self.transport_fingerprint:
+            raise RemoteAuthError("elevation transport fingerprint is missing")
+        _validate_secret(self.current_secret)
+        _validate_secret(self.proposed_secret)
+        if not self.permissions:
+            raise RemoteAuthorizationError("elevation requires a permission")
 
 
 def _validate_secret(secret: str) -> None:
@@ -535,6 +562,19 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
         if set(params) != {"processes", "action"}:
             raise RemoteProtocolError(f"{op} has unexpected parameters")
         return
+    if op in {"start_dashboard_share", "stop_dashboard_share"}:
+        if op == "stop_dashboard_share":
+            if set(params) != set():
+                raise RemoteProtocolError(f"{op} has unexpected parameters")
+        elif set(params) != {"expires_at"}:
+            raise RemoteProtocolError(f"{op} has unexpected parameters")
+        if op == "start_dashboard_share" and (
+            not isinstance(params.get("expires_at"), (int, float))
+            or isinstance(params["expires_at"], bool)
+            or not math.isfinite(float(params["expires_at"]))
+        ):
+            raise RemoteProtocolError("dashboard share expiry is invalid")
+        return
     if op in {
         "consume_invite",
         "assign_role",
@@ -548,6 +588,7 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
         "remove_job",
         "grant_capabilities",
         "revoke_capabilities",
+        "sync_capability_grant",
     }:
         required = {"cluster_id", "epoch", "fencing_token"}
         if not required <= set(params):
@@ -625,6 +666,34 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
                     or not math.isfinite(float(params["expires_at"]))
                 ):
                     raise RemoteProtocolError("capability grant expiry is invalid")
+            return
+        if op == "sync_capability_grant":
+            expected_fields = {
+                "cluster_id",
+                "epoch",
+                "fencing_token",
+                "subject_node_id",
+                "target_node_id",
+                "permissions",
+                "expires_at",
+            }
+            if set(params) != expected_fields:
+                raise RemoteProtocolError(f"{op} has unexpected parameters")
+            for field in ("subject_node_id", "target_node_id"):
+                if not isinstance(params.get(field), str) or not params[field]:
+                    raise RemoteProtocolError(f"{op} target identity is invalid")
+            permissions = params.get("permissions")
+            known = {item.value for item in NodePermission}
+            if not isinstance(permissions, list) or any(
+                not isinstance(item, str) or item not in known for item in permissions
+            ):
+                raise RemoteProtocolError(f"{op} permissions are invalid")
+            if (
+                not isinstance(params.get("expires_at"), (int, float))
+                or isinstance(params["expires_at"], bool)
+                or not math.isfinite(float(params["expires_at"]))
+            ):
+                raise RemoteProtocolError(f"{op} expiry is invalid")
             return
         payload = params.get("payload")
         if not isinstance(payload, dict):

@@ -1,5 +1,6 @@
 """TLS material and pinned peer transport tests."""
 
+import json
 import os
 import subprocess
 import tempfile
@@ -11,15 +12,67 @@ from unittest.mock import patch
 from maintenance.nodes import NodeId, NodePermission
 from maintenance.remote import (
     AuthenticatedNodeProvider,
+    CapabilityElevationRequest,
     RemoteAuthError,
     RemoteSocketServer,
     TLSRemoteTransport,
 )
 from maintenance.remote_security import ensure_tls_material, server_context
+from maintenance.remote_support.server import _handle_elevation_request
 from tests.test_remote_contract import SECRET, _service
 
 
 class RemoteSecurityTests(unittest.TestCase):
+    def test_elevation_request_allows_only_explicit_target_approval(self) -> None:
+        request = CapabilityElevationRequest(
+            caller_node_id=NodeId("caller"),
+            identity_fingerprint="caller-id",
+            transport_fingerprint="caller-tls",
+            current_secret="a" * 64,
+            proposed_secret="b" * 64,
+            permissions=frozenset({NodePermission.PROCESS_TERMINATION}),
+        )
+        self.assertEqual(
+            request.permissions, frozenset({NodePermission.PROCESS_TERMINATION})
+        )
+
+    def test_elevation_request_rejects_empty_permissions(self) -> None:
+        with self.assertRaises(ValueError):
+            CapabilityElevationRequest(
+                caller_node_id=NodeId("caller"),
+                identity_fingerprint="caller-id",
+                transport_fingerprint="caller-tls",
+                current_secret="a" * 64,
+                proposed_secret="b" * 64,
+                permissions=frozenset(),
+            )
+
+    def test_elevation_handler_requires_explicit_approval(self) -> None:
+        raw = {
+            "op": "elevation_request",
+            "caller_node_id": "caller",
+            "identity_fingerprint": "caller-id",
+            "transport_fingerprint": "caller-tls",
+            "current_secret": "a" * 64,
+            "secret": "b" * 64,
+            "permissions": [NodePermission.CLEANUP.value],
+        }
+        denied = _handle_elevation_request(raw, lambda _request: False)
+        approved = _handle_elevation_request(raw, lambda _request: True)
+        self.assertFalse(json.loads(denied)["approved"])
+        self.assertTrue(json.loads(approved)["approved"])
+
+    def test_elevation_request_carries_the_existing_pairing_credential(self) -> None:
+        request = CapabilityElevationRequest(
+            caller_node_id=NodeId("caller"),
+            identity_fingerprint="caller-id",
+            transport_fingerprint="caller-tls",
+            current_secret="a" * 64,
+            proposed_secret="b" * 64,
+            permissions=frozenset({NodePermission.CLEANUP}),
+        )
+        self.assertNotEqual(request.current_secret, request.proposed_secret)
+
     def test_tls_generation_forwards_no_window_creation_flag(self) -> None:
         observed: dict[str, object] = {}
         real_run = subprocess.run

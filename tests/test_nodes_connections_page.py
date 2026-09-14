@@ -305,11 +305,26 @@ class NodesConnectionsPageTests(unittest.TestCase):
         ]
         self.assertEqual(
             [control.kwargs["text"] for control in controls],
-            ["Review processes", "Terminate processes", "Force terminate"],
+            [
+                "View dashboard",
+                "View components",
+                "Review storage",
+                "Review processes",
+                "Terminate processes",
+                "Force terminate",
+            ],
         )
-        self.assertEqual(controls[0].kwargs["style"], "App.TCheckbutton")
-        self.assertEqual(controls[1].kwargs["style"], "Danger.TCheckbutton")
-        self.assertEqual(controls[2].kwargs["style"], "Danger.TCheckbutton")
+        self.assertEqual(
+            [control.kwargs["style"] for control in controls],
+            [
+                "App.TCheckbutton",
+                "App.TCheckbutton",
+                "App.TCheckbutton",
+                "App.TCheckbutton",
+                "Danger.TCheckbutton",
+                "Danger.TCheckbutton",
+            ],
+        )
 
     def test_open_button_disabled_for_non_selectable(self) -> None:
         _page, _parent, recorder = make_page(
