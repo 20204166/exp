@@ -77,7 +77,12 @@ from .styles import (
     STYLE_TITLE,
     configure_app_styles,
 )
-from .target_state import TargetPresentation, TargetState, render_target_state
+from .target_state import (
+    TargetPresentation,
+    TargetState,
+    render_target_state,
+    target_status_text,
+)
 from .telemetry_graph import TelemetryMiniGraph
 from .thermals_page import ThermalsPage, ThermalsPageCallbacks
 from .transition import PendingTransition
@@ -148,4 +153,5 @@ __all__ = [
     "scrollable_area",
     "section_card",
     "setting_row",
+    "target_status_text",
 ]

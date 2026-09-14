@@ -7,7 +7,7 @@ from typing import Any, cast
 
 from maintenance.components import NodeSelection
 from maintenance.nodes import NodeContext, NodeId, node_operation_key
-from maintenance.ui.target_state import render_target_state
+from maintenance.ui.target_state import render_target_state, target_status_text
 
 DASHBOARD_PAGE = "dashboard"
 THERMALS_PAGE = "thermals"
@@ -247,12 +247,7 @@ def render_selected_node(controller: Any, context: NodeContext) -> None:
     target_status_label = getattr(controller, "target_status_label", None)
     if target_status_label is not None:
         presentation = render_target_state(context.descriptor, snapshot)
-        target_status_label.config(
-            text=(
-                f"{presentation.label} · {presentation.identity} · "
-                f"capabilities: {', '.join(presentation.capabilities) or 'none'}"
-            )
-        )
+        target_status_label.config(text=target_status_text(presentation))
     if snapshot is None:
         controller.refreshed_label.config(text="Not refreshed yet")
         controller.scan_time_label.config(text="Not scanned yet")

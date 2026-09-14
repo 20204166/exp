@@ -12,7 +12,11 @@ from maintenance.nodes import (
     NodeStatus,
     NodeTrustState,
 )
-from maintenance.ui.target_state import TargetState, render_target_state
+from maintenance.ui.target_state import (
+    TargetState,
+    render_target_state,
+    target_status_text,
+)
 from tests.support.models import make_snapshot, make_summary
 
 
@@ -51,6 +55,44 @@ def snapshot():
 
 
 class TargetStatePresentationTests(unittest.TestCase):
+    def test_dashboard_status_keeps_identity_but_hides_capabilities(self) -> None:
+        capabilities = frozenset(
+            {NodeCapability.COMPONENT_READ, NodeCapability.DASHBOARD_READ}
+        )
+        permissions = frozenset(
+            {NodePermission.COMPONENT_READ, NodePermission.DASHBOARD_READ}
+        )
+        node = descriptor(
+            trust=NodeTrustState.LOCAL,
+            capabilities=capabilities,
+            permissions=permissions,
+        )
+        presentation = render_target_state(node)
+
+        text = target_status_text(presentation)
+
+        self.assertIn("Local", text)
+        self.assertIn("Peer", text)
+        self.assertIn("ID opaque-peer", text)
+        self.assertNotIn("capabilities:", text)
+        self.assertNotIn("component_read", text)
+        self.assertNotIn("dashboard_read", text)
+        self.assertEqual(node.capabilities, capabilities)
+        self.assertEqual(node.permissions, permissions)
+
+    def test_dashboard_status_hides_capabilities_for_remote_nodes(self) -> None:
+        node = descriptor(
+            capabilities=frozenset({NodeCapability.COMPONENT_READ}),
+            permissions=frozenset({NodePermission.COMPONENT_READ}),
+        )
+
+        text = target_status_text(render_target_state(node))
+
+        self.assertIn("Remote read-only", text)
+        self.assertIn("Peer", text)
+        self.assertNotIn("capabilities:", text)
+        self.assertNotIn("component_read", text)
+
     def test_matrix_distinguishes_trust_and_permissions(self) -> None:
         read = frozenset({NodeCapability.PROCESS_REVIEW})
         review = frozenset({NodePermission.PROCESS_REVIEW})

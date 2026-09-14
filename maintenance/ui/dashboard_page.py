@@ -6,7 +6,7 @@ from maintenance.dialogs import ResourceCard
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
-from maintenance.ui.target_state import render_target_state
+from maintenance.ui.target_state import render_target_state, target_status_text
 
 
 def build(controller: Any, parent: Any) -> Any:
@@ -40,8 +40,7 @@ def build(controller: Any, parent: Any) -> Any:
         controller.header_actions, "_dashboard_node_label", None
     )
     controller.target_status_text = (
-        f"{rendered.label} · {rendered.identity} · "
-        f"capabilities: {', '.join(rendered.capabilities) or 'none'}"
+        target_status_text(rendered)
         if (context := controller._selected_context()) is not None
         and (rendered := render_target_state(context.descriptor, context.snapshot))
         else ""

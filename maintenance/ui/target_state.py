@@ -162,3 +162,9 @@ def render_target_state(
         can_cleanup=can_cleanup,
         value=value,
     )
+
+
+def target_status_text(presentation: TargetPresentation) -> str:
+    """Format the compact dashboard status without exposing capability lists."""
+
+    return f"{presentation.label} · {presentation.identity}"
