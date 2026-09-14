@@ -23,7 +23,7 @@
 - Use Mode A to fix and validate already-proven bugs.
 - Use Mode C for safe, low-risk performance improvements with proportional (or no) opposition.
 - Use Mode D for security assurance/hardening of a named surface; D-audit is read-only and D-hardening delegates the patch to Mode A.
-- Real subagents only for BugGuard opposition stages; do not simulate them.
+- Use separate independent BugGuard reviewer/fallback sessions for every required opposition role, including Agent 5; never use the main OpenCode agent to perform or simulate them.
 - Agent 5 only runs after four completed opposition sections exist with real independent outputs.
 - Mode B changes no app code or normal repo tests.
 
