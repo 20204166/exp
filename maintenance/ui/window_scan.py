@@ -9,11 +9,14 @@ from typing import Any, cast
 from maintenance.models import DashboardSnapshot
 from maintenance.nodes import (
     ConnectionState,
+    NodeCapability,
     NodeConnectionStatus,
     NodeId,
+    NodePermission,
     NodeSnapshot,
 )
 from maintenance.ui import render_coordinator as ui_render
+from maintenance.ui import window_placement as ui_window_placement
 
 
 def _window_symbols() -> Any:
@@ -81,6 +84,16 @@ def handle_analyze(controller: Any) -> None:
     source_provider = (
         source_context.provider if source_context is not None else controller.analyzer
     )
+    decision = ui_window_placement.validate_target_placement(
+        controller,
+        source_context,
+        operation="dashboard-scan",
+        required_capability=NodeCapability.DASHBOARD_READ,
+        required_permission=NodePermission.DASHBOARD_READ,
+    )
+    if decision is not None and decision.selected_node_id is None:
+        controller._show_error(decision.reason)
+        return
 
     def on_started(generation: int, _cancel_event: threading.Event) -> None:
         coordinator = controller._render_coordinator()

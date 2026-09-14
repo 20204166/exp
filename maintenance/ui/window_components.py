@@ -14,9 +14,10 @@ from maintenance.components.temperature import (
     TemperatureTelemetryUpdate,
 )
 from maintenance.models import CapabilityState, ResourceSummary, unavailable_summary
-from maintenance.nodes import NodeId
+from maintenance.nodes import NodeCapability, NodeId, NodePermission
 from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui import styles as ui_styles
+from maintenance.ui import window_placement as ui_window_placement
 from maintenance.ui.window_supports import card_policy, snapshot_state
 from maintenance.ui.window_supports.timer_delivery import deadline_delay_ms
 
@@ -160,6 +161,19 @@ def launch_component_scan(controller: Any, key: str) -> None:
     def record_error(_operation: str, message: str) -> None:
         source_scheduler.record_error(key, "execution_failed", message)
         queue_result(RuntimeError(message))
+
+    decision = ui_window_placement.validate_target_placement(
+        controller,
+        source_context,
+        operation=f"component:{key}",
+        required_capability=NodeCapability.COMPONENT_READ,
+        required_permission=NodePermission.COMPONENT_READ,
+    )
+    if decision is not None and decision.selected_node_id is None:
+        source_scheduler.record_error(key, "placement_rejected", decision.reason)
+        queue_result(RuntimeError(decision.reason))
+        finish_component()
+        return
 
     run_generation = controller._coordinator.run(
         operation_key,

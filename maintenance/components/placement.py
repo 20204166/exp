@@ -1,13 +1,16 @@
 """Pure, deterministic selection of an execution node for one typed job.
 
-Status: implemented and tested, but not composed into any runtime path as of
-2026-09-13 -- nothing in the app constructs a ``PlacementRequest`` or calls
-``AppCoordinator.choose_placement`` outside this module's own tests. Every
-current scan/dialog/action targets whichever node the user manually selected.
-This is a documented future seam, not dead code slated for removal: wiring it
-up requires choosing which specific action should get automatic node
-selection instead of manual selection, which is a product decision left open
-(see docs/AUDIT_FOLLOWUP_2026-09-13.md).
+Status as of 2026-09-14: composed into two real TARGET_BOUND production call
+sites -- ``maintenance.ui.window_components.launch_component_scan`` (every
+dashboard component read) and ``maintenance.ui.window_scan.handle_analyze``
+(manual "Analyze") -- through the shared helper
+``maintenance.ui.window_placement.validate_target_placement``. Every current
+job in this app is LOCAL_BOUND (never modelled as a node operation, so it
+never reaches placement) or TARGET_BOUND (the user's manually selected node
+*is* the logical target, so there is nothing to rank). No MOVABLE job exists
+yet, so the locality/latency ranking path in ``_select`` below is exercised
+only by this module's own tests; it was not wired to an invented job just to
+give it a caller (see docs/AUDIT_FOLLOWUP_2026-09-13.md).
 """
 
 import math

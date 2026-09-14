@@ -428,6 +428,7 @@ class AppWindow:
             discovery_reason=getattr(
                 self._coordinator.discovery, "unavailable_reason", None
             ),
+            placement=self.__dict__.get("_last_placement_decision"),
             cluster=self._cluster_diagnostic(),
             observer=self._observer,
         )

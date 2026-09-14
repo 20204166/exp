@@ -24,6 +24,7 @@ from maintenance.components.network_discovery import (
 from maintenance.models import CapabilityState
 from maintenance.nodes import (
     LOCAL_NODE_ID,
+    ConnectionState,
     DiscoveredNodeCandidate,
     NodeCapability,
     NodeContext,
@@ -1538,6 +1539,62 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window._launch_component_scan("cpu")
 
         window._component_scheduler.request_refresh.assert_called_once_with("cpu")
+
+    def test_component_scan_is_rejected_for_a_target_missing_component_read(
+        self,
+    ) -> None:
+        remote = make_remote_context(
+            "dev",
+            trust=NodeTrustState.TRUSTED,
+            status=NodeStatus.ONLINE,
+            connection=ConnectionState.online(),
+            permissions=frozenset(NodePermission),
+            provider=Mock(),
+            process_manager=Mock(),
+            file_manager=Mock(),
+            scheduler=ComponentRefreshScheduler(),
+            coordinator=AppCoordinator(),
+        )
+        window = _make_window(remote)
+        window._switch_selected_node(NodeId("dev"))
+
+        window._launch_component_scan("cpu")
+
+        remote.provider.component_summary.assert_not_called()
+        in_flight, _paused, _last_success, last_error = (
+            remote.scheduler.diagnostic_state("cpu")
+        )
+        self.assertFalse(in_flight)
+        self.assertIsNotNone(last_error)
+        self.assertEqual(last_error[0], "placement_rejected")
+
+    def test_component_scan_still_proceeds_for_an_eligible_target(self) -> None:
+        runner = DeferredRunner()
+        remote = make_remote_context(
+            "dev",
+            trust=NodeTrustState.TRUSTED,
+            status=NodeStatus.ONLINE,
+            connection=ConnectionState.online(),
+            capabilities=[NodeCapability.COMPONENT_READ],
+            permissions=frozenset(NodePermission),
+            provider=Mock(),
+            process_manager=Mock(),
+            file_manager=Mock(),
+            scheduler=ComponentRefreshScheduler(),
+            coordinator=AppCoordinator(),
+        )
+        remote.provider.component_summary.return_value = _summary("cpu", "dev-cpu")
+        window = _make_window(remote)
+        window._switch_selected_node(NodeId("dev"))
+        window._coordinator = AppCoordinator(
+            runner=runner, deliver=lambda callback: callback()
+        )
+
+        window._launch_component_scan("cpu")
+        self.assertEqual(runner.pending, 1)
+        runner.run_next()
+
+        remote.provider.component_summary.assert_called_once()
 
     def test_cancel_node_operations_preserves_running_operation_state(self) -> None:
         window = _make_window(
