@@ -227,6 +227,35 @@ class RoleState:
             ),
         )
 
+    def allows(
+        self,
+        *,
+        subject: NodeId,
+        target: NodeId,
+        permission: NodePermission,
+        now: float,
+    ) -> bool:
+        """Return whether a current role may use one permission on one node."""
+
+        subject_assignment = self.assignment_for(subject)
+        target_assignment = self.assignment_for(target)
+        if (
+            subject_assignment is None
+            or subject_assignment.revoked
+            or subject_assignment.paused
+            or target_assignment is None
+            or target_assignment.revoked
+        ):
+            return False
+        if subject == target:
+            return True
+        if ClusterRole.COORDINATOR in subject_assignment.roles:
+            return ClusterRole.WORKER in target_assignment.roles
+        if ClusterRole.SUBCOORDINATOR not in subject_assignment.roles:
+            return False
+        grant = self.capability_grant(subject, target, now=now)
+        return grant is not None and permission in grant.permissions
+
     def active_coordinator(self) -> RoleAssignment | None:
         return next(
             (

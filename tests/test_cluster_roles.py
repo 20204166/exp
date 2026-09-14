@@ -275,6 +275,27 @@ class ClusterRoleTests(unittest.TestCase):
 
         self.assertEqual(updated.capability_grants, ())
 
+    def test_authority_is_full_for_coordinator_and_scoped_for_subcoordinator(
+        self,
+    ) -> None:
+        state = RoleState(assignments=(self.coordinator, self.sub, self.worker))
+        self.assertTrue(
+            state.allows(
+                subject=NodeId("coord"),
+                target=NodeId("worker"),
+                permission=NodePermission.CLEANUP,
+                now=10.0,
+            )
+        )
+        self.assertFalse(
+            state.allows(
+                subject=NodeId("sub"),
+                target=NodeId("worker"),
+                permission=NodePermission.CLEANUP,
+                now=10.0,
+            )
+        )
+
     def test_remove_job_paused_worker_is_allowed(self) -> None:
         paused = RoleAssignment(
             frozenset({ClusterRole.WORKER}),
