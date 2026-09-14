@@ -179,6 +179,7 @@ class ComponentFacadeReexportTests(unittest.TestCase):
             "DashboardScanLifecycle",
             "windows_windll",
             "ClusterRole",
+            "CapabilityGrant",
             "CoordinatorEpoch",
             "CoordinatorLease",
             "FencingError",
