@@ -13,6 +13,7 @@ from maintenance.cluster import (
     ClusterState,
     ClusterStore,
     PeerGrantRecord,
+    PendingPairing,
     dashboard_snapshot_from_dict,
     dashboard_snapshot_to_dict,
     file_candidate_from_dict,
@@ -509,10 +510,35 @@ class ClusterStoreTests(unittest.TestCase):
             caller_node_id="caller",
             secret="a" * 64,
             permissions=frozenset({NodePermission.DASHBOARD_READ}),
+            transaction_id="tx-1",
         )
         store.save(ClusterState(peer_grants=(grant,)))
         loaded = ClusterStore(path).load()
         self.assertEqual(loaded.grant("caller"), grant)
+
+    def test_old_peer_grant_json_defaults_transaction_binding_to_none(self) -> None:
+        _store, path = self._store()
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "peer_grants": [
+                        {
+                            "caller_node_id": "caller",
+                            "secret": "a" * 64,
+                            "permissions": ["dashboard_read"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        grant = ClusterStore(path).load().grant("caller")
+
+        self.assertIsNotNone(grant)
+        assert grant is not None
+        self.assertIsNone(grant.transaction_id)
 
     def test_malformed_peer_grant_is_denied(self) -> None:
         _store, path = self._store()
@@ -556,6 +582,120 @@ class ClusterStoreTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual(ClusterStore(path).load().peer_grants, ())
+
+    def test_pending_pairing_round_trip(self) -> None:
+        store, path = self._store()
+        pending = PendingPairing(
+            transaction_id="tx-1",
+            caller_node_id="caller",
+            identity_fingerprint="identity",
+            transport_fingerprint="transport",
+            secret="a" * 64,
+            permissions=frozenset({NodePermission.DASHBOARD_READ}),
+            expires_at=200.0,
+        )
+
+        store.save(ClusterState(pending_pairings=(pending,)))
+
+        with patch("maintenance.cluster.time.time", return_value=100.0):
+            loaded = ClusterStore(path).load()
+
+        self.assertEqual(loaded.pending_pairings, (pending,))
+
+    def test_old_cluster_json_defaults_pending_pairings_to_empty(self) -> None:
+        _store, path = self._store()
+        path.write_text(
+            json.dumps({"schema_version": 1, "local_node_id": "peer"}),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(ClusterStore(path).load().pending_pairings, ())
+
+    def test_expired_pending_pairings_are_pruned_on_load(self) -> None:
+        _store, path = self._store()
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "pending_pairings": [
+                        {
+                            "transaction_id": "expired",
+                            "caller_node_id": "caller",
+                            "identity_fingerprint": "identity",
+                            "transport_fingerprint": "transport",
+                            "secret": "a" * 64,
+                            "permissions": ["dashboard_read"],
+                            "expires_at": 100.0,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("maintenance.cluster.time.time", return_value=100.0):
+            state = ClusterStore(path).load()
+
+        self.assertEqual(state.pending_pairings, ())
+
+    def test_malformed_pending_pairings_are_ignored_individually(self) -> None:
+        _store, path = self._store()
+        valid = {
+            "transaction_id": "valid",
+            "caller_node_id": "caller",
+            "identity_fingerprint": "identity",
+            "transport_fingerprint": "transport",
+            "secret": "a" * 64,
+            "permissions": ["dashboard_read"],
+            "expires_at": 200.0,
+        }
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "pending_pairings": [
+                        {**valid, "secret": "not-a-secret"},
+                        valid,
+                        "not-an-object",
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with patch("maintenance.cluster.time.time", return_value=100.0):
+            state = ClusterStore(path).load()
+
+        self.assertEqual(
+            tuple(item.transaction_id for item in state.pending_pairings), ("valid",)
+        )
+
+    def test_pending_lookup_rejects_expired_record(self) -> None:
+        pending = PendingPairing(
+            "tx-1", "caller", "identity", "transport", "a" * 64, frozenset(), 100.0
+        )
+        state = ClusterState(pending_pairings=(pending,))
+
+        self.assertIsNone(state.pending_pairing("tx-1", now=100.0))
+        self.assertEqual(state.pending_pairings, ())
+
+    def test_save_failure_does_not_change_active_or_pending_state(self) -> None:
+        store, _path = self._store()
+        pending = PendingPairing(
+            "tx-1", "caller", "identity", "transport", "a" * 64, frozenset(), 200.0
+        )
+        grant = PeerGrantRecord("caller", "b" * 64, frozenset())
+        state = ClusterState(peer_grants=(grant,), pending_pairings=(pending,))
+        with (
+            patch.object(
+                store, "_serialize", side_effect=ClusterSaveError("disk full")
+            ),
+            self.assertRaises(ClusterSaveError),
+        ):
+            store.save(state)
+
+        self.assertEqual(state.peer_grants, (grant,))
+        self.assertEqual(state.pending_pairings, (pending,))
 
 
 if __name__ == "__main__":

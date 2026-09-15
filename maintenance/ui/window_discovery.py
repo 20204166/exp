@@ -5,13 +5,14 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import secrets
 import subprocess
 import threading
 import time
 from dataclasses import replace
 from typing import Any, cast
 
-from maintenance.cluster import PeerGrantRecord
+from maintenance.cluster import PeerGrantRecord, PendingPairing
 from maintenance.components import PeerConnectionManager
 from maintenance.components.cluster_storage import (
     ResourceSnapshot,
@@ -39,6 +40,7 @@ from maintenance.remote import (
     build_trusted_transport,
 )
 from maintenance.remote_security import ensure_tls_material, server_context
+from maintenance.remote_support.protocol import PairingControlRequest
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui.window_supports.timer_delivery import deadline_delay_ms
@@ -157,6 +159,10 @@ def start_peer_listener(controller: Any) -> None:
         host="0.0.0.0",
         ssl_context=tls_context,
         pairing_handler=lambda request: handle_pairing_request(controller, request),
+        pair_confirm_handler=lambda request: handle_pairing_confirm(
+            controller, request
+        ),
+        pair_abort_handler=lambda request: handle_pairing_abort(controller, request),
         elevation_handler=lambda request: handle_elevation_request(controller, request),
     )
     try:
@@ -366,51 +372,229 @@ def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, An
     return {"ok": True}
 
 
-def handle_pairing_request(controller: Any, request: PairingRequest) -> bool:
-    """Ask the target's local user before installing a caller grant."""
+PAIRING_PENDING_TTL_SECONDS = 300.0
+
+
+def handle_pairing_request(controller: Any, request: PairingRequest) -> dict[str, Any]:
+    """Ask the target's local user before persisting a pending pairing."""
 
     pairing_lock = controller.__dict__.setdefault("_pairing_lock", threading.Lock())
     if not pairing_lock.acquire(blocking=False):
-        return False
-    result = {"approved": False}
+        return {"approved": False}
+    result: dict[str, Any] = {"approved": False}
     completed = threading.Event()
+    token_lock = threading.Lock()
+    request_active = True
 
     def ask_on_ui() -> None:
-        window = _window_symbols()
-        approved = window.messagebox.askyesno(
-            "Approve peer pairing",
-            (
-                f"Allow {request.caller_node_id.value} to read this system?\n\n"
-                f"Identity fingerprint: {request.identity_fingerprint}\n"
-                f"TLS fingerprint: {request.transport_fingerprint}\n"
-                f"Requested permissions: {', '.join(sorted(p.value for p in request.permissions))}"
-            ),
-            parent=controller.master,
-        )
-        if approved:
-            current = controller._cluster_state
-            grants = tuple(
-                item
-                for item in current.peer_grants
-                if item.caller_node_id != request.caller_node_id.value
-            ) + (
-                PeerGrantRecord(
-                    caller_node_id=request.caller_node_id.value,
-                    secret=request.proposed_secret,
-                    permissions=request.permissions,
+        try:
+            window = _window_symbols()
+            approved = window.messagebox.askyesno(
+                "Approve peer pairing",
+                (
+                    f"Allow {request.caller_node_id.value} to read this system?\n\n"
+                    f"Identity fingerprint: {request.identity_fingerprint}\n"
+                    f"TLS fingerprint: {request.transport_fingerprint}\n"
+                    f"Requested permissions: {', '.join(sorted(p.value for p in request.permissions))}"
                 ),
+                parent=controller.master,
             )
-            result["approved"] = controller._save_cluster_state(
-                replace(current, peer_grants=grants)
-            )
-        completed.set()
+            if not approved:
+                return
+            with token_lock:
+                if not request_active:
+                    return
+                current = controller._cluster_state
+                existing = next(
+                    (
+                        item
+                        for item in current.pending_pairings
+                        if item.expires_at > time.time()
+                        and item.caller_node_id == request.caller_node_id.value
+                        and hmac.compare_digest(
+                            item.identity_fingerprint, request.identity_fingerprint
+                        )
+                        and hmac.compare_digest(
+                            item.transport_fingerprint, request.transport_fingerprint
+                        )
+                        and hmac.compare_digest(item.secret, request.proposed_secret)
+                        and item.permissions == request.permissions
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    pending = existing
+                    result["approved"] = True
+                else:
+                    pending = PendingPairing(
+                        transaction_id=secrets.token_urlsafe(24),
+                        caller_node_id=request.caller_node_id.value,
+                        identity_fingerprint=request.identity_fingerprint,
+                        transport_fingerprint=request.transport_fingerprint,
+                        secret=request.proposed_secret,
+                        permissions=request.permissions,
+                        expires_at=time.time() + PAIRING_PENDING_TTL_SECONDS,
+                    )
+                    result["approved"] = controller._save_cluster_state(
+                        replace(
+                            current,
+                            pending_pairings=current.pending_pairings + (pending,),
+                        )
+                    )
+                if result["approved"]:
+                    result.update(
+                        {
+                            "transaction_id": pending.transaction_id,
+                            "caller_node_id": pending.caller_node_id,
+                            "identity_fingerprint": pending.identity_fingerprint,
+                            "transport_fingerprint": pending.transport_fingerprint,
+                            "secret": pending.secret,
+                            "permissions": sorted(p.value for p in pending.permissions),
+                            "expires_at": pending.expires_at,
+                        }
+                    )
+        finally:
+            completed.set()
 
     try:
         controller._submit_ui(ask_on_ui)
-        completed.wait(60.0)
-        return bool(result["approved"])
+        if not completed.wait(60.0):
+            with token_lock:
+                request_active = False
+        return result
     finally:
         pairing_lock.release()
+
+
+def _pending_matches(pending: PendingPairing, request: PairingControlRequest) -> bool:
+    return (
+        pending.transaction_id == request.transaction_id
+        and pending.caller_node_id == request.caller_node_id.value
+        and hmac.compare_digest(
+            pending.identity_fingerprint, request.identity_fingerprint
+        )
+        and hmac.compare_digest(
+            pending.transport_fingerprint, request.transport_fingerprint
+        )
+        and hmac.compare_digest(pending.secret, request.secret)
+        and pending.permissions == request.permissions
+        and pending.expires_at == request.expires_at
+    )
+
+
+def _active_grant_matches(
+    grant: PeerGrantRecord, pending: PendingPairing, request: PairingControlRequest
+) -> bool:
+    return (
+        grant.caller_node_id == pending.caller_node_id
+        and hmac.compare_digest(grant.secret, pending.secret)
+        and grant.permissions == pending.permissions
+        and grant.expires_at == pending.expires_at
+        and _pending_matches(pending, request)
+    )
+
+
+def _durable_grant_matches(
+    grant: PeerGrantRecord, request: PairingControlRequest
+) -> bool:
+    return (
+        grant.transaction_id == request.transaction_id
+        and grant.caller_node_id == request.caller_node_id.value
+        and hmac.compare_digest(grant.secret, request.secret)
+        and grant.permissions == request.permissions
+        and grant.expires_at == request.expires_at
+    )
+
+
+def handle_pairing_confirm(controller: Any, request: PairingControlRequest) -> bool:
+    """Atomically promote one exact, live pending pairing to an active grant."""
+    transition_lock = controller.__dict__.setdefault(
+        "_pairing_transition_lock", threading.Lock()
+    )
+    with transition_lock:
+        state = controller._cluster_state
+        now = time.time()
+        raw_pending = next(
+            (
+                item
+                for item in state.pending_pairings
+                if item.transaction_id == request.transaction_id
+            ),
+            None,
+        )
+        if raw_pending is not None and now >= raw_pending.expires_at:
+            pending_before_prune = state.pending_pairings
+            state.prune_pending_pairings(now=now)
+            if state.pending_pairings != pending_before_prune:
+                controller._save_cluster_state(state)
+            return False
+        pending = state.pending_pairing(request.transaction_id, now=now)
+        if pending is None:
+            completed = controller.__dict__.get("_completed_pairings", {}).get(
+                request.transaction_id
+            )
+            grant = state.grant(request.caller_node_id.value)
+            return (
+                request.operation == "pair_confirm"
+                and completed is not None
+                and grant is not None
+                and _active_grant_matches(grant, completed, request)
+            ) or (
+                request.operation == "pair_confirm"
+                and grant is not None
+                and _durable_grant_matches(grant, request)
+            )
+        if request.operation != "pair_confirm" or not _pending_matches(
+            pending, request
+        ):
+            return False
+        updated = replace(
+            state,
+            peer_grants=tuple(
+                grant
+                for grant in state.peer_grants
+                if grant.caller_node_id != pending.caller_node_id
+            )
+            + (
+                PeerGrantRecord(
+                    caller_node_id=pending.caller_node_id,
+                    secret=pending.secret,
+                    permissions=pending.permissions,
+                    expires_at=pending.expires_at,
+                    transaction_id=pending.transaction_id,
+                ),
+            ),
+            pending_pairings=tuple(
+                item for item in state.pending_pairings if item != pending
+            ),
+        )
+        saved = controller._save_cluster_state(updated)
+        if saved:
+            controller.__dict__.setdefault("_completed_pairings", {})[
+                pending.transaction_id
+            ] = pending
+        return saved
+
+
+def handle_pairing_abort(controller: Any, request: PairingControlRequest) -> bool:
+    """Remove only one exact pending pairing; never touch active grants."""
+    transition_lock = controller.__dict__.setdefault(
+        "_pairing_transition_lock", threading.Lock()
+    )
+    with transition_lock:
+        state = controller._cluster_state
+        pending = state.pending_pairing(request.transaction_id, now=time.time())
+        if pending is None:
+            return False
+        if request.operation != "pair_abort" or not _pending_matches(pending, request):
+            return False
+        updated = replace(
+            state,
+            pending_pairings=tuple(
+                item for item in state.pending_pairings if item != pending
+            ),
+        )
+        return controller._save_cluster_state(updated)
 
 
 def handle_elevation_request(

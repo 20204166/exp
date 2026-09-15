@@ -529,6 +529,24 @@ class PeerGrantRecord:
     secret: str
     permissions: frozenset[NodePermission]
     expires_at: float | None = None
+    transaction_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PendingPairing:
+    """Target-owned pairing approval awaiting initiator confirmation."""
+
+    transaction_id: str
+    caller_node_id: str
+    identity_fingerprint: str
+    transport_fingerprint: str
+    secret: str
+    permissions: frozenset[NodePermission]
+    expires_at: float
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.expires_at):
+            raise ValueError("pending pairing expiry must be finite")
 
 
 @dataclass(slots=True)
@@ -546,6 +564,7 @@ class ClusterState:
     active_invites: tuple[InviteRecord, ...] = ()
     promotion_epochs: frozenset[int] = frozenset()
     capability_grants: tuple[CapabilityGrant, ...] = ()
+    pending_pairings: tuple[PendingPairing, ...] = ()
 
     @classmethod
     def create_local(cls, *, local_node_id: str | None = None) -> ClusterState:
@@ -614,6 +633,27 @@ class ClusterState:
             if record.node_id == node_id:
                 return record
         return None
+
+    def prune_pending_pairings(self, *, now: float | None = None) -> None:
+        """Remove pending pairings that are no longer valid."""
+        current = time.time() if now is None else now
+        self.pending_pairings = tuple(
+            pairing for pairing in self.pending_pairings if current < pairing.expires_at
+        )
+
+    def pending_pairing(
+        self, transaction_id: str, *, now: float | None = None
+    ) -> PendingPairing | None:
+        """Return a live pending pairing, pruning expired records first."""
+        self.prune_pending_pairings(now=now)
+        return next(
+            (
+                pairing
+                for pairing in self.pending_pairings
+                if pairing.transaction_id == transaction_id
+            ),
+            None,
+        )
 
 
 def trusted_node_record(
@@ -816,7 +856,8 @@ class ClusterStore:
         ]
         if len(set(grant_keys)) != len(grant_keys):
             capability_grants = ()
-        return ClusterState(
+        pending_pairings = self._parse_pending_pairings(data.get("pending_pairings"))
+        state = ClusterState(
             discovery_enabled=discovery,
             trusted_nodes=records,
             local_node_id=local_node_id,
@@ -831,7 +872,10 @@ class ClusterStore:
             active_invites=invites,
             promotion_epochs=promotion_epochs,
             capability_grants=capability_grants,
+            pending_pairings=pending_pairings,
         )
+        state.prune_pending_pairings()
+        return state
 
     @staticmethod
     def _parse_roles(value: Any, local_node_id: str) -> tuple[RoleAssignment, ...]:
@@ -1029,12 +1073,91 @@ class ClusterStore:
         ):
             LOGGER.warning("Ignoring malformed expiry for peer grant %s", caller)
             return None
+        transaction_id = item.get("transaction_id")
+        if transaction_id is not None and (
+            not isinstance(transaction_id, str) or not transaction_id
+        ):
+            LOGGER.warning(
+                "Ignoring malformed transaction id for peer grant %s", caller
+            )
+            return None
         return PeerGrantRecord(
             caller_node_id=caller,
             secret=secret,
             permissions=frozenset(NodePermission(raw) for raw in raw_permissions),
             expires_at=float(raw_expiry) if raw_expiry is not None else None,
+            transaction_id=transaction_id,
         )
+
+    @staticmethod
+    def _parse_pending_pairings(value: Any) -> tuple[PendingPairing, ...]:
+        if not isinstance(value, list):
+            return ()
+        records: list[PendingPairing] = []
+        for item in value:
+            if not isinstance(item, dict):
+                LOGGER.warning("Ignoring malformed pending pairing")
+                continue
+            transaction_id = item.get("transaction_id")
+            caller_node_id = item.get("caller_node_id")
+            identity_fingerprint = item.get("identity_fingerprint")
+            transport_fingerprint = item.get("transport_fingerprint")
+            secret = item.get("secret")
+            permissions = item.get("permissions")
+            expires_at = item.get("expires_at")
+            if (
+                not isinstance(transaction_id, str)
+                or not transaction_id
+                or not isinstance(caller_node_id, str)
+                or not caller_node_id
+                or not isinstance(identity_fingerprint, str)
+                or not identity_fingerprint
+                or not isinstance(transport_fingerprint, str)
+                or not transport_fingerprint
+                or not isinstance(secret, str)
+                or not secret
+            ):
+                LOGGER.warning("Ignoring malformed pending pairing")
+                continue
+            if len(secret) != 64:
+                LOGGER.warning("Ignoring malformed pending pairing secret")
+                continue
+            try:
+                bytes.fromhex(secret)
+            except ValueError:
+                LOGGER.warning("Ignoring non-hex pending pairing secret")
+                continue
+            known_permissions = {permission.value for permission in NodePermission}
+            if not isinstance(permissions, list) or any(
+                not isinstance(permission, str) or permission not in known_permissions
+                for permission in permissions
+            ):
+                LOGGER.warning("Ignoring malformed pending pairing permissions")
+                continue
+            if (
+                not isinstance(expires_at, (int, float))
+                or isinstance(expires_at, bool)
+                or not math.isfinite(float(expires_at))
+            ):
+                LOGGER.warning("Ignoring malformed pending pairing expiry")
+                continue
+            try:
+                records.append(
+                    PendingPairing(
+                        transaction_id,
+                        caller_node_id,
+                        identity_fingerprint,
+                        transport_fingerprint,
+                        secret,
+                        frozenset(
+                            NodePermission(permission) for permission in permissions
+                        ),
+                        float(expires_at),
+                    )
+                )
+            except (TypeError, ValueError):
+                LOGGER.warning("Ignoring malformed pending pairing")
+        return tuple(records)
 
     @staticmethod
     def _parse_capability_grant(item: Any) -> CapabilityGrant | None:
@@ -1157,8 +1280,27 @@ class ClusterStore:
                         if grant.expires_at is not None
                         else {}
                     ),
+                    **(
+                        {"transaction_id": grant.transaction_id}
+                        if grant.transaction_id is not None
+                        else {}
+                    ),
                 }
                 for grant in state.peer_grants
+            ],
+            "pending_pairings": [
+                {
+                    "transaction_id": pairing.transaction_id,
+                    "caller_node_id": pairing.caller_node_id,
+                    "identity_fingerprint": pairing.identity_fingerprint,
+                    "transport_fingerprint": pairing.transport_fingerprint,
+                    "secret": pairing.secret,
+                    "permissions": sorted(
+                        permission.value for permission in pairing.permissions
+                    ),
+                    "expires_at": pairing.expires_at,
+                }
+                for pairing in state.pending_pairings
             ],
         }
         return json.dumps(payload, indent=2, sort_keys=True) + "\n"

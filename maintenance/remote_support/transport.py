@@ -37,6 +37,8 @@ class MemoryRemoteTransport:
         self._service = service
 
     def request(self, envelope_text: str, cancel_event: Any | None = None) -> str:
+        if cancel_event is not None and cancel_event.is_set():
+            raise RemoteExecutionError("cancelled")
         return self._service.handle(envelope_text)
 
 

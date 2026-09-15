@@ -9,6 +9,30 @@
 - **Scope:** discovery, pairing, identity, TLS, trust, authentication, authorization, capabilities, permissions, connection state, node selection, remote reads, remote process actions, cluster membership, invitations, Coordinator/Subcoordinator/Worker roles, coordinator epochs/leases/fencing, worker state, placement, Remove Connection, Revoke, rediscovery/re-pair, persistence, diagnostics, error paths, cancellation, shutdown.
 - **Explicitly out of scope for this pass:** fixing anything found. This document is read-only evidence; a prioritized backlog is proposed in §52 but nothing in the repository was modified to produce this audit.
 
+### Post-audit implementation update (2026-09-16)
+
+The pairing flow has since been extended with an additive two-phase handshake:
+the target stores an expiring `PendingPairing`, the initiator saves local trust
+before sending `pair_confirm`, and the target promotes the pending record only
+after exact transaction binding validation. `pair_abort`, expiry pruning,
+serialized target transitions, durable confirm replay, mixed-version rejection,
+local rollback, and cancellation tests are now implemented in
+`maintenance/cluster.py`, `maintenance/remote.py`,
+`maintenance/remote_support/`, `maintenance/ui/window_discovery.py`, and
+`maintenance/ui/window_node_actions.py`.
+
+The remaining distributed-systems limitation is explicit: a target may commit
+`pair_confirm` and lose the response before the initiator receives it. The
+initiator can then observe an ambiguous result; `pair_abort` intentionally does
+not remove an already-active grant. A full crash-safe outcome would require a
+durable initiator recovery record plus authenticated target reconciliation/status
+and a shared serialization boundary for all cluster-state writers. Until that
+follow-up exists, pairing is **VERIFIED CURRENT**, not crash-safe
+**VERIFIED COMPLETE**, for lost-response and power-loss scenarios.
+
+This update also supersedes the older pairing statements below that describe
+the pre-transaction synchronous flow or immediate target grant persistence.
+
 ---
 
 ## 2. Executive truth summary

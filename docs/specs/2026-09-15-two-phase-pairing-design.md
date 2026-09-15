@@ -19,11 +19,12 @@ seams remain supported.
 The default network handshake becomes a two-phase transaction:
 
 1. The initiator sends `pair_request` with its identity and transport
-   fingerprints, proposed secret, read-only permissions, transaction ID, and a
-   fixed expiry timestamp.
-2. The target asks its local user for approval. Approval persists an expiring
-   `PendingPairing`, not an active `PeerGrantRecord`, and returns approval with
-   the transaction ID.
+   fingerprints, proposed secret, read-only permissions, and the transactional
+   pairing mode marker.
+2. The target asks its local user for approval. Approval generates a fresh
+   target-issued transaction ID, persists an expiring `PendingPairing`, not an
+   active `PeerGrantRecord`, and returns approval with the complete transaction
+   binding and fixed expiry timestamp.
 3. The initiator persists its local trusted-node state. Only after that save
    succeeds does it send `pair_confirm`.
 4. The target verifies the transaction ID, caller identity, proposed secret,
@@ -51,12 +52,13 @@ of this release.
 
 ## Compatibility
 
-The protocol version remains `1` because the new operations and optional
-request metadata are additive. The target requires transaction metadata for
-network pairing and denies legacy untracked pairing rather than installing an
-active grant. Existing authenticated operation envelopes and active grants are
-unchanged. One-argument injected provisioners remain available for local tests
-and non-network callers, but the production default uses the transaction flow.
+The protocol version remains `1` because the new operations and transactional
+pairing mode marker are additive to the raw TLS-protected pairing control
+surface. The target requires the marker for network pairing and denies legacy
+untracked pairing rather than installing an active grant. Existing
+authenticated operation envelopes and active grants are unchanged. One-
+argument injected provisioners remain available for local tests and non-network
+callers, but the production default uses the transaction flow.
 
 ## Failure Handling
 

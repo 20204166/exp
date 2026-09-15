@@ -29,6 +29,7 @@ import secrets
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from maintenance.cluster import (
@@ -64,6 +65,7 @@ from maintenance.remote_support.protocol import (
     MAX_ENVELOPE_BYTES,
     OP_REQUIRED_CAPABILITY,
     OP_REQUIRED_PERMISSION,
+    PAIRING_MODE_TRANSACTIONAL,
     READ_CAPABILITIES,
     REMOTE_PROTOCOL_VERSION,
     ROLE_OPERATIONS,
@@ -99,6 +101,21 @@ from maintenance.remote_support.transport import (
 
 LOGGER = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True, slots=True)
+class PairingTransaction:
+    """Target approval binding retained until local trust is confirmed."""
+
+    transaction_id: str
+    caller_node_id: str
+    identity_fingerprint: str
+    transport_fingerprint: str
+    secret: str
+    permissions: frozenset[NodePermission]
+    expires_at: float
+    transport: Any
+
+
 __all__ = [
     "DEFAULT_FRESHNESS_SECONDS",
     "DEFAULT_MAX_ACTIVE_HANDLERS",
@@ -107,6 +124,7 @@ __all__ = [
     "MAX_ENVELOPE_BYTES",
     "OP_REQUIRED_CAPABILITY",
     "OP_REQUIRED_PERMISSION",
+    "PAIRING_MODE_TRANSACTIONAL",
     "READ_CAPABILITIES",
     "REMOTE_PROTOCOL_VERSION",
     "ROLE_OPERATIONS",
@@ -114,6 +132,7 @@ __all__ = [
     "CapabilityElevationRequest",
     "MemoryRemoteTransport",
     "PairingRequest",
+    "PairingTransaction",
     "PeerGrant",
     "RemoteAuthError",
     "RemoteAuthorizationError",
@@ -552,12 +571,17 @@ class AuthenticatedNodeProvider:
         transport_fingerprint: str,
         proposed_secret: str,
         permissions: frozenset[NodePermission],
-    ) -> bool:
-        """Ask the target to approve and persist a target-owned grant."""
+        cancel_event: Any | None = None,
+    ) -> bool | dict[str, Any]:
+        """Ask the target to approve and persist a pending pairing."""
+
+        if cancel_event is not None and cancel_event.is_set():
+            return False
 
         envelope = json.dumps(
             {
                 "op": "pair_request",
+                "pairing_mode": PAIRING_MODE_TRANSACTIONAL,
                 "caller_node_id": caller_node_id.value,
                 "identity_fingerprint": identity_fingerprint,
                 "transport_fingerprint": transport_fingerprint,
@@ -565,8 +589,80 @@ class AuthenticatedNodeProvider:
                 "permissions": sorted(permission.value for permission in permissions),
             }
         )
-        response = json.loads(transport.request(envelope))
+        request = transport.request
+        try:
+            inspect.signature(request).bind(envelope, cancel_event)
+        except (TypeError, ValueError):
+            response_text = request(envelope)
+        else:
+            response_text = request(envelope, cancel_event)
+        if cancel_event is not None and cancel_event.is_set():
+            return False
+        response = json.loads(response_text)
+        if not isinstance(response, dict) or response.get("approved") is not True:
+            return False
+        transaction_id = response.get("transaction_id")
+        if not isinstance(transaction_id, str) or not transaction_id:
+            return False
+        return response
+
+    @staticmethod
+    def pairing_control(
+        *,
+        transport: Any,
+        operation: str,
+        transaction: PairingTransaction,
+        cancel_event: Any | None = None,
+    ) -> bool:
+        if operation not in {"pair_confirm", "pair_abort"}:
+            raise ValueError("invalid pairing control operation")
+        if cancel_event is not None and cancel_event.is_set():
+            return False
+        envelope = json.dumps(
+            {
+                "op": operation,
+                "transaction_id": transaction.transaction_id,
+                "caller_node_id": transaction.caller_node_id,
+                "identity_fingerprint": transaction.identity_fingerprint,
+                "transport_fingerprint": transaction.transport_fingerprint,
+                "secret": transaction.secret,
+                "permissions": sorted(
+                    permission.value for permission in transaction.permissions
+                ),
+                "expires_at": transaction.expires_at,
+            }
+        )
+        request = transport.request
+        try:
+            inspect.signature(request).bind(envelope, cancel_event)
+        except (TypeError, ValueError):
+            response_text = request(envelope)
+        else:
+            response_text = request(envelope, cancel_event)
+        response = json.loads(response_text)
         return isinstance(response, dict) and response.get("approved") is True
+
+    @staticmethod
+    def confirm_pairing(
+        transaction: PairingTransaction, cancel_event: Any | None = None
+    ) -> bool:
+        return AuthenticatedNodeProvider.pairing_control(
+            transport=transaction.transport,
+            operation="pair_confirm",
+            transaction=transaction,
+            cancel_event=cancel_event,
+        )
+
+    @staticmethod
+    def abort_pairing(
+        transaction: PairingTransaction, cancel_event: Any | None = None
+    ) -> bool:
+        return AuthenticatedNodeProvider.pairing_control(
+            transport=transaction.transport,
+            operation="pair_abort",
+            transaction=transaction,
+            cancel_event=cancel_event,
+        )
 
     @staticmethod
     def request_elevation(

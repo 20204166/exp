@@ -11,6 +11,7 @@ import logging
 import socketserver
 import ssl
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -18,10 +19,13 @@ from maintenance.nodes import NodeId, NodePermission
 from maintenance.remote_support.protocol import (
     DEFAULT_MAX_ACTIVE_HANDLERS,
     MAX_ENVELOPE_BYTES,
+    PAIRING_MODE_TRANSACTIONAL,
     CapabilityElevationRequest,
+    PairingControlRequest,
     PairingRequest,
     PeerGrant,
     RemoteProtocolError,
+    validate_pairing_control_request,
 )
 from maintenance.remote_support.transport import _recv_frame, _send_frame
 
@@ -45,7 +49,10 @@ class RemoteSocketServer:
         timeout: float = 10.0,
         max_active_handlers: int = DEFAULT_MAX_ACTIVE_HANDLERS,
         ssl_context: ssl.SSLContext | None = None,
-        pairing_handler: Callable[[PairingRequest], bool] | None = None,
+        pairing_handler: Callable[[PairingRequest], Any] | None = None,
+        pair_confirm_handler: Callable[[PairingControlRequest], bool] | None = None,
+        pair_abort_handler: Callable[[PairingControlRequest], bool] | None = None,
+        clock: Callable[[], float] = time.time,
         elevation_handler: Callable[[CapabilityElevationRequest], bool] | None = None,
     ) -> None:
         if max_active_handlers < 1:
@@ -57,6 +64,9 @@ class RemoteSocketServer:
         self._max_active_handlers = max_active_handlers
         self._ssl_context = ssl_context
         self._pairing_handler = pairing_handler
+        self._pair_confirm_handler = pair_confirm_handler
+        self._pair_abort_handler = pair_abort_handler
+        self._clock = clock
         self._elevation_handler = elevation_handler
         self._server: Any = None
         self._thread: Any = None
@@ -100,6 +110,19 @@ class RemoteSocketServer:
                                 response = _handle_pairing_request(raw, pairing_handler)
                             elif (
                                 isinstance(raw, dict)
+                                and raw.get("op") == "pair_confirm"
+                            ):
+                                response = _handle_pair_confirm(
+                                    raw, pair_confirm_handler, clock=clock
+                                )
+                            elif (
+                                isinstance(raw, dict) and raw.get("op") == "pair_abort"
+                            ):
+                                response = _handle_pair_abort(
+                                    raw, pair_abort_handler, clock=clock
+                                )
+                            elif (
+                                isinstance(raw, dict)
                                 and raw.get("op") == "elevation_request"
                             ):
                                 response = _handle_elevation_request(
@@ -125,6 +148,9 @@ class RemoteSocketServer:
         service_timeout = self._timeout
         ssl_context = self._ssl_context
         pairing_handler = self._pairing_handler
+        pair_confirm_handler = self._pair_confirm_handler
+        pair_abort_handler = self._pair_abort_handler
+        clock = self._clock
         elevation_handler = self._elevation_handler
 
         class _Server(socketserver.ThreadingTCPServer):
@@ -184,16 +210,22 @@ class RemoteSocketServer:
 
 
 def _handle_pairing_request(
-    raw: dict[str, Any], handler: Callable[[PairingRequest], bool] | None
+    raw: dict[str, Any], handler: Callable[[PairingRequest], Any] | None
 ) -> str:
-    if handler is None or set(raw) != {
-        "op",
-        "caller_node_id",
-        "identity_fingerprint",
-        "transport_fingerprint",
-        "secret",
-        "permissions",
-    }:
+    if (
+        handler is None
+        or set(raw)
+        != {
+            "op",
+            "pairing_mode",
+            "caller_node_id",
+            "identity_fingerprint",
+            "transport_fingerprint",
+            "secret",
+            "permissions",
+        }
+        or raw.get("pairing_mode") != PAIRING_MODE_TRANSACTIONAL
+    ):
         return json.dumps({"approved": False, "error": "pairing_unavailable"})
     permissions = raw["permissions"]
     if not isinstance(permissions, list) or any(
@@ -208,12 +240,13 @@ def _handle_pairing_request(
             proposed_secret=raw["secret"],
             permissions=frozenset(NodePermission(item) for item in permissions),
         )
-        approved = handler(request)
+        result = handler(request)
     except (KeyError, TypeError, ValueError, RemoteProtocolError):
-        approved = False
-    return json.dumps(
-        {"approved": bool(approved), "error": None if approved else "denied"}
-    )
+        return json.dumps({"approved": False, "error": "denied"})
+    if isinstance(result, dict):
+        return json.dumps(result)
+    approved = bool(result)
+    return json.dumps({"approved": approved, "error": None if approved else "denied"})
 
 
 def _handle_elevation_request(
@@ -250,3 +283,39 @@ def _handle_elevation_request(
     return json.dumps(
         {"approved": bool(approved), "error": None if approved else "denied"}
     )
+
+
+def _handle_pairing_control(
+    raw: dict[str, Any],
+    handler: Callable[[PairingControlRequest], bool] | None,
+    *,
+    clock: Callable[[], float] = time.time,
+) -> str:
+    if handler is None:
+        return json.dumps({"approved": False, "error": "pairing_unavailable"})
+    try:
+        request = validate_pairing_control_request(raw, clock=clock)
+        approved = handler(request)
+    except (KeyError, TypeError, ValueError, RemoteProtocolError):
+        approved = False
+    return json.dumps(
+        {"approved": bool(approved), "error": None if approved else "denied"}
+    )
+
+
+def _handle_pair_confirm(
+    raw: dict[str, Any],
+    handler: Callable[[PairingControlRequest], bool] | None,
+    *,
+    clock: Callable[[], float] = time.time,
+) -> str:
+    return _handle_pairing_control(raw, handler, clock=clock)
+
+
+def _handle_pair_abort(
+    raw: dict[str, Any],
+    handler: Callable[[PairingControlRequest], bool] | None,
+    *,
+    clock: Callable[[], float] = time.time,
+) -> str:
+    return _handle_pairing_control(raw, handler, clock=clock)

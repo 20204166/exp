@@ -591,6 +591,7 @@ class AppWindow:
                 transport_fingerprint=spec.transport_fingerprint,
             ),
             on_pair=self._pair_discovered_node,
+            on_cancel=self._cancel_pairing,
         )
         self._own_dialog("_pairing_dialog", dialog)
 
@@ -696,18 +697,25 @@ class AppWindow:
         ui_node_actions.apply_discovery_enabled(self, enabled)
 
     def _pair_discovered_node(self, node_id: str) -> None:
-        self.__dict__.setdefault("_activation_generations", {})[NodeId(node_id)] = (
-            self.__dict__.setdefault("_activation_generations", {}).get(
-                NodeId(node_id), 0
+        dialog = self.__dict__.get("_pairing_dialog")
+        if dialog is None:
+            ui_node_actions.pair_discovered_node(
+                self,
+                node_id,
+                messagebox_module=messagebox,
+                provision_target_grant=getattr(self, "_provision_target_grant", None),
             )
-            + 1
-        )
-        ui_node_actions.pair_discovered_node(
+            return
+        ui_node_actions.pair_discovered_node_async(
             self,
             node_id,
             messagebox_module=messagebox,
             provision_target_grant=getattr(self, "_provision_target_grant", None),
+            dialog=dialog,
         )
+
+    def _cancel_pairing(self, node_id: str) -> None:
+        ui_node_actions.cancel_pairing(self, node_id)
 
     def _reject_discovered_node(self, node_id: str) -> None:
         ui_node_actions.reject_discovered_node(self, node_id)

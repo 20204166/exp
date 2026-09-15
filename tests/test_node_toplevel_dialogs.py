@@ -263,20 +263,70 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
 
         self.assertEqual(calls, ["node-1"])
 
-    def test_pairing_dialog_closes_after_callback(self) -> None:
-        events: list[str] = []
+    def test_pairing_dialog_stays_open_until_completion(self) -> None:
         dialog = PairingDialog(
             RecordingWidget(),
             spec=PairingDialogSpec(node_id="node-1"),
-            on_pair=lambda _node_id: events.append(
-                f"callback:{dialog.window.destroy_calls}"
-            ),
+            on_pair=lambda _node_id: None,
             **_dialog_widgets(),
         )
 
         dialog.confirm()
 
-        self.assertEqual(events, ["callback:0"])
+        self.assertEqual(dialog.window.destroy_calls, 0)
+        dialog.complete()
+        self.assertEqual(dialog.window.destroy_calls, 1)
+
+    def test_pairing_dialog_renders_pending_and_failure_state(self) -> None:
+        recorder = WidgetRecorder()
+        dialog = PairingDialog(
+            recorder.parent(),
+            spec=PairingDialogSpec(node_id="node-1"),
+            on_pair=lambda _node_id: None,
+            **_dialog_widgets(),
+        )
+
+        dialog.set_pending()
+        self.assertEqual(
+            dialog._status_label.config_options["text"],
+            "Waiting for target approval...",
+        )
+        dialog.show_error("Target did not provision the peer grant")
+        self.assertEqual(
+            dialog._status_label.config_options["text"],
+            "Target did not provision the peer grant",
+        )
+        self.assertEqual(dialog.window.destroy_calls, 0)
+
+    def test_pairing_dialog_does_not_close_or_reenable_while_pending(self) -> None:
+        dialog = PairingDialog(
+            RecordingWidget(),
+            spec=PairingDialogSpec(node_id="node-1"),
+            on_pair=lambda _node_id: None,
+            **_dialog_widgets(),
+        )
+
+        dialog.set_pending()
+        dialog.confirm()
+
+        self.assertEqual(dialog.window.destroy_calls, 0)
+        self.assertEqual(dialog._pair_button.config_options["state"], "disabled")
+
+    def test_pairing_dialog_close_during_pending_approval_cancels_once(self) -> None:
+        cancellations: list[str] = []
+        dialog = PairingDialog(
+            RecordingWidget(),
+            spec=PairingDialogSpec(node_id="node-1"),
+            on_pair=lambda _node_id: None,
+            on_cancel=cancellations.append,
+            **_dialog_widgets(),
+        )
+
+        dialog.set_pending()
+        dialog.close()
+        dialog.close()
+
+        self.assertEqual(cancellations, ["node-1"])
         self.assertEqual(dialog.window.destroy_calls, 1)
 
     def test_pairing_dialog_renders_identity_and_tls_fingerprints(self) -> None:

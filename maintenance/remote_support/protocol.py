@@ -27,6 +27,7 @@ from maintenance.nodes import (
 )
 
 REMOTE_PROTOCOL_VERSION = "1"
+PAIRING_MODE_TRANSACTIONAL = "transactional"
 MAX_ENVELOPE_BYTES = 8 * 1024 * 1024
 DEFAULT_FRESHNESS_SECONDS = 60.0
 DEFAULT_REPLAY_TTL_SECONDS = 300.0
@@ -189,6 +190,20 @@ class PairingRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class PairingControlRequest:
+    """Exact binding presented when completing or cancelling a pairing."""
+
+    operation: str
+    transaction_id: str
+    caller_node_id: NodeId
+    identity_fingerprint: str
+    transport_fingerprint: str
+    secret: str
+    permissions: frozenset[NodePermission]
+    expires_at: float
+
+
+@dataclass(frozen=True, slots=True)
 class CapabilityElevationRequest:
     """Authenticated peer request for target-side permission elevation."""
 
@@ -217,6 +232,69 @@ def _validate_secret(secret: str) -> None:
         bytes.fromhex(secret)
     except ValueError as error:
         raise ValueError("peer credentials must be hexadecimal") from error
+
+
+def validate_pairing_control_request(
+    raw: Any, *, clock: Callable[[], float] = time.time
+) -> PairingControlRequest:
+    """Validate the complete binding for an additive pairing control."""
+
+    if not isinstance(raw, dict) or raw.get("op") not in {"pair_confirm", "pair_abort"}:
+        raise RemoteProtocolError("pairing control operation is invalid")
+    expected_fields = {
+        "op",
+        "transaction_id",
+        "caller_node_id",
+        "identity_fingerprint",
+        "transport_fingerprint",
+        "secret",
+        "permissions",
+        "expires_at",
+    }
+    if set(raw) != expected_fields:
+        raise RemoteProtocolError("pairing control fields are invalid")
+    for field in (
+        "transaction_id",
+        "identity_fingerprint",
+        "transport_fingerprint",
+    ):
+        if not isinstance(raw[field], str) or not raw[field]:
+            raise RemoteProtocolError(f"pairing control {field} is invalid")
+    if not isinstance(raw["caller_node_id"], str) or not raw["caller_node_id"]:
+        raise RemoteProtocolError("pairing control caller identity is invalid")
+    try:
+        _validate_secret(raw["secret"])
+    except (TypeError, ValueError) as error:
+        raise RemoteProtocolError("pairing control secret is invalid") from error
+    permissions = raw["permissions"]
+    if not isinstance(permissions, list) or any(
+        not isinstance(item, str) for item in permissions
+    ):
+        raise RemoteProtocolError("pairing control permissions are invalid")
+    try:
+        parsed_permissions = frozenset(NodePermission(item) for item in permissions)
+    except ValueError as error:
+        raise RemoteProtocolError("pairing control permissions are invalid") from error
+    if not parsed_permissions <= frozenset(READ_PERMISSIONS):
+        raise RemoteAuthorizationError("pairing control is read-only")
+    expires_at = raw["expires_at"]
+    if (
+        not isinstance(expires_at, (int, float))
+        or isinstance(expires_at, bool)
+        or not math.isfinite(float(expires_at))
+        or float(expires_at) <= clock()
+    ):
+        raise RemoteProtocolError("pairing control expiry is invalid")
+    return PairingControlRequest(
+        operation=raw["op"],
+        transaction_id=raw["transaction_id"],
+        caller_node_id=NodeId(raw["caller_node_id"]),
+        identity_fingerprint=raw["identity_fingerprint"],
+        transport_fingerprint=raw["transport_fingerprint"],
+        secret=raw["secret"],
+        permissions=parsed_permissions,
+        expires_at=float(expires_at),
+    )
 
 
 @dataclass(frozen=True, slots=True)
