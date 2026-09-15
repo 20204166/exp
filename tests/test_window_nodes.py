@@ -1204,6 +1204,176 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         with self.assertRaises(RemoteAuthError):
             ui_window_discovery.handle_role_request(window, request)
 
+    def test_consume_invite_admits_caller_as_worker_and_returns_full_fence(
+        self,
+    ) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        invite = state.create_invite(target_node_id="peer-a")
+        window._cluster_state = state
+
+        def save_state(saved: ClusterState) -> bool:
+            window._cluster_state = saved
+            return True
+
+        window._save_cluster_state = Mock(side_effect=save_state)
+        request = _role_request(
+            "consume_invite",
+            NodeId("peer-a"),
+            {
+                "token": invite.token,
+                "cluster_id": invite.cluster_id,
+                "epoch": invite.epoch,
+                "fencing_token": invite.fencing_token,
+            },
+        )
+
+        result = ui_window_discovery.handle_role_request(window, request)
+
+        assert state.coordinator_epoch is not None
+        self.assertEqual(
+            result,
+            {
+                "target_node_id": "peer-a",
+                "expires_at": invite.expires_at,
+                "cluster_id": state.cluster_id,
+                "coordinator_id": "local",
+                "epoch": state.coordinator_epoch.epoch,
+                "fencing_token": state.coordinator_epoch.fencing_token,
+            },
+        )
+        joined = next(
+            item
+            for item in window._cluster_state.role_assignments
+            if item.node_id == NodeId("peer-a")
+        )
+        self.assertEqual(joined.roles, frozenset({ClusterRole.WORKER}))
+        self.assertFalse(joined.revoked)
+
+    def test_consume_invite_is_idempotent_for_an_already_admitted_member(
+        self,
+    ) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        state.role_assignments = state.role_assignments + (
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")),
+        )
+        invite = state.create_invite(target_node_id="peer-a")
+        window._cluster_state = state
+        window._save_cluster_state = Mock(return_value=True)
+        request = _role_request(
+            "consume_invite",
+            NodeId("peer-a"),
+            {
+                "token": invite.token,
+                "cluster_id": invite.cluster_id,
+                "epoch": invite.epoch,
+                "fencing_token": invite.fencing_token,
+            },
+        )
+
+        result = ui_window_discovery.handle_role_request(window, request)
+
+        self.assertEqual(result["target_node_id"], "peer-a")
+
+    def test_consume_invite_re_admits_a_role_revoked_member(self) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        state.role_assignments = state.role_assignments + (
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a"), revoked=True
+            ),
+        )
+        invite = state.create_invite(target_node_id="peer-a")
+        window._cluster_state = state
+
+        def save_state(saved: ClusterState) -> bool:
+            window._cluster_state = saved
+            return True
+
+        window._save_cluster_state = Mock(side_effect=save_state)
+        request = _role_request(
+            "consume_invite",
+            NodeId("peer-a"),
+            {
+                "token": invite.token,
+                "cluster_id": invite.cluster_id,
+                "epoch": invite.epoch,
+                "fencing_token": invite.fencing_token,
+            },
+        )
+
+        ui_window_discovery.handle_role_request(window, request)
+
+        joined = next(
+            item
+            for item in window._cluster_state.role_assignments
+            if item.node_id == NodeId("peer-a")
+        )
+        self.assertFalse(joined.revoked)
+
+    def test_consume_invite_rejects_when_local_node_lost_coordinator_role(
+        self,
+    ) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        invite = state.create_invite(target_node_id="peer-a")
+        state.role_assignments = (
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("local")),
+        )
+        window._cluster_state = state
+        window._save_cluster_state = Mock(return_value=True)
+        request = _role_request(
+            "consume_invite",
+            NodeId("peer-a"),
+            {
+                "token": invite.token,
+                "cluster_id": invite.cluster_id,
+                "epoch": invite.epoch,
+                "fencing_token": invite.fencing_token,
+            },
+        )
+
+        with self.assertRaises(RemoteAuthError):
+            ui_window_discovery.handle_role_request(window, request)
+        self.assertFalse(
+            any(
+                item.node_id == NodeId("peer-a")
+                for item in window._cluster_state.role_assignments
+            )
+        )
+        window._save_cluster_state.assert_not_called()
+
+    def test_consume_invite_save_failure_leaves_invite_and_roles_unchanged(
+        self,
+    ) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        invite = state.create_invite(target_node_id="peer-a")
+        window._cluster_state = state
+        window._save_cluster_state = Mock(return_value=False)
+        request = _role_request(
+            "consume_invite",
+            NodeId("peer-a"),
+            {
+                "token": invite.token,
+                "cluster_id": invite.cluster_id,
+                "epoch": invite.epoch,
+                "fencing_token": invite.fencing_token,
+            },
+        )
+
+        with self.assertRaises(RemoteAuthError):
+            ui_window_discovery.handle_role_request(window, request)
+
+        self.assertEqual(len(window._cluster_state.active_invites), 1)
+        self.assertFalse(
+            any(
+                item.node_id == NodeId("peer-a")
+                for item in window._cluster_state.role_assignments
+            )
+        )
+
     def test_remove_connection_on_manual_host_is_allowed(self) -> None:
         window = _make_window(
             _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer"),

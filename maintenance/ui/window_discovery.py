@@ -192,18 +192,39 @@ def handle_role_request(controller: Any, request: RemoteRequest) -> dict[str, An
         )
         if invite is None:
             raise RemoteAuthError("pairing invite is unknown or expired")
-        if (
-            invite.target_node_id
-            and invite.target_node_id != (request.caller_node_id or NodeId("")).value
-        ):
+        caller_id = request.caller_node_id or NodeId("")
+        if invite.target_node_id and invite.target_node_id != caller_id.value:
             raise RemoteAuthError("pairing invite is bound to another node")
+        if ClusterRole.COORDINATOR not in state.local_assignment.roles:
+            raise RemoteAuthError("this node is no longer the cluster coordinator")
         invite = state.consume_invite(request.params["token"], now=time.time())
-        if not controller._save_cluster_state(state):
+        role_state = RoleState(
+            state.role_assignments,
+            state.coordinator_epoch,
+            capability_grants=state.capability_grants,
+        ).clear_revocation(caller_id)
+        role_state, _change = role_state.assign(
+            actor=state.local_assignment,
+            target=caller_id,
+            roles=frozenset({ClusterRole.WORKER}),
+            now=time.time(),
+        )
+        updated = replace(
+            state,
+            role_assignments=role_state.assignments,
+            capability_grants=role_state.capability_grants,
+        )
+        if not controller._save_cluster_state(updated):
             state.active_invites = (*state.active_invites, invite)
             raise RemoteAuthError("pairing invite could not be consumed")
+        assert updated.coordinator_epoch is not None
         return {
             "target_node_id": invite.target_node_id,
             "expires_at": invite.expires_at,
+            "cluster_id": updated.cluster_id,
+            "coordinator_id": updated.coordinator_epoch.coordinator_id.value,
+            "epoch": updated.coordinator_epoch.epoch,
+            "fencing_token": updated.coordinator_epoch.fencing_token,
         }
     if request.op == "renew_coordinator_lease":
         manager = controller.__dict__.get("_peer_connection_manager")
