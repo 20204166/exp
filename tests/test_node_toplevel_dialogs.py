@@ -128,6 +128,39 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
 
         self.assertEqual(calls, [("Peer", "peer.local", 8123)])
 
+    def test_connection_dialog_allows_port_zero_and_closes_after_callback(self) -> None:
+        events: list[str] = []
+        dialog = ConnectionDialog(
+            RecordingWidget(),
+            on_add=lambda _name, _host, _port: events.append(
+                f"callback:{dialog.window.destroy_calls}"
+            ),
+            var_factory=recorder_var,
+            **_dialog_widgets(include_entry=True),
+        )
+        dialog.name_var.set("Peer")
+        dialog.host_var.set("peer.local")
+        dialog.port_var.set("0")
+
+        dialog.submit()
+
+        self.assertEqual(events, ["callback:0"])
+        self.assertEqual(dialog.window.destroy_calls, 1)
+
+    def test_connection_dialog_keeps_open_after_local_validation_failure(self) -> None:
+        dialog = ConnectionDialog(
+            RecordingWidget(),
+            on_add=lambda *_args: None,
+            var_factory=recorder_var,
+            **_dialog_widgets(include_entry=True),
+        )
+        dialog.host_var.set("peer.local")
+        dialog.port_var.set("-1")
+
+        dialog.submit()
+
+        self.assertEqual(dialog.window.destroy_calls, 0)
+
     def test_connection_dialog_creates_entries_and_rejects_invalid_port(self) -> None:
         recorder = WidgetRecorder()
         calls: list[tuple[str, str, int | None]] = []
@@ -229,6 +262,22 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
         dialog.confirm()
 
         self.assertEqual(calls, ["node-1"])
+
+    def test_pairing_dialog_closes_after_callback(self) -> None:
+        events: list[str] = []
+        dialog = PairingDialog(
+            RecordingWidget(),
+            spec=PairingDialogSpec(node_id="node-1"),
+            on_pair=lambda _node_id: events.append(
+                f"callback:{dialog.window.destroy_calls}"
+            ),
+            **_dialog_widgets(),
+        )
+
+        dialog.confirm()
+
+        self.assertEqual(events, ["callback:0"])
+        self.assertEqual(dialog.window.destroy_calls, 1)
 
     def test_pairing_dialog_renders_identity_and_tls_fingerprints(self) -> None:
         recorder = WidgetRecorder()
@@ -483,6 +532,21 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
         dialog.confirm()
 
         self.assertEqual(calls, ["share", "stop"])
+
+    def test_sharing_dialog_closes_after_callback(self) -> None:
+        events: list[str] = []
+        dialog = SharingDialog(
+            RecordingWidget(),
+            active=False,
+            on_share=lambda: events.append(f"callback:{dialog.window.destroy_calls}"),
+            on_stop=lambda: None,
+            **_dialog_widgets(),
+        )
+
+        dialog.confirm()
+
+        self.assertEqual(events, ["callback:0"])
+        self.assertEqual(dialog.window.destroy_calls, 1)
 
     def test_sharing_dialog_close_does_not_dispatch_callbacks(self) -> None:
         calls: list[str] = []

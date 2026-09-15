@@ -1,11 +1,13 @@
 import unittest
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
 
 from maintenance.models import CapabilityState
 from maintenance.preferences import AppPreferences
-from maintenance.ui.window_supports import card_policy, snapshot_state
+from maintenance.ui import nodes_connections
+from maintenance.ui.window_supports import card_policy, node_specs, snapshot_state
 from maintenance.ui.window_supports.timer_delivery import (
     TimerDelivery,
     deadline_delay_ms,
@@ -15,6 +17,27 @@ from tests.support.scheduling import FailingCancelMaster, TimerMaster
 
 
 class SnapshotStateTests(unittest.TestCase):
+    def test_discovered_peer_projection_preserves_transport_fingerprint(self) -> None:
+        candidate = SimpleNamespace(
+            stable_id="peer-a",
+            hostname="peer-a.local",
+            app_version="1.0",
+            compatible=True,
+            connectable=True,
+            port=8123,
+            identity_fingerprint="identity:aa",
+            transport_fingerprint="tls:bb",
+        )
+        registry = SimpleNamespace(
+            discovered_candidates=lambda: (candidate,),
+            pairing_state=lambda _node_id: SimpleNamespace(value="discovered"),
+        )
+
+        specs = node_specs.discovered_peer_specs(registry)
+
+        self.assertIsInstance(specs[0], nodes_connections.DiscoveredPeerSpec)
+        self.assertEqual(specs[0].transport_fingerprint, "tls:bb")
+
     def test_merge_snapshot_keeps_previous_failed_resource_until_limit(self) -> None:
         previous = make_snapshot(make_summary("cpu", "CPU", value="25%"))
         failed = make_summary("cpu", "CPU", value="Unavailable", failed=True)

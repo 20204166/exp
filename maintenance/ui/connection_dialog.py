@@ -89,13 +89,14 @@ class ConnectionDialog:
             except ValueError:
                 self._set_status("Port must be a number.")
                 return
-            if not 1 <= port <= 65535:
-                self._set_status("Port must be between 1 and 65535.")
+            if not 0 <= port <= 65535:
+                self._set_status("Port must be between 0 and 65535.")
                 return
         else:
             port = None
         self._set_status("")
         self._on_add(name, host, port)
+        self.close()
 
     def status_text(self) -> str:
         return self._status_text

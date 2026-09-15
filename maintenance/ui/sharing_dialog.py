@@ -84,6 +84,7 @@ class SharingDialog:
             self._on_stop()
         else:
             self._on_share()
+        self.close()
 
     def close(self) -> None:
         if not self._closed:

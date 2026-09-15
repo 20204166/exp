@@ -23,6 +23,7 @@ def discovered_peer_specs(registry: Any) -> list[ui_nodes.DiscoveredPeerSpec]:
             connectable=candidate.connectable,
             port=candidate.port,
             identity_fingerprint=candidate.identity_fingerprint,
+            transport_fingerprint=candidate.transport_fingerprint,
             pairing_state=registry.pairing_state(NodeId(candidate.stable_id)).value,
         )
         for candidate in registry.discovered_candidates()

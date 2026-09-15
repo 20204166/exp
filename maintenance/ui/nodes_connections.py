@@ -76,6 +76,7 @@ class DiscoveredPeerSpec:
     connectable: bool
     port: int | None
     identity_fingerprint: str | None = None
+    transport_fingerprint: str | None = None
     pairing_state: str = "discovered"
 
 

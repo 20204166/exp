@@ -77,6 +77,7 @@ class PairingDialog:
 
     def confirm(self) -> None:
         self._on_pair(self.spec.node_id)
+        self.close()
 
     def close(self) -> None:
         if not self._closed:

@@ -588,6 +588,7 @@ class AppWindow:
                 node_id=spec.node_id,
                 display_name=spec.hostname,
                 identity_fingerprint=spec.identity_fingerprint,
+                transport_fingerprint=spec.transport_fingerprint,
             ),
             on_pair=self._pair_discovered_node,
         )
