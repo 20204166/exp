@@ -25,6 +25,14 @@ from maintenance.ui.action_coordinator import ButtonCoordinator
 _DEFAULT_COLOR = "indigo"
 
 
+def _noop_open_connection(_spec: Any) -> None:
+    return
+
+
+def _noop_open_pairing(_spec: Any) -> None:
+    return
+
+
 @dataclass(frozen=True, slots=True)
 class NodesConnectionsCallbacks:
     """The semantic events the Nodes & Connections page can emit."""
@@ -48,6 +56,8 @@ class NodesConnectionsCallbacks:
     on_remove_job: Callable[[str], None] | None = None
     on_start_discovery: Callable[[], None] = lambda: None
     on_learn_pairing: Callable[[], None] | None = None
+    on_open_connection: Callable[[Any], None] = _noop_open_connection
+    on_open_pairing: Callable[[Any], None] = _noop_open_pairing
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,7 +407,11 @@ class NodesConnectionsPage:
         actions.pack(fill="x", pady=(6, 0))
         pair_id = f"nodes:peer:{spec.node_id}:pair"
         reject_id = f"nodes:peer:{spec.node_id}:reject"
-        pair_command = lambda: self.callbacks.on_pair(spec.node_id)
+        pair_command = lambda: (
+            self.callbacks.on_open_pairing(spec)
+            if self.callbacks.on_open_pairing is not _noop_open_pairing
+            else self.callbacks.on_pair(spec.node_id)
+        )
         reject_command = lambda: self.callbacks.on_reject(spec.node_id)
         pair_button = self.button_cls(
             actions,
@@ -770,7 +784,11 @@ class NodesConnectionsPage:
             ),
             (
                 "Test",
-                lambda: self.callbacks.on_test_connection(spec.node_id),
+                lambda: (
+                    self.callbacks.on_open_connection(spec)
+                    if self.callbacks.on_open_connection is not _noop_open_connection
+                    else self.callbacks.on_test_connection(spec.node_id)
+                ),
                 ui_styles.STYLE_NEUTRAL_BUTTON,
                 secondary_actions,
             ),
@@ -1029,6 +1047,9 @@ class NodesConnectionsPage:
         return row
 
     def _add_manual_host(self) -> None:
+        if self.callbacks.on_open_connection is not _noop_open_connection:
+            self.callbacks.on_open_connection(None)
+            return
         name = self._manual_name_var.get().strip()
         host = self._manual_host_var.get().strip()
         raw_port = self._manual_port_var.get().strip()

@@ -97,6 +97,38 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertIn("port", dialog.status_text().lower())
 
+    def test_connection_dialog_rejects_blank_host(self) -> None:
+        calls: list[tuple[str, str, int | None]] = []
+        dialog = ConnectionDialog(
+            RecordingWidget(),
+            on_add=lambda name, host, port: calls.append((name, host, port)),
+            var_factory=recorder_var,
+            **_dialog_widgets(include_entry=True),
+        )
+        dialog.host_var.set("")
+        dialog.port_var.set("")
+
+        dialog.submit()
+
+        self.assertEqual(calls, [])
+        self.assertIn("host", dialog.status_text().lower())
+
+    def test_connection_dialog_rejects_non_numeric_port(self) -> None:
+        calls: list[tuple[str, str, int | None]] = []
+        dialog = ConnectionDialog(
+            RecordingWidget(),
+            on_add=lambda name, host, port: calls.append((name, host, port)),
+            var_factory=recorder_var,
+            **_dialog_widgets(include_entry=True),
+        )
+        dialog.host_var.set("peer.local")
+        dialog.port_var.set("not-a-port")
+
+        dialog.submit()
+
+        self.assertEqual(calls, [])
+        self.assertIn("port", dialog.status_text().lower())
+
     def test_connection_dialog_allows_optional_port(self) -> None:
         calls: list[tuple[str, str, int | None]] = []
         dialog = ConnectionDialog(
@@ -112,6 +144,26 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
         dialog.submit()
 
         self.assertEqual(calls, [("Peer", "peer.local", None)])
+
+    def test_connection_dialog_test_action_dispatches_node_id(self) -> None:
+        calls: list[str] = []
+        recorder = WidgetRecorder()
+        _dialog = ConnectionDialog(
+            recorder.parent(),
+            on_add=lambda *_args: None,
+            node_id="node-1",
+            on_test=lambda node_id: calls.append(node_id),
+            var_factory=recorder_var,
+            frame_cls=recorder.frame_cls(),
+            label_cls=recorder.label_cls(),
+            button_cls=recorder.button_cls(),
+            entry_cls=recorder.entry_cls(),
+            toplevel_cls=FakeToplevel,
+        )
+
+        recorder.button_with_text("Test connection").kwargs["command"]()
+
+        self.assertEqual(calls, ["node-1"])
 
     def test_pairing_dialog_dispatches_node_id(self) -> None:
         calls: list[str] = []
@@ -146,6 +198,19 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
         labels = recorder.label_texts()
         self.assertTrue(any("identity:aa:bb" in text for text in labels))
         self.assertTrue(any("tls:11:22" in text for text in labels))
+
+    def test_pairing_dialog_cancellation_does_not_pair(self) -> None:
+        calls: list[str] = []
+        dialog = PairingDialog(
+            RecordingWidget(),
+            spec=PairingDialogSpec(node_id="node-1"),
+            on_pair=lambda node_id: calls.append(node_id),
+            **_dialog_widgets(),
+        )
+
+        dialog.close()
+
+        self.assertEqual(calls, [])
 
     def test_node_details_dialog_dispatches_allowed_open_action(self) -> None:
         calls: list[str] = []

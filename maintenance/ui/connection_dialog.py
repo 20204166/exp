@@ -71,6 +71,10 @@ class ConnectionDialog:
             status_text="",
         )
         button_cls(container, text="Add", command=self.submit).pack(side="right")
+        if self._node_id is not None and self._on_test is not None:
+            button_cls(
+                container, text="Test connection", command=self.test_connection
+            ).pack(side="right")
 
     def submit(self) -> None:
         name = str(self.name_var.get()).strip()

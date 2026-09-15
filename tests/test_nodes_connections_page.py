@@ -218,6 +218,14 @@ class NodesConnectionsPageTests(unittest.TestCase):
         recorder.button_with_text("Pair").kwargs["command"]()
         callbacks.on_pair.assert_called_once_with("peer-a")
 
+    def test_pair_button_routes_selected_peer_to_pairing_opener(self) -> None:
+        callbacks = replace(make_callbacks(), on_open_pairing=Mock())
+        _page, _parent, recorder = make_page(callbacks)
+
+        recorder.button_with_text("Pair").kwargs["command"]()
+
+        callbacks.on_open_pairing.assert_called_once_with(_discovered_spec())
+
     def test_reject_button_emits_peer_id(self) -> None:
         callbacks = make_callbacks()
         _page, _parent, recorder = make_page(callbacks)
@@ -281,6 +289,23 @@ class NodesConnectionsPageTests(unittest.TestCase):
         callbacks.on_test_connection.assert_called_once_with("peer-a")
         recorder.button_with_text("Open").kwargs["command"]()
         callbacks.on_open_node.assert_called_once_with("peer-a")
+
+    def test_test_button_routes_selected_node_to_connection_opener(self) -> None:
+        spec = _trusted_spec()
+        callbacks = replace(make_callbacks(), on_open_connection=Mock())
+        _page, _parent, recorder = make_page(callbacks, trusted=[spec])
+
+        recorder.button_with_text("Test").kwargs["command"]()
+
+        callbacks.on_open_connection.assert_called_once_with(spec)
+
+    def test_manual_add_routes_to_connection_opener(self) -> None:
+        callbacks = replace(make_callbacks(), on_open_connection=Mock())
+        page, _parent, _recorder = make_page(callbacks)
+
+        page.add_host_button.kwargs["command"]()
+
+        callbacks.on_open_connection.assert_called_once_with(None)
 
     def test_trusted_actions_use_primary_and_danger_styles(self) -> None:
         _page, _parent, recorder = make_page()
