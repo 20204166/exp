@@ -20,6 +20,11 @@ from maintenance.ui.action_coordinator import ButtonCoordinator
 
 _DEFAULT_COLOR = "indigo"
 
+
+def _noop_open_sharing(_spec: Any) -> None:
+    return
+
+
 _PAIRING_TEXT = {
     "discovered": "Discovered",
     "pairing": "Pairing",
@@ -41,6 +46,7 @@ class ClusterPageCallbacks:
     on_remove_connection: Callable[[str], None] | None = None
     on_remove_job: Callable[[str], None] | None = None
     on_share_dashboard: Callable[[], None] | None = None
+    on_open_sharing: Callable[["ClusterNodeSpec"], None] = _noop_open_sharing
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,11 +340,16 @@ class ClusterPage:
             )
             remove_job.pack(side="right", padx=(0, 8))
         on_share_dashboard = self.callbacks.on_share_dashboard
+        on_open_sharing = self.callbacks.on_open_sharing
         if spec.is_local and on_share_dashboard is not None:
+            if on_open_sharing is not _noop_open_sharing:
+                command = lambda: on_open_sharing(spec)
+            else:
+                command = on_share_dashboard
             share = self.button_cls(
                 row,
                 text="Stop sharing" if spec.share_active else "Share dashboard",
-                command=on_share_dashboard,
+                command=command,
                 style=ui_styles.STYLE_NEUTRAL_BUTTON,
             )
             share.pack(side="right", padx=(0, 8))

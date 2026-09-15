@@ -2,6 +2,7 @@
 
 import tkinter as tk
 import unittest
+from dataclasses import replace
 from typing import Any
 from unittest.mock import Mock
 
@@ -22,14 +23,19 @@ def make_callbacks() -> Any:
     )
 
 
-def make_remove_callbacks() -> Any:
-    return ClusterPageCallbacks(
-        on_back=Mock(),
-        on_open_node=Mock(),
-        on_remove_connection=Mock(),
-        on_remove_job=Mock(),
-        on_share_dashboard=Mock(),
-    )
+def make_remove_callbacks(
+    *, on_open_sharing: Any = None, on_share_dashboard: Any = None
+) -> Any:
+    values: dict[str, Any] = {
+        "on_back": Mock(),
+        "on_open_node": Mock(),
+        "on_remove_connection": Mock(),
+        "on_remove_job": Mock(),
+        "on_share_dashboard": on_share_dashboard or Mock(),
+    }
+    if on_open_sharing is not None:
+        values["on_open_sharing"] = on_open_sharing
+    return ClusterPageCallbacks(**values)
 
 
 def _coordinator_spec(
@@ -221,6 +227,17 @@ class ClusterPageTests(unittest.TestCase):
         _page, _parent, recorder = make_page(callbacks, nodes=[local])
         recorder.button_with_text("Share dashboard").kwargs["command"]()
         callbacks.on_share_dashboard.assert_called_once_with()
+
+    def test_share_dashboard_button_opens_dialog_with_local_state(self) -> None:
+        opener = Mock()
+        callbacks = make_remove_callbacks(on_open_sharing=opener)
+        local = _spec("local", selectable=True, is_local=True)
+        local = replace(local, share_active=True)
+        _page, _parent, recorder = make_page(callbacks, nodes=[local])
+
+        recorder.button_with_text("Stop sharing").kwargs["command"]()
+
+        opener.assert_called_once_with(local)
 
     def test_non_editable_worker_row_has_no_remove_job(self) -> None:
         callbacks = make_remove_callbacks()

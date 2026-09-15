@@ -465,6 +465,20 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
 
         self.assertEqual(calls, ["share", "stop"])
 
+    def test_sharing_dialog_close_does_not_dispatch_callbacks(self) -> None:
+        calls: list[str] = []
+        dialog = SharingDialog(
+            RecordingWidget(),
+            active=False,
+            on_share=lambda: calls.append("share"),
+            on_stop=lambda: calls.append("stop"),
+            **_dialog_widgets(),
+        )
+
+        dialog.close()
+
+        self.assertEqual(calls, [])
+
     def test_sharing_dialog_presents_active_and_inactive_states(self) -> None:
         for active, expected_state, expected_button in (
             (False, "Inactive", "Share for 5 minutes"),
