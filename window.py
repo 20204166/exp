@@ -123,8 +123,16 @@ from maintenance.ui import window_preferences as ui_window_preferences
 from maintenance.ui import window_presentation as ui_window_presentation
 from maintenance.ui import window_scan as ui_window_scan
 from maintenance.ui.action_coordinator import ButtonCoordinator
+from maintenance.ui.connection_dialog import ConnectionDialog
 from maintenance.ui.help_content import HELP_TOPICS
 from maintenance.ui.navigation import PageRouter, PageSpec
+from maintenance.ui.node_details_dialog import (
+    NodeDetailsDialog,
+    NodeDetailsDialogCallbacks,
+    NodeDetailsDialogSpec,
+)
+from maintenance.ui.pairing_dialog import PairingDialog, PairingDialogSpec
+from maintenance.ui.sharing_dialog import SharingDialog
 from maintenance.ui.window_supports.timer_delivery import TimerDelivery
 
 LOGGER = logging.getLogger(__name__)
@@ -250,6 +258,10 @@ class AppWindow:
         self._build_local_node_context()
         self._restore_trusted_nodes()
         self._peer_server: RemoteSocketServer | None = None
+        self._connection_dialog: ConnectionDialog | None = None
+        self._pairing_dialog: PairingDialog | None = None
+        self._node_details_dialog: NodeDetailsDialog | None = None
+        self._sharing_dialog: SharingDialog | None = None
 
         self.master = master or tk.Tk()
         self._timer_delivery = TimerDelivery(
@@ -546,6 +558,115 @@ class AppWindow:
 
     def _nodes_error(self, message: str) -> None:
         ui_window_pages.set_nodes_status(self, message, error=True)
+
+    def _open_connection_dialog(
+        self, spec: ui_nodes.TrustedNodeSpec | None = None
+    ) -> None:
+        existing = self.__dict__.get("_connection_dialog")
+        if existing is not None:
+            return
+        dialog = ConnectionDialog(
+            self.master,
+            on_add=self._add_manual_host,
+            node_id=spec.node_id if spec is not None else None,
+            on_test=self._test_connection if spec is not None else None,
+        )
+        if spec is not None:
+            dialog.name_var.set(spec.display_name)
+            dialog.host_var.set(spec.host)
+            if spec.port is not None:
+                dialog.port_var.set(str(spec.port))
+        self._own_dialog("_connection_dialog", dialog)
+
+    def _open_pairing_dialog(self, spec: ui_nodes.DiscoveredPeerSpec) -> None:
+        existing = self.__dict__.get("_pairing_dialog")
+        if existing is not None:
+            return
+        dialog = PairingDialog(
+            self.master,
+            spec=PairingDialogSpec(
+                node_id=spec.node_id,
+                display_name=spec.hostname,
+                identity_fingerprint=spec.identity_fingerprint,
+            ),
+            on_pair=self._pair_discovered_node,
+        )
+        self._own_dialog("_pairing_dialog", dialog)
+
+    def _open_node_details_dialog(self, spec: ui_nodes.TrustedNodeSpec) -> None:
+        existing = self.__dict__.get("_node_details_dialog")
+        if existing is not None:
+            return
+        dialog = NodeDetailsDialog(
+            self.master,
+            spec=NodeDetailsDialogSpec(
+                node_id=spec.node_id,
+                display_name=spec.display_name,
+                hostname=spec.hostname,
+                host=spec.host,
+                port=spec.port,
+                pairing_state=spec.pairing_state,
+                target_state=spec.target_state,
+                role=spec.role,
+                permissions=spec.permissions,
+                selectable=spec.selectable,
+                openable=spec.openable,
+                is_manual=spec.is_manual,
+                paused=spec.paused,
+                role_editable=spec.role_editable,
+                has_active_job=spec.has_active_job,
+                identity_status=spec.identity_status,
+                identity_fingerprint=spec.identity_fingerprint,
+            ),
+            callbacks=NodeDetailsDialogCallbacks(
+                on_open=self._open_cluster_node,
+                on_test=self._test_connection,
+                on_pause=self._pause_node,
+                on_resume=self._resume_node,
+                on_revoke=self._revoke_node,
+                on_remove_connection=self._remove_connection_node,
+                on_remove_job=self._remove_job_node,
+            ),
+        )
+        self._own_dialog("_node_details_dialog", dialog)
+
+    def _open_sharing_dialog(self, spec: ui_cluster.ClusterNodeSpec) -> None:
+        existing = self.__dict__.get("_sharing_dialog")
+        if existing is not None:
+            return
+        dialog = SharingDialog(
+            self.master,
+            active=spec.share_active,
+            on_share=self._share_dashboard,
+            on_stop=self._share_dashboard,
+        )
+        self._own_dialog("_sharing_dialog", dialog)
+
+    def _own_dialog(self, attribute: str, dialog: Any) -> None:
+        self.__dict__[attribute] = dialog
+        original_close = dialog.close
+
+        def clear_reference() -> None:
+            try:
+                original_close()
+            finally:
+                if self.__dict__.get(attribute) is dialog:
+                    self.__dict__[attribute] = None
+
+        dialog.close = clear_reference
+        window = getattr(dialog, "window", None)
+        bind = getattr(window, "bind", None)
+        if callable(bind):
+
+            def clear_on_destroy(_event: Any) -> None:
+                if self.__dict__.get(attribute) is dialog:
+                    self.__dict__[attribute] = None
+
+            bind(
+                "<Destroy>",
+                clear_on_destroy,
+                "+",
+            )
 
     def _show_cluster_page(self) -> None:
         self._refresh_cluster_page()

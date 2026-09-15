@@ -37,7 +37,9 @@ Test that each dialog accepts an injected parent, data, callbacks, and widget cl
 ```python
 def test_connection_dialog_dispatches_manual_host_callback():
     calls = []
-    dialog = ConnectionDialog(fake_parent(), on_add=lambda name, host, port: calls.append((name, host, port)))
+    dialog = ConnectionDialog(
+        fake_parent(), on_add=lambda name, host, port: calls.append((name, host, port))
+    )
     dialog.host_var.set("peer.local")
     dialog.port_var.set("8123")
     dialog.name_var.set("Peer")
@@ -109,7 +111,9 @@ Verify identity, host, port, pairing state, target state, role, and permissions 
 
 ```python
 def test_details_dialog_does_not_show_disallowed_actions():
-    dialog = NodeDetailsDialog(fake_parent(), spec=trusted_spec(openable=False), callbacks=callbacks())
+    dialog = NodeDetailsDialog(
+        fake_parent(), spec=trusted_spec(openable=False), callbacks=callbacks()
+    )
     assert dialog.action("open") is None
 ```
 
@@ -143,7 +147,12 @@ Verify inactive state offers the existing share callback, active state offers th
 ```python
 def test_sharing_dialog_confirm_uses_existing_callback():
     calls = []
-    dialog = SharingDialog(fake_parent(), active=False, on_share=lambda: calls.append("share"), on_stop=lambda: calls.append("stop"))
+    dialog = SharingDialog(
+        fake_parent(),
+        active=False,
+        on_share=lambda: calls.append("share"),
+        on_stop=lambda: calls.append("stop"),
+    )
     dialog.confirm()
     assert calls == ["share"]
 ```

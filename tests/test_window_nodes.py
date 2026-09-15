@@ -39,7 +39,9 @@ from maintenance.nodes import (
 )
 from maintenance.remote import RemoteAuthError, RemoteRequest
 from maintenance.ui import window_discovery as ui_window_discovery
-from maintenance.ui import window_node_actions
+from maintenance.ui import window_node_actions, window_pages
+from maintenance.ui.cluster_page import ClusterNodeSpec
+from maintenance.ui.nodes_connections import DiscoveredPeerSpec, TrustedNodeSpec
 from maintenance.ui.render_coordinator import UICoordinator
 from maintenance.ui.window_supports import node_specs
 from tests.support.models import make_snapshot, make_summary
@@ -170,6 +172,108 @@ def _make_window(
 
 
 class WindowNodeSelectorTests(unittest.TestCase):
+    def test_app_window_owns_one_dialog_per_node_workflow(self) -> None:
+        window = _make_window(start_discovery=False)
+        window._page_router = Mock()
+        router = window._page_router
+        coordinator = window._coordinator
+        window.master = Mock()
+        trusted = TrustedNodeSpec(
+            node_id="peer-a",
+            display_name="Peer A",
+            hostname="peer-a.local",
+            color=None,
+            status="online",
+            host="192.0.2.10",
+            port=5000,
+            selectable=True,
+            openable=True,
+        )
+        discovered = DiscoveredPeerSpec(
+            node_id="peer-a",
+            hostname="peer-a.local",
+            app_version="1",
+            compatible=True,
+            connectable=True,
+            port=5000,
+            identity_fingerprint="identity",
+        )
+        cluster = ClusterNodeSpec(
+            node_id="local",
+            display_name="This system",
+            hostname="local",
+            color=None,
+            trust="local",
+            status="online",
+            capabilities=(),
+            is_local=True,
+            selectable=True,
+            share_active=True,
+        )
+
+        with (
+            patch("window.ConnectionDialog") as connection,
+            patch("window.PairingDialog") as pairing,
+            patch("window.NodeDetailsDialog") as details,
+            patch("window.SharingDialog") as sharing,
+        ):
+            for dialog in (connection, pairing, details, sharing):
+                dialog.return_value.window = Mock()
+            window._open_connection_dialog(None)
+            window._open_connection_dialog(None)
+            window._open_connection_dialog(trusted)
+            window._open_pairing_dialog(discovered)
+            window._open_node_details_dialog(trusted)
+            window._open_sharing_dialog(cluster)
+
+        connection.assert_called_once()
+        pairing.assert_called_once()
+        details.assert_called_once()
+        sharing.assert_called_once()
+        self.assertIs(connection.call_args.args[0], window.master)
+        self.assertEqual(
+            connection.call_args.kwargs["on_add"].__func__,
+            window._add_manual_host.__func__,
+        )
+        self.assertEqual(
+            pairing.call_args.kwargs["on_pair"].__func__,
+            window._pair_discovered_node.__func__,
+        )
+        self.assertIs(window._page_router, router)
+        self.assertIs(window._coordinator, coordinator)
+
+    def test_dialog_destroy_clears_controller_reference(self) -> None:
+        window = _make_window(start_discovery=False)
+        dialog = Mock()
+        dialog.window = Mock()
+        with patch("window.ConnectionDialog", return_value=dialog):
+            window._open_connection_dialog(None)
+
+        self.assertIs(window._connection_dialog, dialog)
+        dialog.close()
+        self.assertIsNone(window._connection_dialog)
+
+    def test_nodes_and_cluster_pages_receive_dialog_openers(self) -> None:
+        window = _make_window(start_discovery=False)
+        window.ttk = Mock()
+        window._button_coordinator = Mock()
+        window._cluster_state = ClusterState()
+        with (
+            patch.object(window_pages.ui_nodes, "NodesConnectionsPage") as nodes,
+            patch.object(window_pages.ui_cluster, "ClusterPage") as cluster,
+        ):
+            window_pages.build_nodes(window, Mock())
+            window_pages.build_cluster(window, Mock())
+
+        self.assertEqual(
+            nodes.call_args.kwargs["callbacks"].on_open_connection.__func__,
+            window._open_connection_dialog.__func__,
+        )
+        self.assertEqual(
+            cluster.call_args.kwargs["callbacks"].on_open_sharing.__func__,
+            window._open_sharing_dialog.__func__,
+        )
+
     def test_peer_reconciliation_owns_one_replacement_timer(self) -> None:
         window = _make_window(start_discovery=False)
         manager = Mock()

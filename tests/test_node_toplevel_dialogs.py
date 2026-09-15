@@ -113,7 +113,7 @@ def _nodes_page(
 
 class NodeToplevelDialogContractTests(unittest.TestCase):
     def test_connection_dialog_dispatches_manual_host_callback(self) -> None:
-        calls: list[tuple[str, str, int]] = []
+        calls: list[tuple[str, str, int | None]] = []
         dialog = ConnectionDialog(
             RecordingWidget(),
             on_add=lambda name, host, port: calls.append((name, host, port)),
@@ -352,6 +352,25 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
             ],
         )
         self.assertIsNone(dialog.action("remove_connection"))
+
+    def test_node_details_dialog_shows_remove_job_for_active_editable_trusted_node(
+        self,
+    ) -> None:
+        dialog = NodeDetailsDialog(
+            RecordingWidget(),
+            spec=NodeDetailsDialogSpec(
+                node_id="node-1",
+                role_editable=True,
+                has_active_job=True,
+                is_manual=False,
+            ),
+            callbacks=NodeDetailsDialogCallbacks(
+                on_remove_job=lambda _node_id: None,
+            ),
+            **_dialog_widgets(),
+        )
+
+        self.assertIsNotNone(dialog.action("remove_job"))
 
     def test_node_details_dialog_hides_actions_without_callbacks(self) -> None:
         dialog = NodeDetailsDialog(

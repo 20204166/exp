@@ -119,9 +119,7 @@ class NodeDetailsDialog:
             (
                 "remove_job",
                 "Remove job",
-                spec.role_editable
-                and spec.role == "worker"
-                and not spec.has_active_job,
+                spec.role_editable and not spec.is_manual,
                 self.callbacks.on_remove_job,
             ),
         )
