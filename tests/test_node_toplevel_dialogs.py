@@ -443,6 +443,7 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
                 node_id="node-1",
                 identity_status="verified",
                 identity_fingerprint="aa:bb:cc",
+                transport_fingerprint="tls:11:22",
             ),
             frame_cls=recorder.frame_cls(),
             label_cls=recorder.label_cls(),
@@ -453,6 +454,7 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
         labels = recorder.label_texts()
         self.assertTrue(any("verified" in text for text in labels))
         self.assertTrue(any("aa:bb:cc" in text for text in labels))
+        self.assertTrue(any("tls:11:22" in text for text in labels))
 
     def test_nodes_details_opener_receives_each_immutable_row_spec(self) -> None:
         details = Mock()

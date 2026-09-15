@@ -242,6 +242,39 @@ class WindowNodeSelectorTests(unittest.TestCase):
         self.assertIs(window._page_router, router)
         self.assertIs(window._coordinator, coordinator)
 
+    def test_discovered_peer_details_use_presentation_safe_spec(self) -> None:
+        window = _make_window(start_discovery=False)
+        window.master = Mock()
+        discovered = DiscoveredPeerSpec(
+            node_id="peer-a",
+            hostname="peer-a.local",
+            app_version="1",
+            compatible=True,
+            connectable=True,
+            port=5000,
+            identity_fingerprint="identity",
+            transport_fingerprint="tls",
+            pairing_state="discovered",
+        )
+
+        with patch("window.NodeDetailsDialog") as details:
+            details.return_value.window = Mock()
+            window._open_node_details_dialog(discovered)
+
+        spec = details.call_args.kwargs["spec"]
+        self.assertEqual(spec.node_id, "peer-a")
+        self.assertEqual(spec.display_name, "peer-a.local")
+        self.assertEqual(spec.hostname, "peer-a.local")
+        self.assertEqual(spec.host, "peer-a.local")
+        self.assertEqual(spec.port, 5000)
+        self.assertEqual(spec.pairing_state, "discovered")
+        self.assertEqual(spec.identity_fingerprint, "identity")
+        self.assertEqual(spec.transport_fingerprint, "tls")
+        self.assertFalse(spec.openable)
+        self.assertFalse(spec.selectable)
+        self.assertFalse(spec.role_editable)
+        self.assertFalse(spec.is_manual)
+
     def test_dialog_destroy_clears_controller_reference(self) -> None:
         window = _make_window(start_discovery=False)
         dialog = Mock()

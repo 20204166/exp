@@ -594,7 +594,9 @@ class AppWindow:
         )
         self._own_dialog("_pairing_dialog", dialog)
 
-    def _open_node_details_dialog(self, spec: ui_nodes.TrustedNodeSpec) -> None:
+    def _open_node_details_dialog(
+        self, spec: ui_nodes.DiscoveredPeerSpec | ui_nodes.TrustedNodeSpec
+    ) -> None:
         existing = self.__dict__.get("_node_details_dialog")
         if existing is not None:
             return
@@ -602,22 +604,23 @@ class AppWindow:
             self.master,
             spec=NodeDetailsDialogSpec(
                 node_id=spec.node_id,
-                display_name=spec.display_name,
+                display_name=getattr(spec, "display_name", spec.hostname),
                 hostname=spec.hostname,
-                host=spec.host,
+                host=getattr(spec, "host", spec.hostname),
                 port=spec.port,
                 pairing_state=spec.pairing_state,
-                target_state=spec.target_state,
-                role=spec.role,
-                permissions=spec.permissions,
-                selectable=spec.selectable,
-                openable=spec.openable,
-                is_manual=spec.is_manual,
-                paused=spec.paused,
-                role_editable=spec.role_editable,
-                has_active_job=spec.has_active_job,
-                identity_status=spec.identity_status,
+                target_state=getattr(spec, "target_state", ""),
+                role=getattr(spec, "role", ""),
+                permissions=getattr(spec, "permissions", ()),
+                selectable=getattr(spec, "selectable", False),
+                openable=getattr(spec, "openable", False),
+                is_manual=getattr(spec, "is_manual", False),
+                paused=getattr(spec, "paused", False),
+                role_editable=getattr(spec, "role_editable", False),
+                has_active_job=getattr(spec, "has_active_job", False),
+                identity_status=getattr(spec, "identity_status", ""),
                 identity_fingerprint=spec.identity_fingerprint,
+                transport_fingerprint=getattr(spec, "transport_fingerprint", None),
             ),
             callbacks=NodeDetailsDialogCallbacks(
                 on_open=self._open_cluster_node,

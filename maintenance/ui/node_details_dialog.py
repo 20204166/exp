@@ -29,6 +29,7 @@ class NodeDetailsDialogSpec:
     has_active_job: bool = True
     identity_status: str = ""
     identity_fingerprint: str | None = None
+    transport_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +95,12 @@ class NodeDetailsDialog:
                 text=f"Identity fingerprint: {spec.identity_fingerprint}",
                 bg=colors["background"],
             ).pack(anchor="w")
+        if spec.transport_fingerprint:
+            label_cls(
+                container,
+                text=f"TLS fingerprint: {spec.transport_fingerprint}",
+                bg=colors["background"],
+            ).pack(anchor="w")
         ui_layout.dialog_footer(
             container,
             frame_cls=frame_cls,
@@ -101,7 +108,9 @@ class NodeDetailsDialog:
             colors=colors,
             status_text="",
         )
-        action_specs = (
+        action_specs: tuple[
+            tuple[str, str, bool, Callable[[str], None] | None], ...
+        ] = (
             ("open", "Open", spec.openable, self.callbacks.on_open),
             ("test", "Test connection", spec.selectable, self.callbacks.on_test),
             (
