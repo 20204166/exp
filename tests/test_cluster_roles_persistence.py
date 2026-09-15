@@ -1,10 +1,18 @@
+import base64
 import json
 import math
 import tempfile
 import unittest
 from pathlib import Path
 
-from maintenance.cluster import ClusterState, ClusterStore, InviteExpiredError
+from maintenance.cluster import (
+    ClusterDataError,
+    ClusterState,
+    ClusterStore,
+    InviteExpiredError,
+    decode_invite_blob,
+    encode_invite_blob,
+)
 from maintenance.components.cluster_roles import CapabilityGrant, ClusterRole
 from maintenance.nodes import NodeId, NodePermission
 
@@ -135,6 +143,68 @@ class ClusterRolePersistenceTests(unittest.TestCase):
         invite = state.create_invite(now=100.0, ttl_seconds=60.0)
         with self.assertRaises(InviteExpiredError):
             state.consume_invite(invite.token, now=160.1)
+
+    def test_create_invite_binds_the_issuing_cluster_fence(self) -> None:
+        state = ClusterState.create_local(local_node_id="coord")
+        invite = state.create_invite(now=100.0)
+        assert state.coordinator_epoch is not None
+        self.assertEqual(invite.cluster_id, state.cluster_id)
+        self.assertEqual(
+            invite.coordinator_id, state.coordinator_epoch.coordinator_id.value
+        )
+        self.assertEqual(invite.epoch, state.coordinator_epoch.epoch)
+        self.assertEqual(invite.fencing_token, state.coordinator_epoch.fencing_token)
+
+    def test_create_invite_requires_a_coordinator_epoch(self) -> None:
+        state = ClusterState(local_node_id="coord")
+        with self.assertRaises(ValueError):
+            state.create_invite(now=100.0)
+
+    def test_invite_blob_round_trips(self) -> None:
+        state = ClusterState.create_local(local_node_id="coord")
+        invite = state.create_invite(now=100.0)
+        blob = encode_invite_blob(invite)
+        decoded = decode_invite_blob(blob)
+        self.assertEqual(decoded.token, invite.token)
+        self.assertEqual(decoded.cluster_id, invite.cluster_id)
+        self.assertEqual(decoded.coordinator_id, invite.coordinator_id)
+        self.assertEqual(decoded.epoch, invite.epoch)
+        self.assertEqual(decoded.fencing_token, invite.fencing_token)
+        self.assertEqual(decoded.expires_at, invite.expires_at)
+        self.assertEqual(decoded.target_node_id, invite.target_node_id)
+
+    def test_decode_invite_blob_rejects_garbage(self) -> None:
+        with self.assertRaises(ClusterDataError):
+            decode_invite_blob("not-base64-json")
+
+    def test_decode_invite_blob_rejects_missing_fence_fields(self) -> None:
+        blob = base64.urlsafe_b64encode(
+            json.dumps({"token": "abc", "expires_at": 1.0}).encode("utf-8")
+        ).decode("ascii")
+        with self.assertRaises(ClusterDataError):
+            decode_invite_blob(blob)
+
+    def test_invite_without_persisted_fence_fields_still_loads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cluster.json"
+            payload = {
+                "schema_version": 2,
+                "local_node_id": "coord",
+                "trusted_nodes": [],
+                "peer_grants": [],
+                "active_invites": [
+                    {
+                        "token_hash": "ab" * 32,
+                        "target_node_id": "worker",
+                        "expires_at": 9999999999.0,
+                    }
+                ],
+            }
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            state = ClusterStore(path).load()
+        self.assertEqual(len(state.active_invites), 1)
+        self.assertEqual(state.active_invites[0].cluster_id, "")
+        self.assertEqual(state.active_invites[0].epoch, 0)
 
     def test_non_finite_invite_expiry_is_skipped_on_load(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

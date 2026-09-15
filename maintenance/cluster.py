@@ -14,6 +14,7 @@ display. The authenticated transport that consumes these envelopes lives in
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import logging
@@ -81,14 +82,97 @@ class InviteExpiredError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class InviteRecord:
+    """A one-time pairing invite, bound to the issuing cluster's live fence.
+
+    ``cluster_id``/``coordinator_id``/``epoch``/``fencing_token`` are
+    snapshotted from the issuing ``ClusterState`` at creation time. They exist
+    so the joining node can learn the target's cluster fence from the invite
+    itself (see ``encode_invite_blob``) -- ``RemoteService._verify_role_fence``
+    requires every role operation, ``consume_invite`` included, to already
+    carry the target's current cluster fence, so the invite must be what
+    teaches the caller those values. Old persisted invites predating this
+    field set decode with empty/zero defaults, which can never satisfy that
+    fence check, so they simply keep failing closed rather than crashing.
+    """
+
     token_hash: str
     target_node_id: str
     expires_at: float
     token: str = field(default="", repr=False, compare=False)
+    cluster_id: str = ""
+    coordinator_id: str = ""
+    epoch: int = 0
+    fencing_token: str = ""
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.expires_at):
             raise ValueError("invite expiry must be finite")
+
+
+def encode_invite_blob(invite: InviteRecord) -> str:
+    """Serialize one invite (token + issuing cluster fence) to a copyable string."""
+
+    payload = {
+        "token": invite.token,
+        "cluster_id": invite.cluster_id,
+        "coordinator_id": invite.coordinator_id,
+        "epoch": invite.epoch,
+        "fencing_token": invite.fencing_token,
+        "target_node_id": invite.target_node_id,
+        "expires_at": invite.expires_at,
+    }
+    raw = json.dumps(payload, sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii")
+
+
+def decode_invite_blob(blob: str) -> InviteRecord:
+    """Parse a pasted invite blob, never trusting its contents implicitly."""
+
+    try:
+        raw = base64.urlsafe_b64decode(blob.encode("ascii"))
+        data = json.loads(raw)
+    except (ValueError, TypeError, UnicodeDecodeError) as error:
+        raise ClusterDataError("invite is not a valid pairing invite") from error
+    if not isinstance(data, dict):
+        raise ClusterDataError("invite must decode to an object")
+    token = data.get("token")
+    cluster_id = data.get("cluster_id")
+    coordinator_id = data.get("coordinator_id")
+    epoch = data.get("epoch")
+    fencing_token = data.get("fencing_token")
+    target_node_id = data.get("target_node_id", "")
+    expires_at = data.get("expires_at")
+    if (
+        not isinstance(token, str)
+        or not token
+        or not isinstance(cluster_id, str)
+        or not cluster_id
+        or not isinstance(coordinator_id, str)
+        or not coordinator_id
+        or not isinstance(epoch, int)
+        or isinstance(epoch, bool)
+        or epoch < 0
+        or not isinstance(fencing_token, str)
+        or not fencing_token
+        or not isinstance(target_node_id, str)
+        or not isinstance(expires_at, (int, float))
+        or isinstance(expires_at, bool)
+        or not math.isfinite(float(expires_at))
+    ):
+        raise ClusterDataError("invite has malformed or missing fields")
+    try:
+        return InviteRecord(
+            hash_invite(token),
+            target_node_id,
+            float(expires_at),
+            token=token,
+            cluster_id=cluster_id,
+            coordinator_id=coordinator_id,
+            epoch=epoch,
+            fencing_token=fencing_token,
+        )
+    except ValueError as error:
+        raise ClusterDataError("invite has an invalid expiry") from error
 
 
 def _initial_roles(local_node_id: str) -> tuple[RoleAssignment, ...]:
@@ -599,11 +683,17 @@ class ClusterState:
     ) -> InviteRecord:
         if ttl_seconds <= 0:
             raise ValueError("invite TTL must be positive")
+        if self.coordinator_epoch is None:
+            raise ValueError("cluster has no coordinator epoch to bind an invite to")
         token = secrets.token_urlsafe(32)
         record = InviteRecord(
             hash_invite(token),
             target_node_id,
             (time.time() if now is None else now) + ttl_seconds,
+            cluster_id=self.cluster_id,
+            coordinator_id=self.coordinator_epoch.coordinator_id.value,
+            epoch=self.coordinator_epoch.epoch,
+            fencing_token=self.coordinator_epoch.fencing_token,
         )
         self.active_invites = self.active_invites + (record,)
         # The token is returned to the caller but is never persisted.
@@ -939,13 +1029,32 @@ class ClusterStore:
             token_hash = item.get("token_hash")
             target = item.get("target_node_id", "")
             expiry = item.get("expires_at")
+            cluster_id = item.get("cluster_id", "")
+            coordinator_id = item.get("coordinator_id", "")
+            epoch = item.get("epoch", 0)
+            fencing_token = item.get("fencing_token", "")
             if (
                 isinstance(token_hash, str)
                 and isinstance(target, str)
                 and isinstance(expiry, (int, float))
+                and isinstance(cluster_id, str)
+                and isinstance(coordinator_id, str)
+                and isinstance(epoch, int)
+                and not isinstance(epoch, bool)
+                and isinstance(fencing_token, str)
             ):
                 try:
-                    records.append(InviteRecord(token_hash, target, float(expiry)))
+                    records.append(
+                        InviteRecord(
+                            token_hash,
+                            target,
+                            float(expiry),
+                            cluster_id=cluster_id,
+                            coordinator_id=coordinator_id,
+                            epoch=epoch,
+                            fencing_token=fencing_token,
+                        )
+                    )
                 except ValueError:
                     continue
         return tuple(records)
@@ -1242,6 +1351,10 @@ class ClusterStore:
                     "token_hash": invite.token_hash,
                     "target_node_id": invite.target_node_id,
                     "expires_at": invite.expires_at,
+                    "cluster_id": invite.cluster_id,
+                    "coordinator_id": invite.coordinator_id,
+                    "epoch": invite.epoch,
+                    "fencing_token": invite.fencing_token,
                 }
                 for invite in state.active_invites
             ],
