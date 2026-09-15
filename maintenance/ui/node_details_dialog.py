@@ -27,6 +27,8 @@ class NodeDetailsDialogSpec:
     paused: bool = False
     role_editable: bool = False
     has_active_job: bool = True
+    identity_status: str = ""
+    identity_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,9 +83,16 @@ class NodeDetailsDialog:
             ("Target", spec.target_state),
             ("Role", spec.role),
             ("Permissions", ", ".join(spec.permissions)),
+            ("Identity status", spec.identity_status),
         ):
             label_cls(
                 container, text=f"{label}: {value}", bg=colors["background"]
+            ).pack(anchor="w")
+        if spec.identity_fingerprint:
+            label_cls(
+                container,
+                text=f"Identity fingerprint: {spec.identity_fingerprint}",
+                bg=colors["background"],
             ).pack(anchor="w")
         ui_layout.dialog_footer(
             container,

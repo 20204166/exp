@@ -33,6 +33,10 @@ def _noop_open_pairing(_spec: Any) -> None:
     return
 
 
+def _noop_details(_spec: Any) -> None:
+    return
+
+
 @dataclass(frozen=True, slots=True)
 class NodesConnectionsCallbacks:
     """The semantic events the Nodes & Connections page can emit."""
@@ -58,6 +62,7 @@ class NodesConnectionsCallbacks:
     on_learn_pairing: Callable[[], None] | None = None
     on_open_connection: Callable[[Any], None] = _noop_open_connection
     on_open_pairing: Callable[[Any], None] = _noop_open_pairing
+    on_details: Callable[[Any], None] = _noop_details
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,7 +435,20 @@ class NodesConnectionsPage:
         )
         reject_button.pack(side="right", padx=(0, 8))
         self._register_button(reject_id, reject_command, reject_button, True)
+        self._details_button(actions, spec)
         return row
+
+    def _details_button(self, parent: Any, spec: Any) -> Any | None:
+        if self.callbacks.on_details is _noop_details:
+            return None
+        button = self.button_cls(
+            parent,
+            text="Details",
+            command=lambda: self.callbacks.on_details(spec),
+            style=ui_styles.STYLE_NEUTRAL_BUTTON,
+        )
+        button.pack(side="right", padx=(0, 8))
+        return button
 
     def _build_trusted_section(self) -> None:
         _, body = ui_layout.section_card(
@@ -821,6 +839,7 @@ class NodesConnectionsPage:
                 button,
                 enabled,
             )
+        self._details_button(actions, spec)
         on_pause = self.callbacks.on_pause
         if spec.role_editable and on_pause is not None:
             pause_text = "Re-enable" if spec.paused else "Pause"
@@ -1044,6 +1063,7 @@ class NodesConnectionsPage:
             remove_button,
             True,
         )
+        self._details_button(actions, spec)
         return row
 
     def _add_manual_host(self) -> None:

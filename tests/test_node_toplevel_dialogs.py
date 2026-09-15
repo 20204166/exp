@@ -2,12 +2,19 @@
 
 import unittest
 from typing import Any
+from unittest.mock import Mock
 
 from maintenance.ui.connection_dialog import ConnectionDialog
 from maintenance.ui.node_details_dialog import (
     NodeDetailsDialog,
     NodeDetailsDialogCallbacks,
     NodeDetailsDialogSpec,
+)
+from maintenance.ui.nodes_connections import (
+    DiscoveredPeerSpec,
+    NodesConnectionsCallbacks,
+    NodesConnectionsPage,
+    TrustedNodeSpec,
 )
 from maintenance.ui.pairing_dialog import PairingDialog, PairingDialogSpec
 from maintenance.ui.sharing_dialog import SharingDialog
@@ -57,6 +64,51 @@ def recorder_var() -> Any:
     from tests.support.widget_recording import FakeVar
 
     return FakeVar()
+
+
+def _nodes_callbacks(*, on_details: Any = None) -> NodesConnectionsCallbacks:
+    callback = lambda *_args: None
+    values: dict[str, Any] = {
+        "on_back": callback,
+        "on_discovery_toggle": callback,
+        "on_pair": callback,
+        "on_reject": callback,
+        "on_rename": callback,
+        "on_color": callback,
+        "on_revoke": callback,
+        "on_test_connection": callback,
+        "on_open_node": callback,
+        "on_add_manual_host": callback,
+        "on_remove_manual": callback,
+    }
+    if on_details is not None:
+        values["on_details"] = on_details
+    return NodesConnectionsCallbacks(**values)
+
+
+def _nodes_page(
+    callbacks: NodesConnectionsCallbacks,
+    *,
+    discovered: list[DiscoveredPeerSpec],
+    trusted: list[TrustedNodeSpec],
+    manual: list[TrustedNodeSpec],
+) -> tuple[NodesConnectionsPage, Any, WidgetRecorder]:
+    recorder = WidgetRecorder()
+    page = NodesConnectionsPage(
+        recorder.parent(),
+        callbacks=callbacks,
+        discovery_enabled=True,
+        discovered=discovered,
+        trusted=trusted,
+        manual=manual,
+        **recorder.page_kwargs(),
+        checkbutton_cls=recorder.checkbutton_cls(),
+        combobox_cls=recorder.combobox_cls(),
+        entry_cls=recorder.entry_cls(),
+        var_factory=recorder_var,
+        boolean_var_factory=recorder_var,
+    )
+    return page, page.content, recorder
 
 
 class NodeToplevelDialogContractTests(unittest.TestCase):
@@ -262,6 +314,140 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
         self.assertTrue(any("10.0.0.2" in text for text in labels))
         self.assertTrue(any("8123" in text for text in labels))
         self.assertTrue(any("Ready" in text for text in labels))
+
+    def test_node_details_dialog_gates_actions_by_spec_and_callbacks(self) -> None:
+        calls: list[tuple[str, str]] = []
+        dialog = NodeDetailsDialog(
+            RecordingWidget(),
+            spec=NodeDetailsDialogSpec(
+                node_id="node-1",
+                openable=True,
+                selectable=True,
+                role="worker",
+                role_editable=True,
+                has_active_job=False,
+                is_manual=False,
+            ),
+            callbacks=NodeDetailsDialogCallbacks(
+                on_open=lambda node_id: calls.append(("open", node_id)),
+                on_test=lambda node_id: calls.append(("test", node_id)),
+                on_pause=lambda node_id: calls.append(("pause", node_id)),
+                on_revoke=lambda node_id: calls.append(("revoke", node_id)),
+                on_remove_job=lambda node_id: calls.append(("remove_job", node_id)),
+            ),
+            **_dialog_widgets(),
+        )
+
+        for action in ("open", "test", "pause", "revoke", "remove_job"):
+            dialog.invoke_action(action)
+
+        self.assertEqual(
+            calls,
+            [
+                ("open", "node-1"),
+                ("test", "node-1"),
+                ("pause", "node-1"),
+                ("revoke", "node-1"),
+                ("remove_job", "node-1"),
+            ],
+        )
+        self.assertIsNone(dialog.action("remove_connection"))
+
+    def test_node_details_dialog_hides_actions_without_callbacks(self) -> None:
+        dialog = NodeDetailsDialog(
+            RecordingWidget(),
+            spec=NodeDetailsDialogSpec(
+                node_id="node-1", openable=True, selectable=True, role_editable=True
+            ),
+            callbacks=NodeDetailsDialogCallbacks(),
+            **_dialog_widgets(),
+        )
+
+        self.assertIsNone(dialog.action("open"))
+        self.assertIsNone(dialog.action("test"))
+        self.assertIsNone(dialog.action("pause"))
+
+    def test_node_details_dialog_renders_identity_status_and_fingerprint(self) -> None:
+        recorder = WidgetRecorder()
+        NodeDetailsDialog(
+            recorder.parent(),
+            spec=NodeDetailsDialogSpec(
+                node_id="node-1",
+                identity_status="verified",
+                identity_fingerprint="aa:bb:cc",
+            ),
+            frame_cls=recorder.frame_cls(),
+            label_cls=recorder.label_cls(),
+            button_cls=recorder.button_cls(),
+            toplevel_cls=FakeToplevel,
+        )
+
+        labels = recorder.label_texts()
+        self.assertTrue(any("verified" in text for text in labels))
+        self.assertTrue(any("aa:bb:cc" in text for text in labels))
+
+    def test_nodes_details_opener_receives_each_immutable_row_spec(self) -> None:
+        details = Mock()
+        callbacks = _nodes_callbacks(on_details=details)
+        page, _parent, recorder = _nodes_page(
+            callbacks,
+            discovered=[DiscoveredPeerSpec("peer", "peer-host", "1", True, True, 9)],
+            trusted=[
+                TrustedNodeSpec(
+                    "trusted",
+                    "Trusted",
+                    "trusted-host",
+                    None,
+                    "online",
+                    "host",
+                    9,
+                    True,
+                )
+            ],
+            manual=[
+                TrustedNodeSpec(
+                    "manual",
+                    "Manual",
+                    "manual-host",
+                    None,
+                    "unknown",
+                    "host",
+                    9,
+                    False,
+                    True,
+                )
+            ],
+        )
+
+        recorder.button_with_text("Details").kwargs["command"]()
+        self.assertIs(details.call_args.args[0], page._discovered["peer"])
+        trusted_details = [
+            button
+            for button in recorder.widgets("button")
+            if button.kwargs.get("text") == "Details"
+        ][1]
+        trusted_details.kwargs["command"]()
+        self.assertIs(details.call_args.args[0], page._trusted["trusted"])
+        manual_details = [
+            button
+            for button in recorder.widgets("button")
+            if button.kwargs.get("text") == "Details"
+        ][2]
+        manual_details.kwargs["command"]()
+        self.assertIs(details.call_args.args[0], page._manual["manual"])
+
+    def test_nodes_details_action_is_absent_with_headless_defaults(self) -> None:
+        _page, _parent, recorder = _nodes_page(
+            _nodes_callbacks(),
+            discovered=[DiscoveredPeerSpec("peer", "peer-host", "1", True, True, 9)],
+            trusted=[],
+            manual=[],
+        )
+
+        self.assertNotIn(
+            "Details",
+            {button.kwargs.get("text") for button in recorder.widgets("button")},
+        )
 
     def test_sharing_dialog_dispatches_existing_callbacks(self) -> None:
         calls: list[str] = []
