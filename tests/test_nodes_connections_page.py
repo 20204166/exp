@@ -457,5 +457,63 @@ class NodesConnectionsPageTests(unittest.TestCase):
             root.destroy()
 
 
+class NodePresentationConnectionTests(unittest.TestCase):
+    def test_connecting_label(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_label
+        self.assertEqual(connection_status_label("connecting"), "Connecting…")
+
+    def test_auth_failed_label(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_label
+        self.assertEqual(connection_status_label("authentication_failed"), "Auth failed")
+
+    def test_identity_changed_label(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_label
+        self.assertEqual(connection_status_label("identity_changed"), "Identity changed")
+
+    def test_offline_retrying(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_label
+        self.assertEqual(
+            connection_status_label("offline", retry_automatic=True), "Offline · retrying"
+        )
+
+    def test_offline_not_retrying(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_label
+        self.assertEqual(
+            connection_status_label("offline", retry_automatic=False), "Offline"
+        )
+
+    def test_manual_disconnected(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_label
+        self.assertEqual(
+            connection_status_label("offline", manual_disconnected=True), "Disconnected"
+        )
+
+    def test_online_label(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_label
+        self.assertEqual(connection_status_label("online"), "Online")
+
+    def test_auth_failed_color(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_color_role
+        self.assertEqual(connection_status_color_role("authentication_failed"), "danger")
+
+    def test_identity_changed_color(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_color_role
+        self.assertEqual(connection_status_color_role("identity_changed"), "danger")
+
+    def test_connecting_color(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_color_role
+        self.assertEqual(connection_status_color_role("connecting"), "secondary")
+
+    def test_online_color(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_color_role
+        self.assertEqual(connection_status_color_role("online"), "success")
+
+    def test_manual_disconnected_color(self) -> None:
+        from maintenance.ui.node_presentation import connection_status_color_role
+        self.assertEqual(
+            connection_status_color_role("offline", manual_disconnected=True), "secondary"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,49 @@ _STATUS_COLORS = {
 }
 
 
+_CONNECTION_STATUS_LABELS = {
+    "unknown": "Unknown",
+    "connecting": "Connecting…",
+    "online": "Online",
+    "offline": "Offline",
+    "authentication_failed": "Auth failed",
+    "identity_changed": "Identity changed",
+}
+
+_CONNECTION_STATUS_COLORS = {
+    "online": "success",
+    "connecting": "secondary",
+    "unknown": "secondary",
+    "offline": "warning",
+    "authentication_failed": "danger",
+    "identity_changed": "danger",
+}
+
+
+def connection_status_label(
+    value: str,
+    *,
+    manual_disconnected: bool = False,
+    retry_automatic: bool = True,
+) -> str:
+    if manual_disconnected:
+        return "Disconnected"
+    normalized = value.strip().lower()
+    if normalized == "offline" and retry_automatic:
+        return "Offline · retrying"
+    return _CONNECTION_STATUS_LABELS.get(normalized, normalized.replace("_", " ").title())
+
+
+def connection_status_color_role(
+    value: str,
+    *,
+    manual_disconnected: bool = False,
+) -> str:
+    if manual_disconnected:
+        return "secondary"
+    return _CONNECTION_STATUS_COLORS.get(value.strip().lower(), "secondary")
+
+
 def status_label(value: str) -> str:
     """Return the shared human-facing label for a node or discovery state."""
 
