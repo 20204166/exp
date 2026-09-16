@@ -701,14 +701,6 @@ class AppWindow:
 
     def _pair_discovered_node(self, node_id: str) -> None:
         dialog = self.__dict__.get("_pairing_dialog")
-        if dialog is None:
-            ui_node_actions.pair_discovered_node(
-                self,
-                node_id,
-                messagebox_module=messagebox,
-                provision_target_grant=getattr(self, "_provision_target_grant", None),
-            )
-            return
         ui_node_actions.pair_discovered_node_async(
             self,
             node_id,

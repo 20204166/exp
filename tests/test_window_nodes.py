@@ -138,7 +138,7 @@ sys.modules.setdefault("tests.test_window_nodes", sys.modules[__name__])
 from tests.window_node_cases.selector import WindowNodeSelectorTests  # noqa: F401, I001
 from tests.window_node_cases.connections import WindowNodeConnectionTests  # noqa: F401
 from tests.window_node_cases.switching import WindowNodeSwitchingTests  # noqa: F401
-from tests.window_node_cases.discovery_pairing import WindowDiscoveryIntegrationTests  # noqa: F401
+from tests.window_node_cases.discovery_pairing import WindowDiscoveryIntegrationTests, Phase10ThreadingTests  # noqa: F401
 from tests.window_node_cases.resources import WindowOpenResourceNodeTests  # noqa: F401
 from tests.window_node_cases.roles import RemoteRoleOperationTests  # noqa: F401
 

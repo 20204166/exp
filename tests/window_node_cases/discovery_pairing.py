@@ -137,6 +137,9 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
                 ),
             ),
         )
+        runner = DeferredRunner()
+        deliveries: list[Any] = []
+        window._coordinator = AppCoordinator(runner=runner, deliver=deliveries.append)
         provider = Mock()
         provider.hello.return_value = {
             "ok": True,
@@ -160,12 +163,15 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
             last_seen=1.0,
         )
 
-        with patch(
-            "window.AuthenticatedNodeProvider", return_value=provider
-        ) as factory:
+        with patch("window.AuthenticatedNodeProvider", return_value=provider) as factory:
             window._on_discovered_candidate(candidate)
 
         factory.assert_called_once()
+        self.assertEqual(runner.pending, 1)
+        runner.run_next()
+        self.assertEqual(len(deliveries), 1)
+        deliveries[0]()
+
         record = window._cluster_state.record("peer-a")
         assert record is not None
         self.assertEqual(record.host, "192.168.1.20")
@@ -232,6 +238,9 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
                 ),
             ),
         )
+        runner = DeferredRunner()
+        deliveries: list[Any] = []
+        window._coordinator = AppCoordinator(runner=runner, deliver=deliveries.append)
         provider = Mock()
         provider.hello.return_value = {
             "ok": True,
@@ -255,6 +264,12 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
 
         with patch("window.AuthenticatedNodeProvider", return_value=provider):
             window._on_discovered_candidate(candidate)
+
+        # hello is deferred to background; flush the worker then the delivery.
+        self.assertEqual(runner.pending, 1)
+        runner.run_next()
+        self.assertEqual(len(deliveries), 1)
+        deliveries[0]()
 
         descriptor = window._node_registry.context(NodeId("peer-a")).descriptor
         self.assertEqual(
@@ -290,6 +305,9 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
                 ),
             ),
         )
+        runner = DeferredRunner()
+        deliveries: list[Any] = []
+        window._coordinator = AppCoordinator(runner=runner, deliver=deliveries.append)
         candidate = DiscoveredNodeCandidate(
             stable_id="peer-a",
             hostname="new-host",
@@ -305,10 +323,12 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
             identity_fingerprint="changed",
         )
 
+        # Mismatch is detected synchronously — no background task is queued.
         with patch("window.AuthenticatedNodeProvider") as factory:
             window._on_discovered_candidate(candidate)
 
         factory.assert_not_called()
+        self.assertEqual(runner.pending, 0)
         record = window._cluster_state.record("peer-a")
         assert record is not None
         self.assertEqual(record.host, "192.168.1.10")
@@ -319,6 +339,7 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
             "mismatch",
         )
 
+        # Recovery: matching fingerprint schedules hello; flush to confirm VERIFIED.
         matching = replace(candidate, identity_fingerprint="original")
         provider = Mock()
         provider.hello.return_value = {
@@ -328,6 +349,11 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         }
         with patch("window.AuthenticatedNodeProvider", return_value=provider):
             window._on_discovered_candidate(matching)
+
+        self.assertEqual(runner.pending, 1)
+        runner.run_next()
+        self.assertEqual(len(deliveries), 1)
+        deliveries[0]()
 
         self.assertEqual(
             window._node_registry.context(NodeId("peer-a")).descriptor.identity_status,
@@ -359,12 +385,22 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
                 ),
             )
         )
+        runner = DeferredRunner()
+        deliveries: list[Any] = []
+        window._coordinator = AppCoordinator(runner=runner, deliver=deliveries.append)
         window._node_registry.update_discovered(_candidate("peer-a", "replacement"))
         provision = Mock(return_value=True)
         window._provision_target_grant = provision
 
+        # _prepare_pairing runs synchronously (fingerprint dialog on Tk);
+        # provisioning is dispatched to background.
         with patch("window.messagebox.askyesno", return_value=True):
             window._pair_discovered_node("peer-a")
+
+        self.assertEqual(runner.pending, 1)
+        runner.run_next()
+        self.assertEqual(len(deliveries), 1)
+        deliveries[0]()
 
         records = window._cluster_state.trusted_nodes
         self.assertEqual(len(records), 1)
@@ -1107,3 +1143,395 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
 
 
 # fmt: on
+
+
+class Phase10ThreadingTests(unittest.TestCase):
+    """Phase 10 — Remote UI / Network threading hardening.
+
+    These tests verify:
+    - elevation messagebox runs on Tk (via _submit_ui), never on the server thread;
+    - elevation deny/timeout fails closed;
+    - concurrent elevation is serialized by _elevation_lock;
+    - endpoint verify hello runs off-Tk via coordinator.run;
+    - stale endpoint verify results are discarded when superseded;
+    - trust revoked in-flight causes the endpoint verify commit to be discarded;
+    - _pair_discovered_node always dispatches async (no sync fallback).
+    """
+
+    # ------------------------------------------------------------------ #
+    # Helpers                                                              #
+    # ------------------------------------------------------------------ #
+
+    def _make_elevation_request(
+        self,
+        caller: str = "caller-node",
+        secret: str | None = None,
+        permissions: frozenset | None = None,
+    ) -> Any:
+        from maintenance.nodes import NodePermission
+        from maintenance.remote import CapabilityElevationRequest
+
+        s = secret if secret is not None else "c" * 64
+        perms = permissions if permissions is not None else frozenset({NodePermission.COMPONENT_READ})
+        return CapabilityElevationRequest(
+            caller_node_id=NodeId(caller),
+            identity_fingerprint="fp-id",
+            transport_fingerprint="fp-tls",
+            current_secret=s,
+            proposed_secret="d" * 64,
+            permissions=perms,
+        )
+
+    def _make_elevation_controller(
+        self, caller: str = "caller-node", secret: str = "c" * 64
+    ) -> Any:
+        from maintenance.cluster import PeerGrantRecord
+
+        window = _make_window(start_discovery=False)
+        grant = PeerGrantRecord(
+            caller_node_id=caller,
+            secret=secret,
+            permissions=frozenset(),
+        )
+        window._cluster_state = ClusterState(peer_grants=(grant,))
+        # Stub out _save_cluster_state so the full peer-listener/TLS chain
+        # is not triggered by these threading-focused tests.
+        def _save(state: Any) -> bool:
+            window._cluster_state = state
+            return True
+        window._save_cluster_state = _save
+        return window
+
+    # ------------------------------------------------------------------ #
+    # Elevation threading tests                                            #
+    # ------------------------------------------------------------------ #
+
+    def test_elevation_messagebox_runs_via_submit_ui_not_directly(self) -> None:
+        """messagebox must not be called on the server thread; it must be
+        marshaled through _submit_ui so Tk invokes it after delivery."""
+        from maintenance.nodes import NodePermission
+        from maintenance.ui.window_discovery import handle_elevation_request
+
+        secret = "c" * 64
+        controller = self._make_elevation_controller(secret=secret)
+        request = self._make_elevation_request(
+            secret=secret,
+            permissions=frozenset({NodePermission.COMPONENT_READ}),
+        )
+
+        captured_callbacks: list[Any] = []
+        callback_queued = threading.Event()
+
+        def capturing_submit(cb: Any) -> None:
+            captured_callbacks.append(cb)
+            callback_queued.set()
+
+        controller._submit_ui = capturing_submit
+
+        results: list[Any] = []
+
+        def call_on_background() -> None:
+            with patch("window.messagebox.askyesno", return_value=True):
+                results.append(handle_elevation_request(controller, request))
+
+        t = threading.Thread(target=call_on_background)
+        t.start()
+
+        # Wait until the background thread has queued the callback via _submit_ui.
+        self.assertTrue(callback_queued.wait(timeout=2.0), "callback never queued")
+        # At this point the background thread is blocked on completed.wait().
+        # messagebox has NOT been called yet (server thread is waiting, not calling).
+        self.assertEqual(len(captured_callbacks), 1)
+        # Deliver on the "Tk" thread (simulates Tk dispatching the callback).
+        with patch("window.messagebox.askyesno", return_value=True) as mb:
+            captured_callbacks[0]()
+            messagebox_was_called = mb.called
+
+        t.join(timeout=2.0)
+        self.assertFalse(t.is_alive(), "server thread should have returned")
+        # messagebox was invoked during Tk delivery, and the result approved.
+        self.assertTrue(messagebox_was_called)
+        self.assertTrue(results[0])
+
+    def test_elevation_deny_returns_false(self) -> None:
+        """Denying the messagebox must return False (fail-closed)."""
+        from maintenance.nodes import NodePermission
+        from maintenance.ui.window_discovery import handle_elevation_request
+
+        secret = "c" * 64
+        controller = self._make_elevation_controller(secret=secret)
+        request = self._make_elevation_request(
+            secret=secret,
+            permissions=frozenset({NodePermission.COMPONENT_READ}),
+        )
+        # inject _submit_ui to fire callback inline (simulates Tk delivery).
+        controller._submit_ui = lambda cb: cb()
+        with patch("window.messagebox.askyesno", return_value=False):
+            result = handle_elevation_request(controller, request)
+        self.assertFalse(result)
+
+    def test_elevation_wrong_secret_returns_false(self) -> None:
+        """A caller presenting the wrong secret is rejected before any dialog."""
+        from maintenance.nodes import NodePermission
+        from maintenance.ui.window_discovery import handle_elevation_request
+
+        controller = self._make_elevation_controller(secret="c" * 64)
+        request = self._make_elevation_request(
+            secret="ab" * 32,  # valid hex but different from stored secret
+            permissions=frozenset({NodePermission.COMPONENT_READ}),
+        )
+        submit_ui = Mock()
+        controller._submit_ui = submit_ui
+        result = handle_elevation_request(controller, request)
+        self.assertFalse(result)
+        submit_ui.assert_not_called()
+
+    def test_elevation_concurrent_second_request_rejected(self) -> None:
+        """While one elevation dialog is open _elevation_lock prevents another."""
+        from maintenance.nodes import NodePermission
+        from maintenance.ui.window_discovery import handle_elevation_request
+
+        secret = "c" * 64
+        controller = self._make_elevation_controller(secret=secret)
+        request = self._make_elevation_request(
+            secret=secret,
+            permissions=frozenset({NodePermission.COMPONENT_READ}),
+        )
+        gate = threading.Event()
+
+        def blocking_submit_ui(cb: Any) -> None:
+            gate.wait()  # hold until test releases
+            cb()
+
+        controller._submit_ui = blocking_submit_ui
+        results: list[Any] = []
+
+        def first() -> None:
+            with patch("window.messagebox.askyesno", return_value=True):
+                results.append(("first", handle_elevation_request(controller, request)))
+
+        def second() -> None:
+            results.append(("second", handle_elevation_request(controller, request)))
+
+        t1 = threading.Thread(target=first)
+        t1.start()
+        # Let t1 acquire the lock before t2 tries.
+        import time as _time
+        _time.sleep(0.05)
+        t2 = threading.Thread(target=second)
+        t2.start()
+        t2.join(timeout=2.0)
+        self.assertFalse(t2.is_alive(), "second call should return immediately")
+        # second must have returned False (serialized/rejected).
+        second_result = next(r for name, r in results if name == "second")
+        self.assertFalse(second_result)
+        # unblock first
+        gate.set()
+        t1.join(timeout=2.0)
+
+    # ------------------------------------------------------------------ #
+    # Endpoint verify async / stale-result tests                          #
+    # ------------------------------------------------------------------ #
+
+    def _make_verify_window(
+        self,
+        host: str = "192.168.1.10",
+        port: int = 5000,
+        secret: str = "a" * 64,
+        node_id: str = "peer-a",
+    ) -> Any:
+        window = _make_window(
+            _trusted_context(node_id, "Peer A", cpu_value="peer", host_label="peer")
+        )
+        window._cluster_store = Mock()
+        window._cluster_store.save = Mock(return_value=True)
+        window._cluster_state = ClusterState(
+            trusted_nodes=(
+                trusted_node_record(
+                    node_id=node_id,
+                    display_name="Peer A",
+                    hostname=node_id,
+                    host=host,
+                    port=port,
+                    secret=secret,
+                ),
+            )
+        )
+        return window
+
+    def test_endpoint_verify_does_not_block_tk(self) -> None:
+        """sync_trusted_node_endpoint must return immediately (no hello on Tk)."""
+        runner = DeferredRunner()
+        deliveries: list[Any] = []
+        window = self._make_verify_window()
+        window._coordinator = AppCoordinator(runner=runner, deliver=deliveries.append)
+        provider = Mock()
+        provider.hello.return_value = {
+            "node_id": "peer-a",
+            "identity_fingerprint": node_identity_fingerprint("peer-a"),
+        }
+        candidate = DiscoveredNodeCandidate(
+            stable_id="peer-a",
+            hostname="new-host",
+            addresses=("192.168.1.20",),
+            port=6000,
+            service_name="peer-a._system-analyzer._tcp.local.",
+            app_version="1.2.4.0",
+            protocol_version="1",
+            platform="Linux",
+            connectable=False,
+            compatible=True,
+            last_seen=1.0,
+        )
+        with patch("window.AuthenticatedNodeProvider", return_value=provider):
+            window._on_discovered_candidate(candidate)
+
+        # Must return with hello not yet called; task was queued, not run.
+        provider.hello.assert_not_called()
+        self.assertEqual(runner.pending, 1)
+
+        runner.run_next()
+        deliveries[0]()
+        provider.hello.assert_called_once()
+
+    def test_endpoint_verify_stale_e1_does_not_overwrite_e2(self) -> None:
+        """When E2 coalesces into E1's in-flight verify, only E2's address
+        should be committed even though the background task ran E1's hello.
+
+        The coordinator coalesces E2 into E1's in-flight run: E2's on_result
+        (carrying E2's generation token, E2's address/port) replaces E1's.
+        After E1 completes the background hello, the coordinator calls E2's
+        on_result; _finish_endpoint_verify commits E2's address, not E1's.
+        A rerun for E2 then fires but _finish_endpoint_verify discards it
+        because the generation token was already consumed by the first delivery.
+        """
+        runner = DeferredRunner()
+        deliveries: list[Any] = []
+        window = self._make_verify_window()
+        window._coordinator = AppCoordinator(runner=runner, deliver=deliveries.append)
+
+        def _make_provider() -> Mock:
+            p = Mock()
+            p.hello.return_value = {
+                "node_id": "peer-a",
+                "identity_fingerprint": node_identity_fingerprint("peer-a"),
+            }
+            return p
+
+        def _make_candidate(addresses: tuple[str, ...], port: int) -> DiscoveredNodeCandidate:
+            return DiscoveredNodeCandidate(
+                stable_id="peer-a",
+                hostname="host",
+                addresses=addresses,
+                port=port,
+                service_name="peer-a._system-analyzer._tcp.local.",
+                app_version="1.0.0.0",
+                protocol_version="1",
+                platform="Linux",
+                connectable=False,
+                compatible=True,
+                last_seen=1.0,
+            )
+
+        p1 = _make_provider()
+        p2 = _make_provider()
+
+        with patch("window.AuthenticatedNodeProvider", return_value=p1):
+            window._on_discovered_candidate(_make_candidate(("192.168.1.20",), 6000))
+        # E2 arrives before E1 hello has run — coordinator coalesces.
+        with patch("window.AuthenticatedNodeProvider", return_value=p2):
+            window._on_discovered_candidate(_make_candidate(("10.0.0.5",), 7000))
+
+        # Coordinator coalesces E2 into E1's in-flight run; one worker queued.
+        self.assertEqual(runner.pending, 1)
+
+        # Run E1's background hello (the deferred task factory).
+        runner.run_next()
+        # First delivery: E2's on_result is called with E1's hello → commits E2's address.
+        deliveries[0]()
+
+        record = window._cluster_state.record("peer-a")
+        assert record is not None
+        self.assertEqual(record.host, "10.0.0.5")
+        self.assertEqual(record.port, 7000)
+
+        # A rerun of E2 is triggered by the coordinator after E1 completes.
+        # _finish_endpoint_verify discards it because the gen token was consumed.
+        if runner.pending > 0:
+            runner.run_next()
+        while deliveries:
+            deliveries.pop(0)()
+        # E2's address is still committed; the rerun is discarded (gen consumed).
+        record = window._cluster_state.record("peer-a")
+        assert record is not None
+        self.assertEqual(record.host, "10.0.0.5")
+        self.assertEqual(record.port, 7000)
+
+    def test_endpoint_verify_revoke_in_flight_discards_result(self) -> None:
+        """If trust is revoked while hello is in flight, the commit must no-op."""
+        runner = DeferredRunner()
+        deliveries: list[Any] = []
+        window = self._make_verify_window()
+        window._coordinator = AppCoordinator(runner=runner, deliver=deliveries.append)
+        provider = Mock()
+        provider.hello.return_value = {
+            "node_id": "peer-a",
+            "identity_fingerprint": node_identity_fingerprint("peer-a"),
+        }
+        candidate = DiscoveredNodeCandidate(
+            stable_id="peer-a",
+            hostname="new-host",
+            addresses=("192.168.1.20",),
+            port=6000,
+            service_name="peer-a._system-analyzer._tcp.local.",
+            app_version="1.0.0.0",
+            protocol_version="1",
+            platform="Linux",
+            connectable=False,
+            compatible=True,
+            last_seen=1.0,
+        )
+        with patch("window.AuthenticatedNodeProvider", return_value=provider):
+            window._on_discovered_candidate(candidate)
+
+        runner.run_next()
+        # Revoke trust before delivery fires.
+        window._cluster_state = ClusterState()  # no trusted nodes
+        deliveries[0]()
+
+        # After revoke, commit should be a no-op — state stays empty.
+        self.assertIsNone(window._cluster_state.record("peer-a"))
+
+    # ------------------------------------------------------------------ #
+    # _pair_discovered_node always-async test                             #
+    # ------------------------------------------------------------------ #
+
+    def test_pair_discovered_node_always_dispatches_async(self) -> None:
+        """_pair_discovered_node with no _pairing_dialog must still go
+        through coordinator.run and never block Tk for provisioning."""
+        window = _make_window(start_discovery=False)
+        window._cluster_state = ClusterState()
+        window._cluster_store = Mock()
+        window._cluster_store.save = Mock(return_value=True)
+        # Explicitly no dialog set.
+        self.assertIsNone(window.__dict__.get("_pairing_dialog"))
+        runner = DeferredRunner()
+        deliveries: list[Any] = []
+        window._coordinator = AppCoordinator(runner=runner, deliver=deliveries.append)
+        provision = Mock(return_value=True)
+        window._provision_target_grant = provision
+        window._node_registry.update_discovered(
+            _candidate("peer-a", node_identity_fingerprint("peer-a"))
+        )
+        with patch("window.messagebox.askyesno", return_value=True):
+            window._pair_discovered_node("peer-a")
+
+        # Provisioning must have been dispatched to background, not run inline.
+        provision.assert_not_called()
+        self.assertEqual(runner.pending, 1)
+
+        runner.run_next()
+        deliveries[0]()
+
+        provision.assert_called_once()
+        self.assertIsNotNone(window._cluster_state.record("peer-a"))

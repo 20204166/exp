@@ -2272,3 +2272,129 @@ A future product feature that performs heavy computation over already-normalized
 
 This phase changed documentation only.
 
+---
+
+## §63 — Phase 10: Remote UI / Network Threading Hardening
+
+**Commit:** (pending)
+**Status:** COMPLETED
+
+### Problem statement
+
+Three confirmed threading defects existed before Phase 10:
+
+1. **`handle_elevation_request`** (in `maintenance/ui/window_discovery.py`) called `messagebox.askyesno` directly on the server handler thread — violating the invariant that Tk widgets and dialogs are only touched from the main Tk thread.
+
+2. **`sync_trusted_node_endpoint`** (same file) called `provider.hello()` — a synchronous network call — on the Tk thread, blocking the event loop while waiting for a remote peer to respond.
+
+3. **`_pair_discovered_node`** (in `window.py`) fell back to the synchronous `pair_discovered_node` when no `_pairing_dialog` was set, blocking Tk for the entire provisioning round-trip.
+
+### Core principle (unchanged)
+
+> TK OWNS PRESENTATION. BACKGROUND WORKERS MAY WAIT ON NETWORKS. SERVER THREADS MAY VERIFY REQUESTS. NONE OF THEM MAY DIRECTLY MUTATE TK. MOVE THE WAIT. DO NOT MOVE THE SECURITY SEMANTICS.
+
+### Fix 1 — `handle_elevation_request`: elevation dialog marshaled to Tk
+
+**Before:** `messagebox.askyesno(...)` was called directly on the `RemoteSocketServer` handler thread.
+
+**After:** The dialog is marshaled through `controller._submit_ui(ask_on_ui)` with a `completed.wait(60.0)` synchronization barrier, identical to the pattern already used by `handle_pairing_request`. The server handler thread blocks on `completed` until the Tk thread runs the callback and sets the event.
+
+An `_elevation_lock` (a `threading.Lock` stored on the controller's `__dict__`) prevents concurrent elevation dialogs. The second concurrent request fails immediately with `False` (non-blocking `acquire`). This is fail-closed: a flood of elevation requests does not produce a flood of dialogs.
+
+**Security semantics preserved:** HMAC secret verification and grant lookup still happen on the server handler thread before the lock is acquired and before any UI interaction.
+
+**Reference implementation:** `handle_pairing_request` in `maintenance/ui/window_discovery.py` (lines 401–500) — same `_submit_ui` + `completed.wait` pattern.
+
+**Evidence:**
+- `maintenance/ui/window_discovery.py` — `handle_elevation_request` (lines 623–678)
+- `tests/test_window_nodes.py::Phase10ThreadingTests::test_elevation_messagebox_runs_via_submit_ui_not_directly`
+- `tests/test_window_nodes.py::Phase10ThreadingTests::test_elevation_deny_returns_false`
+- `tests/test_window_nodes.py::Phase10ThreadingTests::test_elevation_wrong_secret_returns_false`
+- `tests/test_window_nodes.py::Phase10ThreadingTests::test_elevation_concurrent_second_request_rejected`
+
+### Fix 2 — `sync_trusted_node_endpoint`: hello moved to background
+
+**Before:** `provider.hello()` (a synchronous network call) ran on the Tk thread, blocking it until the remote peer responded.
+
+**After:** `sync_trusted_node_endpoint` is split into two phases:
+
+**Phase A (synchronous, runs on Tk):**
+- Registry/state existence checks
+- Fingerprint mismatch detection (identity and TLS) — cheap string comparisons; fail-closed security checks stay synchronous
+- Provider construction (object creation, no network call)
+- Generation token assignment (`_endpoint_verify_gen[node_id] = gen`)
+- `coordinator.run(node_operation_key(node_id, "endpoint_verify"), _task, on_result=..., on_error=...)` — schedules the hello
+- Returns `False` immediately
+
+**Phase B (background + delivery, runs off Tk):**
+- `_task(cancel_event, progress)` calls `provider.hello()` off-thread
+- `_finish_endpoint_verify(...)` is delivered on the Tk thread via `coordinator.deliver`
+- `_finish_endpoint_verify` re-checks trust validity (may have been revoked in flight), validates the hello response, and commits the updated trust record if everything matches
+
+**Stale-result protection:**
+- A generation token is stored per node in `controller.__dict__.setdefault("_endpoint_verify_gen", {})`
+- Each call to `sync_trusted_node_endpoint` stamps a new `gen = object()` and writes it to `verify_gen[node_id]`
+- `_finish_endpoint_verify` checks `verify_gen.get(node_id) is gen`; if the token has been replaced (a newer candidate arrived), the result is silently discarded
+- The coordinator's own coalescing behavior handles concurrent in-flight requests for the same node: the second `coordinator.run` call coalesces into the first, replacing `state.on_result` with the newer callback (carrying the newer gen token)
+
+**Race documented in tests:**
+- E1 in-flight → E2 coalesces → E2's `on_result` (with E2's gen) is called with E1's hello → commits E2's address → correct
+- Trust revoked in-flight → `_finish_endpoint_verify` finds no record → discards → correct
+
+**Evidence:**
+- `maintenance/ui/window_discovery.py` — `sync_trusted_node_endpoint` + `_finish_endpoint_verify`
+- `tests/test_window_nodes.py::Phase10ThreadingTests::test_endpoint_verify_does_not_block_tk`
+- `tests/test_window_nodes.py::Phase10ThreadingTests::test_endpoint_verify_stale_e1_does_not_overwrite_e2`
+- `tests/test_window_nodes.py::Phase10ThreadingTests::test_endpoint_verify_revoke_in_flight_discards_result`
+- Updated: `test_trusted_rediscovery_updates_saved_endpoint_after_hello`, `test_legacy_trusted_rediscovery_hydrates_live_fingerprint`, `test_trusted_rediscovery_rejects_identity_mismatch`, `test_confirmed_mismatch_repair_replaces_trust_record`
+
+### Fix 3 — `_pair_discovered_node`: sync fallback removed
+
+**Before:** When `_pairing_dialog` was `None`, `_pair_discovered_node` called the synchronous `pair_discovered_node` (which provisioned synchronously, blocking Tk for the full network round-trip to the target).
+
+**After:** `_pair_discovered_node` always calls `pair_discovered_node_async` regardless of whether a dialog is set. `dialog=None` is a valid argument; the async path handles it correctly (no `dialog.set_pending()` / `dialog.complete()` calls when `dialog` is `None`).
+
+The `_prepare_pairing` synchronous phase (fingerprint confirmation dialog on Tk, `begin_pairing`, `promote_to_trusted`) is unchanged — it still runs on Tk. Only the target-side provisioning network call is dispatched to background via `coordinator.run`.
+
+**Evidence:**
+- `window.py` — `_pair_discovered_node` (lines 702–710)
+- `tests/test_window_nodes.py::Phase10ThreadingTests::test_pair_discovered_node_always_dispatches_async`
+- Updated: `test_confirmed_mismatch_repair_replaces_trust_record` (uses DeferredRunner)
+
+### AppCoordinator / BackgroundOrchestrator threading model
+
+| Mechanism | Purpose | Thread |
+|---|---|---|
+| `coordinator.run(key, task, on_result=..., on_error=...)` | Dispatch background work; deliver result to Tk | Worker off-thread; result on Tk via `deliver` |
+| `coordinator.deliver` / `_submit_ui` | Marshal callback to Tk thread queue | Called from any thread; callback runs on Tk |
+| `completed.wait(timeout)` | Server handler thread waits for Tk to finish dialog | Server thread; Tk sets event via `completed.set()` |
+| `_elevation_lock` | Serialize concurrent elevation dialogs | Server handler thread; non-blocking acquire |
+| `_endpoint_verify_gen` | Discard stale late-arriving endpoint hellos | Generation token compared in Tk-thread delivery callback |
+| `_pairing_generations` | Discard stale late-arriving pairing completions | Same pattern, pre-existing Phase 10 |
+
+### Cancellation / stale-result rules
+
+- **Endpoint verify**: generation token consumed on first delivery; rerun after coalescing is discarded (gen already gone)
+- **Elevation**: `completed.wait(60.0)` timeout fails closed (returns `False`); `_elevation_lock` is always released in `finally`
+- **Pairing**: pre-existing `_pairing_generations` + `_pairing_attempts` generation/attempt matching (unchanged)
+- **Revoke**: clears `_pairing_attempts[node]` and increments pairing generation, causing any in-flight delivery to discard
+
+### Remaining limitation: lost-response pairing ambiguity (unchanged)
+
+Phase 10 does NOT solve the distributed transaction problem for pairing. If the initiator sends the `request_grant` RPC and the target provisions the grant but the response is lost, the initiator sees an error and may roll back while the target has persisted the grant. This race is documented in `maintenance/ui/window_node_actions_impl/pairing.py` and has not been addressed.
+
+No MOVABLE workload exists; no Worker queue or job distribution mechanism was created. All MOVABLE infrastructure remains dormant per Phase 9 decision.
+
+### No new thread pools
+
+No new `ThreadPoolExecutor`, `PairingExecutor`, `ElevationThread`, or `EndpointVerificationPool` was created. All background work uses the existing `AppCoordinator` runner.
+
+### Status matrix update
+
+| Entry | Previous status | New status |
+|---|---|---|
+| Elevation threading | `BROKEN` (messagebox on server thread) | `VERIFIED CURRENT` — marshaled via `_submit_ui` |
+| Endpoint re-verification | `BROKEN` (hello on Tk thread) | `VERIFIED CURRENT` — hello via `coordinator.run`, stale-result protection via gen tokens |
+| Pairing initiator threading (no dialog) | `BROKEN` (sync fallback) | `VERIFIED CURRENT` — always async |
+| Pairing initiator threading (with dialog) | `VERIFIED CURRENT` (pre-existing) | `VERIFIED CURRENT` (unchanged) |
+

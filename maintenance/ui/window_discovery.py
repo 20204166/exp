@@ -28,6 +28,7 @@ from maintenance.nodes import (
     NodeIdentityStatus,
     NodePermission,
     NodeStatus,
+    node_operation_key,
 )
 from maintenance.remote import (
     AuthenticatedNodeProvider,
@@ -622,36 +623,59 @@ def handle_pairing_abort(controller: Any, request: PairingControlRequest) -> boo
 def handle_elevation_request(
     controller: Any, request: CapabilityElevationRequest
 ) -> bool:
-    """Approve a paired caller's ACL widening at the target UI boundary."""
+    """Approve a paired caller's ACL widening at the target UI boundary.
+
+    Called from the server handler thread.  The messagebox is marshaled through
+    ``_submit_ui`` (identical pattern to ``handle_pairing_request``) so Tk is
+    never touched from the server thread.  A serialization lock prevents a
+    flood of concurrent elevation dialogs.
+    """
 
     prior = controller._cluster_state.grant(request.caller_node_id.value)
     if prior is None or not hmac.compare_digest(prior.secret, request.current_secret):
         return False
-    window = _window_symbols()
-    approved = window.messagebox.askyesno(
-        "Approve permission elevation",
-        (
-            f"Allow {request.caller_node_id.value} additional access?\n\n"
-            f"Requested permissions: {', '.join(sorted(p.value for p in request.permissions))}"
-        ),
-        parent=controller.master,
+    elevation_lock = controller.__dict__.setdefault(
+        "_elevation_lock", threading.Lock()
     )
-    if not approved:
+    if not elevation_lock.acquire(blocking=False):
         return False
-    current = controller._cluster_state
-    updated = replace(
-        current,
-        peer_grants=tuple(
-            replace(
-                grant,
-                permissions=request.permissions,
+    result: dict[str, bool] = {"approved": False}
+    completed = threading.Event()
+
+    def ask_on_ui() -> None:
+        try:
+            window = _window_symbols()
+            approved = window.messagebox.askyesno(
+                "Approve permission elevation",
+                (
+                    f"Allow {request.caller_node_id.value} additional access?\n\n"
+                    f"Requested permissions: "
+                    f"{', '.join(sorted(p.value for p in request.permissions))}"
+                ),
+                parent=controller.master,
             )
-            if grant.caller_node_id == request.caller_node_id.value
-            else grant
-            for grant in current.peer_grants
-        ),
-    )
-    return controller._save_cluster_state(updated)
+            if not approved:
+                return
+            current = controller._cluster_state
+            updated = replace(
+                current,
+                peer_grants=tuple(
+                    replace(grant, permissions=request.permissions)
+                    if grant.caller_node_id == request.caller_node_id.value
+                    else grant
+                    for grant in current.peer_grants
+                ),
+            )
+            result["approved"] = controller._save_cluster_state(updated)
+        finally:
+            completed.set()
+
+    try:
+        controller._submit_ui(ask_on_ui)
+        completed.wait(60.0)
+        return result["approved"]
+    finally:
+        elevation_lock.release()
 
 
 def handle_trust_revoke(controller: Any, caller: NodeId) -> dict[str, Any]:
@@ -1140,6 +1164,22 @@ def queue_discovery_presentation(controller: Any, trusted_involved: bool) -> Non
 
 
 def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
+    """Schedule async endpoint verification for a trusted peer; never blocks Tk.
+
+    The cheap fingerprint checks run synchronously on the calling (Tk) thread.
+    If a ``hello()`` network call is required, it is dispatched via
+    ``coordinator.run()`` and the result is committed on the Tk thread through
+    the coordinator delivery path.
+
+    Returns ``False`` immediately; the actual state update (if any) arrives
+    asynchronously via ``_finish_endpoint_verify``.
+
+    **Stale-result protection**: a generation token is stored under
+    ``_endpoint_verify_gen[node_id]``.  A later candidate for the same node
+    replaces the token before the earlier task completes, causing the earlier
+    result to be discarded in ``_finish_endpoint_verify``.
+    """
+
     registry = controller.__dict__.get("_node_registry")
     state = controller.__dict__.get("_cluster_state")
     if registry is None or state is None:
@@ -1200,6 +1240,8 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
         return False
     if port is None:
         return False
+
+    # Build the provider (cheap — no network call yet).
     window = _window_symbols()
     try:
         provider = window.AuthenticatedNodeProvider(
@@ -1212,7 +1254,102 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
                 else window.SocketRemoteTransport(address, port)
             ),
         )
-        hello = provider.hello()
+    except Exception:  # noqa: BLE001 - provider construction failure means no update.
+        return False
+
+    # Stamp a generation token so a later candidate supersedes this attempt.
+    node_id = NodeId(candidate.stable_id)
+    verify_gen: dict[NodeId, object] = controller.__dict__.setdefault(
+        "_endpoint_verify_gen", {}
+    )
+    gen = object()
+    verify_gen[node_id] = gen
+
+    # Snapshot the fields needed by the commit callback (immutable).
+    snap_address = address
+    snap_port = port
+    snap_needs_hydration = needs_identity_hydration
+    snap_needs_recovery = needs_identity_recovery
+    snap_descriptor = descriptor
+    snap_record = record
+    snap_candidate_fingerprint = candidate.identity_fingerprint
+
+    key = node_operation_key(node_id, "endpoint_verify")
+
+    def _task(
+        cancel_event: threading.Event, _progress: Any
+    ) -> Any:
+        return provider.hello()
+
+    def _on_result(_key: str, hello: Any) -> None:
+        _finish_endpoint_verify(
+            controller,
+            node_id,
+            gen,
+            hello=hello,
+            address=snap_address,
+            port=snap_port,
+            needs_identity_hydration=snap_needs_hydration,
+            needs_identity_recovery=snap_needs_recovery,
+            descriptor=snap_descriptor,
+            record=snap_record,
+            candidate_fingerprint=snap_candidate_fingerprint,
+        )
+
+    def _on_error(_key: str, _message: str) -> None:
+        if controller.__dict__.get("_endpoint_verify_gen", {}).get(node_id) is gen:
+            controller.__dict__.get("_endpoint_verify_gen", {}).pop(node_id, None)
+        LOGGER.info(
+            "Trusted node %s could not be verified at %s:%s",
+            node_id,
+            snap_address,
+            snap_port,
+        )
+
+    coordinator = controller.__dict__.get("_coordinator")
+    if coordinator is None:
+        return False
+    coordinator.run(key, _task, on_result=_on_result, on_error=_on_error)
+    return False  # update arrives asynchronously
+
+
+def _finish_endpoint_verify(
+    controller: Any,
+    node_id: NodeId,
+    gen: object,
+    *,
+    hello: Any,
+    address: str,
+    port: int,
+    needs_identity_hydration: bool,
+    needs_identity_recovery: bool,
+    descriptor: Any,
+    record: Any,
+    candidate_fingerprint: str | None,
+) -> None:
+    """Commit a successful endpoint hello result onto the Tk thread.
+
+    Discards the result when the generation token has been superseded (a newer
+    candidate arrived) or when trust was revoked while the hello was in flight.
+    """
+
+    verify_gen = controller.__dict__.get("_endpoint_verify_gen", {})
+    if verify_gen.get(node_id) is not gen:
+        return  # superseded by a newer candidate
+    verify_gen.pop(node_id, None)
+
+    # Re-check trust is still valid (may have been revoked in flight).
+    state = controller.__dict__.get("_cluster_state")
+    if state is None:
+        return
+    current_record = state.record(node_id.value)
+    if current_record is None:
+        return  # revoked
+
+    registry = controller.__dict__.get("_node_registry")
+
+    # Validate hello response.
+    try:
         if not isinstance(hello, dict):
             raise TypeError("authenticated peer returned invalid hello metadata")
         if hello.get("node_id") != descriptor.id.value:
@@ -1220,8 +1357,9 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
         actual_fingerprint = hello.get("identity_fingerprint")
         if not isinstance(actual_fingerprint, str) or not actual_fingerprint:
             raise RuntimeError("authenticated peer returned no identity fingerprint")
-        if record.identity_fingerprint is not None and actual_fingerprint != (
-            record.identity_fingerprint
+        if (
+            record.identity_fingerprint is not None
+            and actual_fingerprint != record.identity_fingerprint
         ):
             raise RuntimeError("authenticated peer identity fingerprint changed")
     except Exception as error:  # noqa: BLE001 - failed verification means no update.
@@ -1232,7 +1370,8 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
             port,
             error,
         )
-        return False
+        return
+
     display_name = record.display_name
     if display_name == record.hostname:
         display_name = descriptor.display_name
@@ -1244,17 +1383,14 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
         port=port,
         platform=descriptor.platform,
         identity_fingerprint=(
-            candidate.identity_fingerprint
-            if needs_identity_hydration
-            else record.identity_fingerprint
+            candidate_fingerprint if needs_identity_hydration else record.identity_fingerprint
         ),
         transport_fingerprint=record.transport_fingerprint,
     )
     if updated_record == record:
-        if needs_identity_recovery:
-            registry.confirm_identity(descriptor.id, candidate.identity_fingerprint)
-            return True
-        return False
+        if needs_identity_recovery and registry is not None:
+            registry.confirm_identity(descriptor.id, candidate_fingerprint)
+        return
     updated_records = tuple(
         updated_record if item.node_id == record.node_id else item
         for item in state.trusted_nodes
@@ -1262,10 +1398,10 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
     updated_state = replace(state, trusted_nodes=updated_records)
     if not controller._save_cluster_state(updated_state):
         controller._nodes_error("Cluster settings could not be saved")
-        return False
-    if needs_identity_hydration or needs_identity_recovery:
-        registry.confirm_identity(descriptor.id, candidate.identity_fingerprint)
-    return True
+        return
+    if (needs_identity_hydration or needs_identity_recovery) and registry is not None:
+        registry.confirm_identity(descriptor.id, candidate_fingerprint)
+    controller._nodes_status(f"Verified {descriptor.display_name} at a new address")
 
 
 def refresh_discovery_status(controller: Any) -> None:
