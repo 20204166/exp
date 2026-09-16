@@ -867,9 +867,9 @@ def detach_peer(controller: Any, context: NodeContext) -> None:
     context.scheduler = None
     context.coordinator = None
     context.descriptor = replace(context.descriptor, status=NodeStatus.OFFLINE)
-    shares = controller.__dict__.get("_dashboard_shares")
+    shares = controller.__dict__.get("_peer_dashboard_shares")
     if shares is not None:
-        shares.pop(context.node_id, None)
+        shares.pop(context.node_id.value, None)
     service = controller.__dict__.get("_peer_service")
     if service is not None:
         service.clear_dashboard_share(context.node_id)

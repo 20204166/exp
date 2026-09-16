@@ -187,7 +187,7 @@ def build_nodes(controller: Any, parent: Any) -> Any:
             on_open_connection=controller._open_connection_dialog,
             on_open_pairing=controller._open_pairing_dialog,
             on_details=controller._open_node_details_dialog,
-            on_share_dashboard=controller._share_dashboard,
+            on_share_dashboard=controller._share_dashboard_with_coordinator,
         ),
         discovery_enabled=controller._cluster_state.discovery_enabled,
         discovered=controller._nodes_peer_specs(),

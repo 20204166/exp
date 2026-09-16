@@ -375,12 +375,14 @@ class NodesConnectionsPage:
             remaining = max(0, spec.dashboard_share_expires_at - _time.time())
             minutes = int(remaining) // 60
             seconds = int(remaining) % 60
+            coord_name = spec.coordinator_display_name or spec.coordinator_node_id or "coordinator"
             share_text = (
-                f"Dashboard sharing: Active · expires in {minutes}:{seconds:02d}"
+                f"Dashboard sharing: Shared with {coord_name}"
+                f" · expires in {minutes}:{seconds:02d}"
             )
         elif not spec.has_peer_grants and spec.joined:
             share_text = (
-                "Dashboard sharing: Off · no peer can receive this share"
+                "Dashboard sharing: Off · Coordinator cannot view yet"
                 " (pair in the other direction first)"
             )
         else:

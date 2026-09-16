@@ -429,9 +429,10 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
 
         with self.assertRaises(RemoteAuthorizationError):
             viewer.dashboard_snapshot()
-        viewer.start_dashboard_share(expires_at=101.0)
+        # Target owner activates share via local service method (not a wire op)
+        service.start_dashboard_share_for(NodeId("viewer"), expires_at=now[0] + 300.0)
         self.assertEqual(viewer.dashboard_snapshot().system_label, "peer-host")
-        viewer.stop_dashboard_share()
+        service.clear_dashboard_share(NodeId("viewer"))
         with self.assertRaises(RemoteAuthorizationError):
             viewer.dashboard_snapshot()
 
@@ -1561,6 +1562,186 @@ class RealSocketRoleRpcTests(unittest.TestCase):
         self.assertEqual(result_pause, {"ok": True})
         self.assertEqual(result_resume, {"ok": True})
         self.assertEqual(ops, ["pause_worker", "resume_worker"])
+
+
+def _dashboard_share_service(
+    *,
+    secret: str = SECRET,
+    caller_a_id: str = "caller-a",
+    caller_c_id: str = "caller-c",
+    clock: Any = None,
+) -> RemoteService:
+    """RemoteService with two peer grants and require_dashboard_share=True."""
+    return RemoteService(
+        node_id=NodeId("target-b"),
+        display_name="Target B",
+        hostname="target-b-host",
+        platform="Linux",
+        status=NodeStatus.ONLINE,
+        capabilities=READ_CAPABILITIES,
+        provider=FakeProvider(),
+        secret=secret,
+        clock=clock or time.time,
+        grants={
+            NodeId(caller_a_id): PeerGrant(
+                NodeId(caller_a_id), secret, frozenset(READ_PERMISSIONS)
+            ),
+            NodeId(caller_c_id): PeerGrant(
+                NodeId(caller_c_id), secret, frozenset(READ_PERMISSIONS)
+            ),
+        },
+        require_dashboard_share=True,
+    )
+
+
+class RealSocketDashboardShareTests(unittest.TestCase):
+    """Per-peer dashboard share semantics over a real loopback TLS socket.
+
+    These tests prove that sharing with A does not expose B's dashboard to C,
+    that stopping A's share does not affect C, and that the wire ops
+    start_dashboard_share / stop_dashboard_share are no longer accepted.
+    """
+
+    def _provider(
+        self,
+        port: int,
+        *,
+        caller_node_id: str,
+        secret: str = SECRET,
+    ) -> AuthenticatedNodeProvider:
+        return AuthenticatedNodeProvider(
+            node_id=NodeId("target-b"),
+            caller_node_id=NodeId(caller_node_id),
+            secret=secret,
+            transport=SocketRemoteTransport("127.0.0.1", port, timeout=5),
+        )
+
+    def test_share_with_a_does_not_expose_to_c(self) -> None:
+        """B shares with A only; C is still denied."""
+        service = _dashboard_share_service()
+        server = RemoteSocketServer(service)
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        provider_a = self._provider(port, caller_node_id="caller-a")
+        provider_c = self._provider(port, caller_node_id="caller-c")
+
+        # Neither has access before share
+        with self.assertRaises(RemoteAuthorizationError):
+            provider_a.dashboard_snapshot()
+        with self.assertRaises(RemoteAuthorizationError):
+            provider_c.dashboard_snapshot()
+
+        # B (owner) grants A via local method
+        service.start_dashboard_share_for(NodeId("caller-a"), expires_at=time.time() + 300.0)
+
+        self.assertEqual(provider_a.dashboard_snapshot().system_label, "peer-host")
+        # C still denied
+        with self.assertRaises(RemoteAuthorizationError):
+            provider_c.dashboard_snapshot()
+
+    def test_stop_a_does_not_affect_c(self) -> None:
+        """B shares with both A and C; stopping A does not revoke C."""
+        service = _dashboard_share_service()
+        server = RemoteSocketServer(service)
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        provider_a = self._provider(port, caller_node_id="caller-a")
+        provider_c = self._provider(port, caller_node_id="caller-c")
+
+        now_ts = time.time()
+        service.start_dashboard_share_for(NodeId("caller-a"), expires_at=now_ts + 300.0)
+        service.start_dashboard_share_for(NodeId("caller-c"), expires_at=now_ts + 300.0)
+
+        self.assertEqual(provider_a.dashboard_snapshot().system_label, "peer-host")
+        self.assertEqual(provider_c.dashboard_snapshot().system_label, "peer-host")
+
+        # Stop only A
+        service.clear_dashboard_share(NodeId("caller-a"))
+
+        with self.assertRaises(RemoteAuthorizationError):
+            provider_a.dashboard_snapshot()
+        # C still has access
+        self.assertEqual(provider_c.dashboard_snapshot().system_label, "peer-host")
+
+    def test_wire_op_start_dashboard_share_rejected(self) -> None:
+        """start_dashboard_share wire op is no longer in the protocol."""
+        from maintenance.remote_support.protocol import (
+            OP_REQUIRED_PERMISSION,
+            validate_operation_params,
+        )
+        self.assertNotIn("start_dashboard_share", OP_REQUIRED_PERMISSION)
+        self.assertNotIn("stop_dashboard_share", OP_REQUIRED_PERMISSION)
+
+    def test_share_expiry_per_caller(self) -> None:
+        """A share expires; C's share remains valid."""
+        now = [100.0]
+        service = _dashboard_share_service(clock=lambda: now[0])
+        viewer_a = AuthenticatedNodeProvider(
+            node_id=NodeId("target-b"),
+            caller_node_id=NodeId("caller-a"),
+            secret=SECRET,
+            transport=MemoryRemoteTransport(service),
+            clock=lambda: now[0],
+        )
+        viewer_c = AuthenticatedNodeProvider(
+            node_id=NodeId("target-b"),
+            caller_node_id=NodeId("caller-c"),
+            secret=SECRET,
+            transport=MemoryRemoteTransport(service),
+            clock=lambda: now[0],
+        )
+
+        # A expires in 50 s, C expires in 400 s
+        service.start_dashboard_share_for(NodeId("caller-a"), expires_at=now[0] + 50.0)
+        service.start_dashboard_share_for(NodeId("caller-c"), expires_at=now[0] + 400.0)
+
+        self.assertEqual(viewer_a.dashboard_snapshot().system_label, "peer-host")
+        self.assertEqual(viewer_c.dashboard_snapshot().system_label, "peer-host")
+
+        # Advance clock past A's expiry but not C's
+        now[0] = 160.0
+
+        with self.assertRaises(RemoteAuthorizationError):
+            viewer_a.dashboard_snapshot()
+        self.assertEqual(viewer_c.dashboard_snapshot().system_label, "peer-host")
+
+    def test_permission_required_even_with_active_share(self) -> None:
+        """A has an active share but lacks DASHBOARD_READ — must be denied."""
+        service = RemoteService(
+            node_id=NodeId("target-b"),
+            display_name="Target B",
+            hostname="target-b-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=READ_CAPABILITIES,
+            provider=FakeProvider(),
+            secret=SECRET,
+            grants={
+                NodeId("no-perm-caller"): PeerGrant(
+                    NodeId("no-perm-caller"),
+                    SECRET,
+                    frozenset(),  # no DASHBOARD_READ
+                )
+            },
+            require_dashboard_share=True,
+        )
+        server = RemoteSocketServer(service)
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        service.start_dashboard_share_for(NodeId("no-perm-caller"), expires_at=time.time() + 300.0)
+
+        provider = self._provider(port, caller_node_id="no-perm-caller")
+        with self.assertRaises((RemoteAuthorizationError, RemoteAuthError)):
+            provider.dashboard_snapshot()
 
 
 def _trust_revoke_service(

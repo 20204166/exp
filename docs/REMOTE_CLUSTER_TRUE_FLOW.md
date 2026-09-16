@@ -1656,15 +1656,15 @@ After a machine joined a cluster as Worker or Subcoordinator, the Nodes & Connec
 | `coordinator_node_id` | `coordinator_epoch.coordinator_id` |
 | `coordinator_display_name` | `NodeRegistry.context(coordinator_id).descriptor.display_name`; falls back to `TrustedNodeRecord.display_name` |
 | `coordinator_status` | `NodeRegistry.context(coordinator_id).descriptor.status.value` |
-| `dashboard_share_active` | `_dashboard_share_expires_at > now` |
-| `dashboard_share_expires_at` | `controller._dashboard_share_expires_at` |
+| `dashboard_share_active` | coordinator's entry in `_peer_dashboard_shares` > now |
+| `dashboard_share_expires_at` | `_peer_dashboard_shares[coordinator_id]` (0.0 if absent) |
 | `has_peer_grants` | `bool(cluster_state.peer_grants)` |
 
 **Cluster membership section** — new section in `NodesConnectionsPage`, inserted before the trusted-node list, shown when `joined=True` (Worker/Subcoordinator) or when a Coordinator has enrolled members. Displays:
 
 - `Role: {role} · Coordinator: {name} · {status}`
 - Dashboard sharing state with countdown when active
-- "Share My Dashboard" / "Stop Sharing" button wired to the existing `_share_dashboard` handler
+- "Share My Dashboard" / "Stop Sharing" button wired to `_share_dashboard_with_coordinator` (per-peer, coordinator-specific)
 
 **`on_share_dashboard`** added to `NodesConnectionsCallbacks` (optional, `None` default — backward compatible).
 
@@ -1676,7 +1676,7 @@ After a machine joined a cluster as Worker or Subcoordinator, the Nodes & Connec
 
 **`refresh_cluster_membership(spec)`** called from `refresh_nodes()` in `window_pages.py` — updates the section on every node-page refresh.
 
-**`_expire_dashboard_share` and `_share_dashboard`** in `window.py` — both now also call `_refresh_nodes_page()` so the button label and countdown update immediately when sharing starts or expires.
+**`_expire_dashboard_shares`, `_share_dashboard`, `_share_dashboard_with`, `_stop_sharing_with`, `_share_dashboard_with_coordinator`, `_reschedule_dashboard_share_timer`** in `window.py` — per-peer share management. `_share_dashboard` (All Systems) iterates all peer grants; `_share_dashboard_with_coordinator` (Nodes & Connections) targets only the coordinator.
 
 ---
 
@@ -1697,18 +1697,34 @@ For the Coordinator to read a Worker's dashboard, a SEPARATE `Pair(Coordinator�
 `_apply_cluster_join` deliberately does not manufacture this reverse trust. Join is membership; Pair is trust. They remain two separate explicit user actions.
 
 When the reverse trust is absent, the cluster membership section shows:
-> "Dashboard sharing: Off · no peer can receive this share (pair in the other direction first)"
+> "Dashboard sharing: Off · Coordinator cannot view yet (pair in the other direction first)"
 
 ---
 
-### Dashboard share scope: GLOBAL (unchanged)
+### Dashboard share scope: PER-PEER
 
-`_share_dashboard` iterates ALL `cluster_state.peer_grants` and calls `service.start_dashboard_share_for(NodeId(grant.caller_node_id), ...)` for each one. Sharing enables access for every currently authenticated peer simultaneously — not per-peer.
+`RemoteService._dashboard_shares: dict[NodeId, float]` stores one expiry per caller. The target owner controls this dict; remote callers cannot modify it.
+
+**Wire ops removed (Phase 5):** `start_dashboard_share` and `stop_dashboard_share` have been removed from `OP_REQUIRED_CAPABILITY` and the `RemoteService` handler. Previously these allowed a remote caller to add themselves to the target's `_dashboard_shares` — the opposite of target-owner consent. All share activation is now strictly local:
+
+| Method | Who calls it | Effect |
+|---|---|---|
+| `service.start_dashboard_share_for(caller_id, expires_at)` | Target owner (local) | Adds one entry |
+| `service.clear_dashboard_share(caller_id)` | Target owner (local) | Removes one entry |
+| `service.stop_dashboard_shares()` | Target owner (local) | Clears all entries |
+
+**Controller state:** The single `_dashboard_share_expires_at: float` is replaced by `_peer_dashboard_shares: dict[str, float]` (string caller_node_id → expiry). One Tk timer fires at the nearest expiry and removes only the expired entries.
+
+**Two sharing paths:**
+- `_share_dashboard()` (All Systems "Share dashboard" button) — adds ALL current peer grants individually with the same 5-minute expiry; toggle: if any is active, stops all.
+- `_share_dashboard_with_coordinator()` (Nodes & Connections membership section) — targets only the coordinator from `coordinator_epoch`; toggle: if coordinator's share is active, stops it, otherwise starts it.
+
+**Stop A, C unaffected:** `clear_dashboard_share(a_id)` removes only A's entry; C's expiry is untouched.
 
 Implications:
-- If `Pair(Coordinator→Worker)` was done, `peer_grants` on the Worker contains the Coordinator's entry; "Share My Dashboard" makes the Worker's dashboard accessible to the Coordinator.
-- If only `Pair(Worker→Coordinator)` was done, `peer_grants` is empty on the Worker; "Share My Dashboard" activates the timer but grants no actual access (no one is in `_dashboard_shares`).
-- Share state is runtime-only. App restart resets it to OFF.
+- If `Pair(Coordinator→Worker)` was done, the Coordinator entry is in `peer_grants` on the Worker; both sharing paths can grant the Coordinator access.
+- If only `Pair(Worker→Coordinator)` was done, `peer_grants` is empty; the UI shows "pair in the other direction first".
+- Share state is runtime-only. App restart resets `_peer_dashboard_shares` to `{}`.
 
 ---
 
@@ -1720,7 +1736,7 @@ Implications:
 | Active target-side share still required | ✓ `_require_dashboard_share=True` gate in `RemoteService` unchanged |
 | Cluster role does not bypass auth | ✓ Role labels are presentation-only; `RemoteService` checks `PeerGrant.permissions` |
 | No fake `PeerGrantRecord` created | ✓ `_apply_cluster_join` unchanged; no reverse-trust manufacture |
-| Share off after restart | ✓ `_dashboard_share_expires_at` is not persisted |
+| Share off after restart | ✓ `_peer_dashboard_shares` is not persisted |
 | Revoke defeats share immediately | ✓ `handle_trust_revoke` calls `service.update_grants()`, removing the grant; the check in `RemoteService.handle()` fails before the share check is reached |
 | Remove Connection ≠ Revoke | ✓ `remove_connection_node` does not touch `peer_grants`; share state persists until expiry |
 

@@ -64,8 +64,6 @@ OP_REQUIRED_CAPABILITY: dict[str, NodeCapability] = {
     "grant_capabilities": NodeCapability.REMOTE_MANAGEMENT,
     "revoke_capabilities": NodeCapability.REMOTE_MANAGEMENT,
     "sync_capability_grant": NodeCapability.REMOTE_MANAGEMENT,
-    "start_dashboard_share": NodeCapability.DASHBOARD_READ,
-    "stop_dashboard_share": NodeCapability.DASHBOARD_READ,
     "revoke_self": NodeCapability.DASHBOARD_READ,
 }
 
@@ -640,19 +638,6 @@ def validate_operation_params(op: str, params: dict[str, Any]) -> None:
             raise RemoteProtocolError("process action is not allowlisted")
         if set(params) != {"processes", "action"}:
             raise RemoteProtocolError(f"{op} has unexpected parameters")
-        return
-    if op in {"start_dashboard_share", "stop_dashboard_share"}:
-        if op == "stop_dashboard_share":
-            if set(params) != set():
-                raise RemoteProtocolError(f"{op} has unexpected parameters")
-        elif set(params) != {"expires_at"}:
-            raise RemoteProtocolError(f"{op} has unexpected parameters")
-        if op == "start_dashboard_share" and (
-            not isinstance(params.get("expires_at"), (int, float))
-            or isinstance(params["expires_at"], bool)
-            or not math.isfinite(float(params["expires_at"]))
-        ):
-            raise RemoteProtocolError("dashboard share expiry is invalid")
         return
     if op in {
         "consume_invite",

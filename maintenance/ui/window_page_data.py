@@ -120,12 +120,14 @@ def nodes_cluster_spec(controller: Any) -> ui_nodes.LocalClusterSpec | None:
     registry = controller.__dict__.get("_node_registry")
     if registry is None:
         return None
+    epoch = controller._cluster_state.coordinator_epoch
+    coordinator_id = epoch.coordinator_id.value if epoch is not None else None
+    shares = controller.__dict__.get("_peer_dashboard_shares", {})
+    coordinator_expires_at = shares.get(coordinator_id, 0.0) if coordinator_id else 0.0
     return node_specs.local_cluster_spec(
         registry,
         controller._cluster_state,
-        dashboard_share_expires_at=controller.__dict__.get(
-            "_dashboard_share_expires_at", 0.0
-        ),
+        dashboard_share_expires_at=coordinator_expires_at,
     )
 
 
@@ -141,9 +143,9 @@ def cluster_specs(controller: Any) -> list[ui_cluster.ClusterNodeSpec]:
                 role.value == "coordinator"
                 for role in controller._cluster_state.local_assignment.roles
             ),
-            dashboard_share_active=controller.__dict__.get(
-                "_dashboard_share_expires_at", 0.0
-            )
-            > time.time(),
+            dashboard_share_active=any(
+                exp > time.time()
+                for exp in controller.__dict__.get("_peer_dashboard_shares", {}).values()
+            ),
         )
     )

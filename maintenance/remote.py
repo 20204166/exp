@@ -419,18 +419,6 @@ class RemoteService:
                     raise RemoteAuthorizationError("dashboard share has expired")
             snapshot = self._dashboard_snapshot()
             return {"snapshot": node_snapshot_to_dict(snapshot)}
-        if request.op == "start_dashboard_share":
-            if request.caller_node_id is None:
-                raise RemoteAuthError("dashboard share caller is required")
-            expiry = float(request.params["expires_at"])
-            if expiry <= self._clock():
-                raise RemoteAuthorizationError("dashboard share expiry is invalid")
-            self._dashboard_shares[request.caller_node_id] = expiry
-            return {"ok": True, "expires_at": expiry}
-        if request.op == "stop_dashboard_share":
-            if request.caller_node_id is not None:
-                self._dashboard_shares.pop(request.caller_node_id, None)
-            return {"ok": True}
         if request.op == "component_summary":
             resource = self._provider.component_summary(request.params["key"])
             return {
@@ -998,12 +986,6 @@ class AuthenticatedNodeProvider:
                 "fencing_token": fencing_token,
             },
         )
-
-    def start_dashboard_share(self, *, expires_at: float) -> dict[str, Any]:
-        return self._request("start_dashboard_share", {"expires_at": expires_at})
-
-    def stop_dashboard_share(self) -> dict[str, Any]:
-        return self._request("stop_dashboard_share", {})
 
     def terminate(self, request: ProcessTerminationRequest) -> ProcessActionResult:
         if request.target_node_id != self._node_id:
