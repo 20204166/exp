@@ -24,7 +24,11 @@ def make_callbacks() -> Any:
 
 
 def make_remove_callbacks(
-    *, on_open_sharing: Any = None, on_share_dashboard: Any = None
+    *,
+    on_open_sharing: Any = None,
+    on_share_dashboard: Any = None,
+    on_create_invite: Any = None,
+    on_join_cluster: Any = None,
 ) -> Any:
     values: dict[str, Any] = {
         "on_back": Mock(),
@@ -35,6 +39,10 @@ def make_remove_callbacks(
     }
     if on_open_sharing is not None:
         values["on_open_sharing"] = on_open_sharing
+    if on_create_invite is not None:
+        values["on_create_invite"] = on_create_invite
+    if on_join_cluster is not None:
+        values["on_join_cluster"] = on_join_cluster
     return ClusterPageCallbacks(**values)
 
 
@@ -57,6 +65,11 @@ def _coordinator_spec(
         role_editable=role_editable,
         has_active_job=True,
     )
+
+
+def _local_coordinator_spec(node_id: str = "local") -> ClusterNodeSpec:
+    spec = _spec(node_id, selectable=True, is_local=True)
+    return replace(spec, role="coordinator", role_editable=True)
 
 
 def _spec(node_id: str, *, selectable: bool, is_local: bool = False) -> ClusterNodeSpec:
@@ -247,6 +260,48 @@ class ClusterPageTests(unittest.TestCase):
         )
         with self.assertRaises(StopIteration):
             recorder.button_with_text("Remove job")
+
+    def test_create_invite_button_on_local_coordinator_row(self) -> None:
+        on_create_invite = Mock()
+        callbacks = make_remove_callbacks(on_create_invite=on_create_invite)
+        _page, _parent, recorder = make_page(
+            callbacks, nodes=[_local_coordinator_spec()]
+        )
+        recorder.button_with_text("Create Invite").kwargs["command"]()
+        on_create_invite.assert_called_once_with()
+
+    def test_no_create_invite_button_when_local_is_not_coordinator(self) -> None:
+        callbacks = make_remove_callbacks(on_create_invite=Mock())
+        local = replace(
+            _spec("local", selectable=True, is_local=True), role_editable=False
+        )
+        _page, _parent, recorder = make_page(callbacks, nodes=[local])
+        with self.assertRaises(StopIteration):
+            recorder.button_with_text("Create Invite")
+
+    def test_join_cluster_button_on_trusted_remote_row(self) -> None:
+        on_join_cluster = Mock()
+        callbacks = make_remove_callbacks(on_join_cluster=on_join_cluster)
+        _page, _parent, recorder = make_page(
+            callbacks, nodes=[_coordinator_spec("peer-a", role_editable=False)]
+        )
+        recorder.button_with_text("Join Cluster").kwargs["command"]()
+        on_join_cluster.assert_called_once_with("peer-a")
+
+    def test_no_join_cluster_button_for_untrusted_row(self) -> None:
+        callbacks = make_remove_callbacks(on_join_cluster=Mock())
+        peer = replace(_spec("peer-a", selectable=False), trust="untrusted")
+        _page, _parent, recorder = make_page(callbacks, nodes=[peer])
+        with self.assertRaises(StopIteration):
+            recorder.button_with_text("Join Cluster")
+
+    def test_no_join_cluster_button_for_local_row(self) -> None:
+        callbacks = make_remove_callbacks(on_join_cluster=Mock())
+        _page, _parent, recorder = make_page(
+            callbacks, nodes=[_local_coordinator_spec()]
+        )
+        with self.assertRaises(StopIteration):
+            recorder.button_with_text("Join Cluster")
 
 
 if __name__ == "__main__":

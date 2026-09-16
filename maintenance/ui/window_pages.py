@@ -215,6 +215,8 @@ def build_cluster(controller: Any, parent: Any) -> Any:
             on_remove_job=controller._remove_job_node,
             on_share_dashboard=controller._share_dashboard,
             on_open_sharing=controller._open_sharing_dialog,
+            on_create_invite=controller._create_cluster_invite,
+            on_join_cluster=controller._join_cluster_via_invite,
         ),
         nodes=controller._cluster_specs(),
         button_coordinator=controller._button_coordinator,

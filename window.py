@@ -746,6 +746,24 @@ class AppWindow:
     def _remove_job_node(self, node_id: str) -> None:
         ui_node_actions.remove_job_node(self, node_id)
 
+    def _create_cluster_invite(self) -> None:
+        blob = ui_node_actions.create_cluster_invite(self)
+        if blob is not None:
+            messagebox.showinfo(
+                "Cluster Invite",
+                f"Give this invite to the other machine; it expires soon:\n\n{blob}",
+                parent=self.master,
+            )
+
+    def _join_cluster_via_invite(self, node_id: str) -> None:
+        blob = simpledialog.askstring(
+            "Join Cluster",
+            "Paste the invite from the other machine:",
+            parent=self.master,
+        )
+        if blob:
+            ui_node_actions.join_cluster_via_invite(self, node_id, blob)
+
     def _share_dashboard(self) -> None:
         service = self.__dict__.get("_peer_service")
         active_until = self.__dict__.get("_dashboard_share_expires_at", 0.0)

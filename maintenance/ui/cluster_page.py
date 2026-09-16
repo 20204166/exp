@@ -47,6 +47,8 @@ class ClusterPageCallbacks:
     on_remove_job: Callable[[str], None] | None = None
     on_share_dashboard: Callable[[], None] | None = None
     on_open_sharing: Callable[["ClusterNodeSpec"], None] = _noop_open_sharing
+    on_create_invite: Callable[[], None] | None = None
+    on_join_cluster: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,6 +341,33 @@ class ClusterPage:
                 style=ui_styles.STYLE_NEUTRAL_BUTTON,
             )
             remove_job.pack(side="right", padx=(0, 8))
+        on_create_invite = self.callbacks.on_create_invite
+        if (
+            spec.is_local
+            and spec.role_editable
+            and spec.role == "coordinator"
+            and on_create_invite is not None
+        ):
+            create_invite = self.button_cls(
+                row,
+                text="Create Invite",
+                command=on_create_invite,
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+            create_invite.pack(side="right", padx=(0, 8))
+        on_join_cluster = self.callbacks.on_join_cluster
+        if (
+            not spec.is_local
+            and spec.trust in ("trusted", "authorised")
+            and on_join_cluster is not None
+        ):
+            join_cluster = self.button_cls(
+                row,
+                text="Join Cluster",
+                command=lambda: on_join_cluster(spec.node_id),
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+            join_cluster.pack(side="right", padx=(0, 8))
         on_share_dashboard = self.callbacks.on_share_dashboard
         on_open_sharing = self.callbacks.on_open_sharing
         if spec.is_local and on_share_dashboard is not None:
