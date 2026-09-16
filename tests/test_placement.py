@@ -446,5 +446,97 @@ class PlacementPolicyTests(unittest.TestCase):
         self.assertTrue(app.in_flight(node_b_key))
 
 
+class MovablePlacementEligibilityTests(unittest.TestCase):
+    """PlacementPolicy rejects MOVABLE candidates that fail cluster/role checks."""
+
+    def setUp(self) -> None:
+        self.policy = PlacementPolicy()
+
+    def _movable_request(self) -> PlacementRequest:
+        return _request(job_class=JobClass.MOVABLE)
+
+    def test_trusted_non_member_is_ineligible_for_movable(self) -> None:
+        view = _view("peer", local=False, same_cluster=False)
+        decision = self.policy.choose(self._movable_request(), (view,))
+        self.assertIsNone(decision.selected_node_id)
+        self.assertEqual(decision.rejected[0], (NodeId("peer"), "not in cluster"))
+
+    def test_cluster_member_without_worker_role_is_ineligible(self) -> None:
+        view = _view("sub", local=False, same_cluster=True, worker_eligible=False)
+        decision = self.policy.choose(self._movable_request(), (view,))
+        self.assertIsNone(decision.selected_node_id)
+        self.assertEqual(decision.rejected[0], (NodeId("sub"), "not a worker"))
+
+    def test_paused_worker_is_ineligible(self) -> None:
+        view = _view("paused", local=False, same_cluster=True, worker_eligible=False)
+        decision = self.policy.choose(self._movable_request(), (view,))
+        self.assertIsNone(decision.selected_node_id)
+        self.assertEqual(decision.rejected[0][1], "not a worker")
+
+    def test_revoked_member_is_ineligible(self) -> None:
+        # Revoked: not in cluster (same_cluster=False) takes precedence.
+        view = _view("revoked", local=False, same_cluster=False, worker_eligible=False)
+        decision = self.policy.choose(self._movable_request(), (view,))
+        self.assertIsNone(decision.selected_node_id)
+        self.assertEqual(decision.rejected[0][1], "not in cluster")
+
+    def test_wrong_cluster_member_is_ineligible(self) -> None:
+        view = _view("other", local=False, same_cluster=False)
+        decision = self.policy.choose(self._movable_request(), (view,))
+        self.assertIsNone(decision.selected_node_id)
+        self.assertEqual(decision.rejected[0][1], "not in cluster")
+
+    def test_offline_cluster_worker_is_rejected_for_offline_not_cluster(self) -> None:
+        view = _view("worker", local=False, online=False)
+        decision = self.policy.choose(self._movable_request(), (view,))
+        self.assertIsNone(decision.selected_node_id)
+        self.assertEqual(decision.rejected[0][1], "offline")
+
+    def test_identity_mismatch_is_rejected_for_identity_not_cluster(self) -> None:
+        view = _view("worker", local=False, identity_valid=False)
+        decision = self.policy.choose(self._movable_request(), (view,))
+        self.assertIsNone(decision.selected_node_id)
+        self.assertEqual(decision.rejected[0][1], "invalid identity")
+
+    def test_eligible_remote_worker_is_selected(self) -> None:
+        view = _view("worker", local=False)
+        decision = self.policy.choose(self._movable_request(), (view,))
+        self.assertEqual(decision.selected_node_id, NodeId("worker"))
+
+    def test_local_worker_is_eligible(self) -> None:
+        view = _view("local", local=True)
+        decision = self.policy.choose(self._movable_request(), (view,))
+        self.assertEqual(decision.selected_node_id, NodeId("local"))
+
+    def test_coordinator_worker_is_eligible(self) -> None:
+        # COORDINATOR implies WORKER via RoleAssignment.__post_init__; same applies here.
+        view = _view("coord", local=False)
+        decision = self.policy.choose(self._movable_request(), (view,))
+        self.assertEqual(decision.selected_node_id, NodeId("coord"))
+
+    def test_subcoordinator_without_worker_role_is_ineligible(self) -> None:
+        view = _view("sub", local=False, worker_eligible=False)
+        decision = self.policy.choose(self._movable_request(), (view,))
+        self.assertIsNone(decision.selected_node_id)
+        self.assertEqual(decision.rejected[0][1], "not a worker")
+
+    def test_target_bound_ignores_same_cluster_and_worker_eligible(self) -> None:
+        # TARGET_BOUND does not check these fields — regression guard.
+        view = _view("target", local=False, same_cluster=False, worker_eligible=False)
+        request = _request(
+            job_class=JobClass.TARGET_BOUND, target_node_id=NodeId("target")
+        )
+        decision = self.policy.choose(request, (view,))
+        self.assertEqual(decision.selected_node_id, NodeId("target"))
+
+    def test_single_machine_default_fields_leave_local_eligible(self) -> None:
+        # Both fields default to True — a local view built without specifying
+        # same_cluster or worker_eligible must remain eligible for MOVABLE.
+        view = placement_view_for_context(_context())
+        request = _request()
+        decision = self.policy.choose(request, (view,))
+        self.assertEqual(decision.selected_node_id, NodeId("local"))
+
+
 if __name__ == "__main__":
     unittest.main()

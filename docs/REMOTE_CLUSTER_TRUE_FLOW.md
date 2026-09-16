@@ -1963,3 +1963,127 @@ No worker queue, generic job framework, fake workload, or synthetic MOVABLE job 
 ### No new real-socket test needed
 
 No wire semantics changed. The `remove_job` RPC handler was already tested in `RealSocketRoleTests`. The occupancy repair is a domain/persistence fix, not a protocol change.
+
+---
+
+## 61. 2026-09-16 — MOVABLE placement cluster/role-awareness (Phase 8)
+
+### What was missing
+
+`PlacementPolicy._rejection_for()` had no MOVABLE-specific checks. Any trusted, online node with the required capability could be selected for MOVABLE work regardless of cluster membership or Worker role. In a cluster with both trusted peers (non-members) and enrolled Workers, MOVABLE jobs could be routed to nodes that are not eligible Workers. Two invariants were unenforced:
+
+1. **Trusted peer ≠ Worker** — trust/auth alone does not imply MOVABLE eligibility.
+2. **Role-aware eligibility** — MOVABLE work requires an active, non-paused, non-revoked WORKER role assignment in the same cluster.
+
+`placement_view_for_context()` also had no mechanism to project cluster/role state into `PlacementView`; `same_cluster` and `worker_eligible` simply did not exist.
+
+`active_jobs` in `PlacementView` was always 0 in production — the `has_active_job` field repaired in Phase 7 was never forwarded into placement views.
+
+### What was added
+
+**`PlacementView` gains two new fields:**
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `same_cluster` | `bool` | `True` | Node has an active (non-revoked) assignment in this coordinator's cluster |
+| `worker_eligible` | `bool` | `True` | Node holds WORKER role and is neither paused nor revoked |
+
+Both default to `True` for full backward compatibility: all existing TARGET_BOUND and LOCAL_BOUND tests continue to pass unchanged. The defaults also make a local node built without explicit cluster context eligible for MOVABLE — correct for the single-machine case.
+
+**`_rejection_for` gains MOVABLE-specific checks:**
+
+```python
+if request.job_class is JobClass.MOVABLE:
+    if not view.same_cluster:
+        return "not in cluster"
+    if not view.worker_eligible:
+        return "not a worker"
+```
+
+These checks run before the universal trust/auth/online tuple. When a node is simultaneously not-in-cluster and offline, the client sees "not in cluster" — the most informative primary reason.
+
+**`placement_view_for_context()` accepts two new keyword params:**
+
+```python
+def placement_view_for_context(
+    context: NodeContext,
+    *,
+    ...
+    same_cluster: bool = True,
+    worker_eligible: bool = True,
+    ...
+) -> PlacementView:
+```
+
+The production TARGET_BOUND call site in `window_placement.py` passes neither, so they remain `True` and TARGET_BOUND behavior is unchanged.
+
+**`build_movable_views(controller, *, cluster_state)` in `window_placement.py`:**
+
+Prepared seam for the first MOVABLE workload. Projects `same_cluster`, `worker_eligible`, and `active_jobs` from `ClusterState.role_assignments` into `PlacementView` objects for all registered node contexts.
+
+```python
+same_cluster = assignment is not None and not assignment.revoked
+worker_eligible = (
+    assignment is not None
+    and not assignment.revoked
+    and not assignment.paused
+    and ClusterRole.WORKER in assignment.roles
+)
+active_jobs = 1 if (assignment is not None and assignment.has_active_job) else 0
+```
+
+No production MOVABLE job exists yet; this function has no production caller.
+
+### Subcoordinator eligibility
+
+`RoleAssignment.__post_init__` adds `WORKER` only when `COORDINATOR` is present. A `SUBCOORDINATOR` node holds only `{SUBCOORDINATOR}` unless WORKER is explicitly added. Therefore `worker_eligible` is `False` for a plain SUBCOORDINATOR. A COORDINATOR node has `{COORDINATOR, WORKER}` → `worker_eligible=True`.
+
+### active_jobs wiring
+
+`build_movable_views` reads `RoleAssignment.has_active_job` (repaired in Phase 7) and maps it: `True → 1`, `False → 0`. The TARGET_BOUND production path is unchanged (`active_jobs=0` default).
+
+### TARGET_BOUND is unchanged
+
+`PlacementPolicy._rejection_for` checks `same_cluster`/`worker_eligible` only when `job_class is JobClass.MOVABLE`. TARGET_BOUND sees the default `True` from `placement_view_for_context` and never enters the MOVABLE branch.
+
+### Tests added
+
+**`tests/test_placement.py` — `MovablePlacementEligibilityTests` (13 tests):**
+
+| Test | What it proves |
+|---|---|
+| `test_trusted_non_member_is_ineligible_for_movable` | `same_cluster=False` → "not in cluster" |
+| `test_cluster_member_without_worker_role_is_ineligible` | `worker_eligible=False` → "not a worker" |
+| `test_paused_worker_is_ineligible` | paused → `worker_eligible=False` → "not a worker" |
+| `test_revoked_member_is_ineligible` | revoked → `same_cluster=False` takes precedence |
+| `test_wrong_cluster_member_is_ineligible` | `same_cluster=False` → "not in cluster" |
+| `test_offline_cluster_worker_is_rejected_for_offline_not_cluster` | offline → "offline" (cluster checks passed) |
+| `test_identity_mismatch_is_rejected_for_identity_not_cluster` | identity mismatch → "invalid identity" |
+| `test_eligible_remote_worker_is_selected` | valid eligible worker is chosen |
+| `test_local_worker_is_eligible` | local node with defaults is eligible |
+| `test_coordinator_worker_is_eligible` | COORDINATOR implies WORKER → eligible |
+| `test_subcoordinator_without_worker_role_is_ineligible` | SUBCOORDINATOR without WORKER → "not a worker" |
+| `test_target_bound_ignores_same_cluster_and_worker_eligible` | TARGET_BOUND regression: fields with False still selected |
+| `test_single_machine_default_fields_leave_local_eligible` | local context with no explicit fields → eligible |
+
+**`tests/test_window_placement.py` — `BuildMovableViewsTests` (6 tests):**
+
+| Test | What it proves |
+|---|---|
+| `test_returns_empty_when_no_registry_wired` | No registry → empty tuple |
+| `test_non_member_remote_gets_same_cluster_false` | Trusted peer not in `role_assignments` → `same_cluster=False`, `worker_eligible=False` |
+| `test_active_worker_member_is_eligible` | Active WORKER assignment → both True, `active_jobs=0` |
+| `test_paused_worker_has_worker_eligible_false` | paused=True → `same_cluster=True`, `worker_eligible=False` |
+| `test_revoked_member_has_both_false` | revoked=True → both False |
+| `test_active_job_wires_to_active_jobs_field` | `has_active_job=True` → `active_jobs=1` |
+
+### Status matrix updates
+
+| Entry | Previous status | New status |
+|---|---|---|
+| `placement MOVABLE` | `MISSING WIRING` / dormant | `FUTURE SEAM` — `PlacementPolicy` now enforces cluster/role checks; `build_movable_views` prepares the view projection; no production MOVABLE caller yet |
+| `active job state` in `PlacementView` | `MISSING WIRING` (always 0 in production) | `FUTURE SEAM` — `build_movable_views` projects `has_active_job` into `active_jobs`; not yet used on the call path |
+
+### No new production caller
+
+No MOVABLE job, worker queue, ResourceGovernor, fake workload, or new timer was introduced. The repair is the policy check + the view fields + the view builder seam.

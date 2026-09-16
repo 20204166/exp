@@ -3,6 +3,8 @@
 import unittest
 from unittest.mock import Mock
 
+from maintenance.cluster import ClusterState
+from maintenance.components.cluster_roles import ClusterRole, RoleAssignment
 from maintenance.components.coordinator import AppCoordinator
 from maintenance.components.placement import JobClass, PlacementDecision
 from maintenance.nodes import (
@@ -270,6 +272,121 @@ class HandleAnalyzePlacementTests(unittest.TestCase):
 
         lifecycle.start.assert_called_once()
         controller.__dict__["_show_error"].assert_not_called()
+
+
+class BuildMovableViewsTests(unittest.TestCase):
+    """build_movable_views projects cluster state into MOVABLE-ready views."""
+
+    def _cluster_state(
+        self, *assignments: RoleAssignment, local_node_id: str = "coord"
+    ) -> ClusterState:
+        state = ClusterState.create_local(local_node_id=local_node_id)
+        state.role_assignments = tuple(assignments)
+        return state
+
+    def test_returns_empty_when_no_registry_wired(self) -> None:
+        controller = _make_controller()
+        state = self._cluster_state()
+        views = window_placement.build_movable_views(controller, cluster_state=state)
+        self.assertEqual(views, ())
+
+    def test_non_member_remote_gets_same_cluster_false(self) -> None:
+        registry = NodeRegistry()
+        registry.register_context(make_local_context())
+        remote = make_remote_context(
+            "peer",
+            trust=NodeTrustState.TRUSTED,
+            status=NodeStatus.ONLINE,
+            capabilities=[NodeCapability.COMPONENT_READ],
+            permissions=[NodePermission.COMPONENT_READ],
+            connection=ConnectionState.online(),
+        )
+        registry.register_context(remote)
+        controller = _make_controller(registry)
+        state = self._cluster_state(
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("coord"))
+        )
+        views = window_placement.build_movable_views(controller, cluster_state=state)
+        peer_view = next(v for v in views if v.node_id == NodeId("peer"))
+        self.assertFalse(peer_view.same_cluster)
+        self.assertFalse(peer_view.worker_eligible)
+
+    def test_active_worker_member_is_eligible(self) -> None:
+        registry = NodeRegistry()
+        registry.register_context(make_local_context())
+        worker = make_remote_context(
+            "worker1",
+            trust=NodeTrustState.TRUSTED,
+            status=NodeStatus.ONLINE,
+            capabilities=[NodeCapability.COMPONENT_READ],
+            permissions=[NodePermission.COMPONENT_READ],
+            connection=ConnectionState.online(),
+        )
+        registry.register_context(worker)
+        controller = _make_controller(registry)
+        state = self._cluster_state(
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}), node_id=NodeId("worker1")
+            )
+        )
+        views = window_placement.build_movable_views(controller, cluster_state=state)
+        worker_view = next(v for v in views if v.node_id == NodeId("worker1"))
+        self.assertTrue(worker_view.same_cluster)
+        self.assertTrue(worker_view.worker_eligible)
+        self.assertEqual(worker_view.active_jobs, 0)
+
+    def test_paused_worker_has_worker_eligible_false(self) -> None:
+        registry = NodeRegistry()
+        registry.register_context(make_local_context())
+        worker = make_remote_context("paused-worker", trust=NodeTrustState.TRUSTED)
+        registry.register_context(worker)
+        controller = _make_controller(registry)
+        state = self._cluster_state(
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}),
+                node_id=NodeId("paused-worker"),
+                paused=True,
+            )
+        )
+        views = window_placement.build_movable_views(controller, cluster_state=state)
+        view = next(v for v in views if v.node_id == NodeId("paused-worker"))
+        self.assertTrue(view.same_cluster)
+        self.assertFalse(view.worker_eligible)
+
+    def test_revoked_member_has_both_false(self) -> None:
+        registry = NodeRegistry()
+        registry.register_context(make_local_context())
+        worker = make_remote_context("revoked-worker", trust=NodeTrustState.TRUSTED)
+        registry.register_context(worker)
+        controller = _make_controller(registry)
+        state = self._cluster_state(
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}),
+                node_id=NodeId("revoked-worker"),
+                revoked=True,
+            )
+        )
+        views = window_placement.build_movable_views(controller, cluster_state=state)
+        view = next(v for v in views if v.node_id == NodeId("revoked-worker"))
+        self.assertFalse(view.same_cluster)
+        self.assertFalse(view.worker_eligible)
+
+    def test_active_job_wires_to_active_jobs_field(self) -> None:
+        registry = NodeRegistry()
+        registry.register_context(make_local_context())
+        worker = make_remote_context("busy-worker", trust=NodeTrustState.TRUSTED)
+        registry.register_context(worker)
+        controller = _make_controller(registry)
+        state = self._cluster_state(
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}),
+                node_id=NodeId("busy-worker"),
+                has_active_job=True,
+            )
+        )
+        views = window_placement.build_movable_views(controller, cluster_state=state)
+        view = next(v for v in views if v.node_id == NodeId("busy-worker"))
+        self.assertEqual(view.active_jobs, 1)
 
 
 if __name__ == "__main__":

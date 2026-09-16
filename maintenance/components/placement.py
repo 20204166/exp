@@ -88,6 +88,8 @@ class PlacementView:
     capabilities: frozenset[NodeCapability]
     permissions: frozenset[NodePermission]
     active_jobs: int = 0
+    same_cluster: bool = True
+    worker_eligible: bool = True
     recent_latency_ms: float | None = None
     metrics_observed_at: float | None = None
 
@@ -147,6 +149,11 @@ class PlacementPolicy:
             and view.node_id != request.target_node_id
         ):
             return "target mismatch"
+        if request.job_class is JobClass.MOVABLE:
+            if not view.same_cluster:
+                return "not in cluster"
+            if not view.worker_eligible:
+                return "not a worker"
         checks = (
             (not view.trusted, "not trusted"),
             (not view.authenticated, "not authenticated"),
@@ -241,6 +248,8 @@ def placement_view_for_context(
     protocol_compatible: bool | None = None,
     shutting_down: bool = False,
     active_jobs: int = 0,
+    same_cluster: bool = True,
+    worker_eligible: bool = True,
     recent_latency_ms: float | None = None,
     metrics_observed_at: float | None = None,
 ) -> PlacementView:
@@ -275,6 +284,8 @@ def placement_view_for_context(
         capabilities=descriptor.capabilities,
         permissions=descriptor.permissions,
         active_jobs=active_jobs,
+        same_cluster=same_cluster,
+        worker_eligible=worker_eligible,
         recent_latency_ms=recent_latency_ms,
         metrics_observed_at=metrics_observed_at,
     )

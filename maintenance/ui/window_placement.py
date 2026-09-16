@@ -1,29 +1,29 @@
-"""Target-bound placement validation for the window controller.
+"""Target-bound placement validation and MOVABLE view projection.
 
-Wires the previously-uncalled :class:`~maintenance.components.placement.
-PlacementPolicy` into the one job class that is genuinely live today:
-TARGET_BOUND reads/actions against whichever node the user (or the app,
-for the implicit local case) has already named. No production job in this
-app is MOVABLE, so its locality/latency ranking path stays exercised only
-by ``tests/test_placement.py``. LOCAL_BOUND work (in-process UI/application
-state) never reaches here because it is never modelled as a node operation.
+Wires :class:`~maintenance.components.placement.PlacementPolicy` into the
+one job class that is genuinely live today: TARGET_BOUND reads/actions
+against whichever node the user (or the app, for the implicit local case)
+has already named. No production job in this app is MOVABLE yet, so
+``build_movable_views`` is the prepared seam for the first MOVABLE workload.
 
 The candidate view is built from live descriptor/connection state already
 owned by :mod:`maintenance.nodes` -- no probing, no new polling, no network
-calls. Cluster/worker-role eligibility is deliberately out of scope here: it
-only matters for choosing *among* several candidates for MOVABLE work, and a
-TARGET_BOUND request has exactly one legitimate candidate, the caller's
-explicit target.
+calls. For MOVABLE views, cluster/role eligibility is wired from
+:class:`~maintenance.cluster.ClusterState` through ``same_cluster`` and
+``worker_eligible`` on :class:`~maintenance.components.placement.PlacementView`.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from maintenance.cluster import ClusterState
+from maintenance.components.cluster_roles import ClusterRole
 from maintenance.components.placement import (
     JobClass,
     PlacementDecision,
     PlacementRequest,
+    PlacementView,
     placement_view_for_context,
 )
 from maintenance.nodes import NodeCapability, NodeContext, NodePermission
@@ -89,3 +89,51 @@ def validate_target_placement(
     decision = controller._coordinator.choose_placement(request, views)
     controller.__dict__["_last_placement_decision"] = decision
     return decision
+
+
+def build_movable_views(
+    controller: Any,
+    *,
+    cluster_state: ClusterState,
+) -> tuple[PlacementView, ...]:
+    """Project cluster member contexts into MOVABLE-eligible placement views.
+
+    Wires ``same_cluster``, ``worker_eligible``, and ``active_jobs`` from
+    :class:`~maintenance.cluster.ClusterState` into each view.  A node is
+    ``same_cluster`` when it has an active (non-revoked) assignment in this
+    cluster; ``worker_eligible`` when it holds the WORKER role and is neither
+    paused nor revoked.  ``active_jobs`` is 1 for an assigned job, 0 for idle.
+
+    No production MOVABLE job exists yet; this function is the prepared seam.
+    """
+
+    registry = controller.__dict__.get("_node_registry")
+    if registry is None:
+        return ()
+    assignment_by_id = {
+        a.node_id: a
+        for a in cluster_state.role_assignments
+        if a.node_id is not None
+    }
+    views = []
+    for context in registry.contexts():
+        node_id = context.node_id
+        assignment = assignment_by_id.get(node_id)
+        same_cluster = assignment is not None and not assignment.revoked
+        worker_eligible = (
+            assignment is not None
+            and not assignment.revoked
+            and not assignment.paused
+            and ClusterRole.WORKER in assignment.roles
+        )
+        active_jobs = 1 if (assignment is not None and assignment.has_active_job) else 0
+        views.append(
+            placement_view_for_context(
+                context,
+                protocol_compatible=True,
+                same_cluster=same_cluster,
+                worker_eligible=worker_eligible,
+                active_jobs=active_jobs,
+            )
+        )
+    return tuple(views)
