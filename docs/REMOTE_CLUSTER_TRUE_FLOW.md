@@ -2398,3 +2398,71 @@ No new `ThreadPoolExecutor`, `PairingExecutor`, `ElevationThread`, or `EndpointV
 | Pairing initiator threading (no dialog) | `BROKEN` (sync fallback) | `VERIFIED CURRENT` — always async |
 | Pairing initiator threading (with dialog) | `VERIFIED CURRENT` (pre-existing) | `VERIFIED CURRENT` (unchanged) |
 
+
+## §64 — Phase 11: Connection-state observability + manual-host removal
+
+### Connection-state backend → UI mapping (VERIFIED CURRENT)
+
+`NodeConnectionStatus` (6 values, `maintenance/nodes.py:64`) is now fully
+projected through `TrustedNodeSpec.connection_status` to the Nodes &
+Connections page.
+
+| Backend `NodeConnectionStatus` | `TrustedNodeSpec.connection_status` | UI label | Color role |
+|---|---|---|---|
+| `UNKNOWN` | `"unknown"` | Unknown | secondary |
+| `CONNECTING` | `"connecting"` | Connecting… | secondary |
+| `ONLINE` | `"online"` | Online | success |
+| `OFFLINE` + `retry_automatic=True` | `"offline"` | Offline · retrying | warning |
+| `OFFLINE` + `retry_automatic=False` | `"offline"` | Offline | warning |
+| `AUTHENTICATION_FAILED` | `"authentication_failed"` | Auth failed | danger |
+| `IDENTITY_CHANGED` | `"identity_changed"` | Identity changed | danger |
+| (any, `manual_disconnected=True`) | any | Disconnected | secondary |
+
+**Old status**: `TrustedNodeSpec.status` was `NodeStatus` (3 values: online/offline/unknown).
+The field still exists for backward compatibility with All Systems / cluster_node_specs.
+Connection detail is now in `connection_status`.
+
+### Retry ownership (VERIFIED CURRENT)
+
+`PeerConnectionManager` (`maintenance/components/peer_connection.py`) owns retry timing.
+`RetryState.automatic_retry` is `False` for `AUTHENTICATION_FAILED` and `IDENTITY_CHANGED`
+failures — no automatic retry loop for security-class failures. The UI reads
+`context.retry.automatic_retry` via `TrustedNodeSpec.retry_automatic` and shows
+"retrying" suffix only when true.
+
+### Manual disconnect (VERIFIED CURRENT)
+
+`PeerConnectionManager.disconnect_manual(node_id)` adds to `_manual_disconnected` set.
+The set is projected via `window_page_data._peer_disconnected_ids()` →
+`peer_mgr.is_manual_disconnected()` → `TrustedNodeSpec.manual_disconnected`.
+UI shows "Disconnected" (secondary) instead of "Offline" (warning).
+Trust record persists. `PeerConnectionManager.reconnect()` clears the flag.
+
+### Manual host feature — REMOVED (was BROKEN)
+
+`add_manual_host()` (formerly `connections.py`) created a `TrustedNodeRecord`
+locally with a randomly generated HMAC secret without sending it to the target.
+The target never created a matching `PeerGrantRecord`, so `hello()` always failed
+with `RemoteAuthError`. Authentication was never possible.
+
+**Option B chosen**: the Add Manual Host UI form and `add_manual_host()` implementation
+have been removed. Existing manual-host records stored in `_manual_host_ids` /
+`trusted_nodes` continue to render (backward compatibility) and can be removed via
+the existing Remove Connection / Revoke flows. New manual hosts cannot be added until
+a real Option A implementation (pre-pair probe + `target_node_id` in `pair_request`
+response) is built in a future phase.
+
+### Tests
+
+- `tests/test_nodes_connections_page.py::NodePresentationConnectionTests` — label/color helpers
+- `tests/test_nodes_connections_page.py::ConnectionStateMatrixTests` — full state matrix
+
+### Status matrix update
+
+| Subsystem | Old status | New status |
+|---|---|---|
+| Connection-state UI projection | MISSING WIRING | VERIFIED CURRENT |
+| Manual host add | BROKEN | REMOVED |
+| Manual host remove (existing) | WIRED BUT PARTIAL | VERIFIED CURRENT |
+| Retry state in UI | MISSING WIRING | VERIFIED CURRENT |
+| Manual disconnect in UI | MISSING WIRING | VERIFIED CURRENT |
