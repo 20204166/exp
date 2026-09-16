@@ -1140,7 +1140,6 @@ class SettingsIntegrationTests(unittest.TestCase):
     def test_apply_preferences_failure_keeps_runtime_unchanged(self) -> None:
         window = AppWindowTests.make_window()
         window.preferences_page = Mock()
-        from unittest.mock import patch
 
         with patch.object(
             window._preferences_store,
