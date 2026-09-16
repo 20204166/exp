@@ -2139,3 +2139,136 @@ def is_active_coordinator(self) -> bool:
 ### No new production caller
 
 No MOVABLE job, worker queue, ResourceGovernor, fake workload, or new timer was introduced. The repair is the policy check + the view fields + the view builder seam + the authority predicate.
+
+---
+
+## 62. 2026-09-16 — Phase 9: MOVABLE Workload Discovery / Data-Locality Audit
+
+### Purpose
+
+Determine whether System Analyzer currently contains any real product workload
+that can legitimately execute on a different eligible Worker without changing the
+meaning of the result. This is an audit-only phase; no production code was changed.
+
+### Files audited
+
+- `maintenance/scanner.py` — `SystemScanner` pipeline entry point
+- `maintenance/scanner_support/dashboard.py` — `DashboardMixin` (cpu/memory/storage/gpu/network/battery components)
+- `maintenance/scanner_support/processes.py` — `ProcessesMixin.scan_processes`
+- `maintenance/scanner_support/storage.py` — `StorageMixin.trash_size`
+- `maintenance/scanner_support/paths.py` — `PathsMixin`
+- `maintenance/components/downloads.py` — `DownloadScanner.scan_downloads`, `_mark_duplicate_downloads`, `_cached_file_hash`
+- `maintenance/components/scan_support.py` — `file_sha256`, `walk_directory_entries`
+- `maintenance/components/temperature.py` — `TemperatureTelemetry` (event detection, series snapshots, trend analysis)
+- `maintenance/components/background_orchestration.py` — `BackgroundOrchestrator`
+- `maintenance/components/coordinator.py` — `AppCoordinator`, `ComponentRefreshScheduler`, `ScanCoordinator`
+- `maintenance/components/cluster_storage.py` — `CoordinatorTimeline`, `StandbyBuffer`
+- `maintenance/health.py` — `health_warnings`
+- `maintenance/remote.py` — `RemoteService` (what executes on target), `RemoteClient` (what is requested)
+- `maintenance/snapshot.py` — CLI snapshot command
+- `maintenance/performance_audit.py` — existing measurement contracts
+- `docs/performance/scanner-performance.md` — native macOS timing baseline
+- `docs/performance/simulated-windows/scanner-performance.md` — simulated Windows baseline
+- `docs/bug_hunts/performance_reviews/PERF-20260909-001-opposition.md` — downloads metadata perf review
+
+### Workload classification table
+
+| Workload | Entry point | Classification | Reason |
+|---|---|---|---|
+| CPU component scan | `scan_component("cpu")` | TARGET_BOUND | `psutil.cpu_percent`, `psutil.cpu_freq`, temperature sensor reads — all local OS APIs; live CPU delta sample requires a real sleep on target |
+| Memory component scan | `scan_component("memory")` | TARGET_BOUND | `psutil.virtual_memory`, `psutil.swap_memory` — live kernel state |
+| Storage component scan | `scan_component("storage")` | TARGET_BOUND | `psutil.disk_usage(Path.home())`, trash size walk — both target filesystem |
+| GPU component scan | `scan_component("gpu")` | TARGET_BOUND | `pynvml`, `subprocess` GPU queries, temperature sensors — hardware-local |
+| Network component scan | `scan_component("network")` | TARGET_BOUND | `psutil` network counters, interface enumeration — local kernel state |
+| Battery component scan | `scan_component("battery")` | TARGET_BOUND | `psutil.sensors_battery`, temperature sensor — hardware-local |
+| Process scan | `scan_processes()` | TARGET_BOUND | `psutil.process_iter`, live PID enumeration, CPU sampling sleep with cancellation — identity anchored to target PIDs |
+| Process termination | `process_request_quit`, `process_force_quit` | TARGET_BOUND | Destructive action on target PIDs — never movable |
+| Trash-size walk | `trash_size()` | TARGET_BOUND | `os.scandir` over target `~/.Trash` or equivalent |
+| Downloads file stat walk | `_download_file_stats()` | TARGET_BOUND | Filesystem traversal of target Downloads directory |
+| Downloads large-file marking | `_mark_large_downloads()` | TARGET_BOUND | Input truth is `os.stat_result` from target filesystem; trivial O(n) filter over already-local data — NOT_WORTH_DISTRIBUTING even if inputs were captured |
+| Downloads duplicate detection (hash comparison) | `_mark_duplicate_downloads()` | TARGET_BOUND | File content must be read from target disk (`file_sha256`); moving file bytes over the network costs more than hashing locally |
+| Storage candidate scan | `storage_candidates()` | TARGET_BOUND | Downloads + trash scan on target; destructive cleanup actions stay target-side |
+| Health warning evaluation | `health_warnings(snapshot)` | NOT_WORTH_DISTRIBUTING | Pure function over an already-captured `DashboardSnapshot`; median execution immeasurably fast (sub-millisecond); transfer overhead dominates |
+| Temperature event detection | `TemperatureTelemetry._update_event_state` | NOT_WORTH_DISTRIBUTING | Pure stateful computation over bounded float samples already held in memory; `TemperaturePolicy` is tiny config; no measured cost |
+| Temperature trend analysis | `TemperatureTelemetry._baseline`, `_severity_for` | NOT_WORTH_DISTRIBUTING | `statistics.fmean` over ≤600 floats; sub-millisecond; no CPU pressure |
+| `TemperatureTelemetry.render_state` | `render_state(components)` | NOT_WORTH_DISTRIBUTING | Pure snapshot projection; no I/O; immeasurably fast |
+| `health_warnings` + dashboard snapshot | `window_presentation.py` | LOCAL_BOUND | Runs in UI thread on locally-owned snapshot; no distribution benefit |
+| `ComponentRefreshScheduler` scheduling | `coordinator.py` | LOCAL_BOUND | Timer/scheduling logic; meaningless outside owning process |
+| `CoordinatorTimeline.snapshots()` aggregation | `cluster_storage.py` | NOT_WORTH_DISTRIBUTING | Flat expansion of already-stored `ResourceSnapshot` tuples from local SQLite; pure iteration with no computation |
+| Standby batch forwarding to Subcoordinator | `window_discovery.py` | LOCAL_BOUND | Coordinator reads its own timeline and pushes latest batch to Subcoordinator via existing RPC; this is a data-movement operation, not a computation |
+| Dashboard snapshot serialization | `_snapshot_payload`, `dashboard_snapshot_to_dict` | LOCAL_BOUND | Pure dict transformation; sub-millisecond; local to the node whose data it represents |
+
+### Acquisition vs. computation boundaries
+
+Every meaningful computation in this codebase is either:
+
+1. **Inseparable from acquisition**: The expensive work IS the I/O (filesystem traversal, sensor reads, psutil calls, subprocess). The "computation" phase is a trivial filter/sort/format over data that is already in memory.
+
+2. **Pure but trivial**: Post-acquisition logic (`health_warnings`, `TemperatureTelemetry` trend/event logic) is pure Python operating on already-captured numeric samples. Measured costs are sub-millisecond. Distribution overhead (TLS round-trip, JSON encoding, scheduling) would cost orders of magnitude more than the work itself.
+
+3. **Stateful in a way that depends on the target**: Process scan requires a live sleep on the target to get a valid CPU delta. The `PROCESS_SAMPLE_SECONDS = 0.25` wait is not an arbitrary delay — it is the sampling window for an accurate CPU reading. Removing the target dependency removes the product value.
+
+### Performance evidence (native macOS baseline, `docs/performance/scanner-performance.md`)
+
+| Workload | Median (warm) | Notes |
+|---|---|---|
+| Dashboard (full) | 6.5ms | Warm path; cold = 274ms (CPU sampling wait) |
+| component:cpu | 2.3ms warm / 241ms cold | Cold cost is the `psutil.cpu_percent` seed wait |
+| component:memory | 1.2ms | Trivial psutil call |
+| component:storage | 0.2ms warm | Trivial psutil + cached trash |
+| component:gpu | 0.4ms warm | Static GPU cache hit |
+| component:battery | 0.07ms | Nearly instant |
+| component:network | 2.0ms | Counter reads |
+| Downloads | 228ms warm | **Only measured hotspot**; dominated by filesystem walk + hashing |
+| Processes | 465ms warm | Dominated by `PROCESS_SAMPLE_SECONDS=0.25` intentional sleep |
+| Temperature telemetry | 0.07ms | Immeasurably cheap |
+
+The existing performance audit classified Downloads as `requires design` and processes as `not actionable` (cost is the intentional CPU sampling interval). No other workload was flagged.
+
+**Downloads hotspot analysis**: The Downloads scan median of 228ms (warm) is the single largest measured cost after process sampling. However, the cost is dominated by:
+- filesystem traversal (`walk_directory_entries`) of the target's Downloads directory
+- SHA-256 file content reads (`file_sha256`) on the target machine
+
+Both operations require direct access to target-local storage. Offloading these to a Worker would require reading file content on the target and streaming it to the Worker, which costs more than hashing locally. The "expensive" step IS the I/O — moving the data is the bottleneck, not the computation over it.
+
+**Process scan analysis**: The 465ms warm cost is entirely the `time.sleep(PROCESS_SAMPLE_SECONDS=0.25)` interval required for accurate CPU delta measurement. This is a deliberate product decision (accurate CPU reporting) — it cannot be removed or parallelized by distributing to a Worker, because the sleep must occur on the node being measured.
+
+### MOVABLE candidate evaluation
+
+No candidate survived evaluation.
+
+| Candidate considered | Verdict | Key disqualifier |
+|---|---|---|
+| Downloads duplicate detection (hash comparison stage) | REJECTED | Input requires reading file content from target disk; transfer cost >> compute cost |
+| Temperature event/trend analysis over captured samples | REJECTED | Sub-millisecond; NOT_WORTH_DISTRIBUTING; distribution overhead dominates |
+| Health warning evaluation over `DashboardSnapshot` | REJECTED | Sub-millisecond; NOT_WORTH_DISTRIBUTING |
+| Post-acquisition process candidate ranking/filtering | REJECTED | Not_WORTH_DISTRIBUTING; trivial O(n) filter; result is bound to target PIDs |
+| `CoordinatorTimeline` batch aggregation | REJECTED | Pure iteration over already-stored local SQLite data; no meaningful computation |
+
+### Security/privacy check
+
+Candidate inputs that were considered and found disqualifying from a data-movement perspective also carry privacy concerns: process names, usernames, file paths, and memory details. These would leave the target node. The current architecture correctly restricts all of this to the target machine — there is no reason to change that.
+
+### Result: KEEP MOVABLE DORMANT
+
+**Decision: B — NO CURRENT MOVABLE WORKLOAD JUSTIFIES DISTRIBUTION**
+
+Every System Analyzer workload is either:
+- TARGET_BOUND (hardware sensors, filesystem, live process state, OS APIs), or
+- NOT_WORTH_DISTRIBUTING (pure computation taking < 1ms, where TLS + scheduling overhead dominates)
+
+The "expensive" operations (Downloads scan, process scan) are expensive precisely because they read local hardware. Offloading them to a Worker would require first moving the data to the Worker, which is more expensive than the computation itself.
+
+**What would justify MOVABLE in the future:**
+A future product feature that performs heavy computation over already-normalized cluster-wide data — e.g., cross-node duplicate detection over pre-computed file hashes already propagated to the Coordinator, or anomaly detection over a large window of `ResourceSnapshot` history already held in `CoordinatorTimeline`. Neither feature currently exists.
+
+### Status matrix update
+
+| Entry | Previous status | New status |
+|---|---|---|
+| `placement MOVABLE` | `FUTURE SEAM` (Phase 8.5) | `KEEP DORMANT` — audit found no current workload suitable for distribution; infrastructure is ready for a future feature |
+
+### No production code changed
+
+This phase changed documentation only.
+
