@@ -134,6 +134,7 @@ class BackgroundOrchestrator:
 
     def submit_ui(self, callback: Callable[[], None]) -> None:
         self._queue.put(("ui", callback))
+        self.start_poll()
 
     def submit_progress(self, key: str, callback: Callable[[], None]) -> None:
         """Queue only the newest progress callback for one operation."""

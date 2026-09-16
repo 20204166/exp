@@ -349,7 +349,8 @@ RemoteSocketServer._Handler.handle() (server.py:79-121, daemon thread per connec
             f"Allow {caller_node_id} to read this system?\n\n"
             f"Identity fingerprint: ...\nTLS fingerprint: ...\nRequested permissions: ...")
         - controller._submit_ui(ask_on_ui) -- CORRECTLY marshaled onto the Tk main
-          thread via BackgroundOrchestrator's queue, drained only on Tk's own poll timer
+          thread via BackgroundOrchestrator's queue; submission starts the Tk poll timer
+          even when the queue was otherwise idle
         - completed.wait(60.0) -- the SERVER HANDLER THREAD blocks up to 60s for
           the actual human's click
    -> on approval: PeerGrantRecord persisted (replaces any prior grant for that caller),

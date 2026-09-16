@@ -134,6 +134,19 @@ class BackgroundOrchestratorTests(unittest.TestCase):
         first.assert_not_called()
         newest.assert_called_once_with()
 
+    def test_ui_submission_starts_poll_when_queue_is_idle(self) -> None:
+        orchestrator, state = self.make_orchestrator()
+        callback = Mock()
+
+        orchestrator.submit_ui(callback)
+
+        self.assertEqual(
+            cast(list[tuple[int, object]], state["scheduled"]),
+            [(10, orchestrator.drain_queue)],
+        )
+        orchestrator.drain_queue()
+        callback.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()
