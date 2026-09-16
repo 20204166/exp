@@ -175,7 +175,6 @@ def build_nodes(controller: Any, parent: Any) -> Any:
             on_revoke=controller._revoke_node,
             on_test_connection=controller._test_connection,
             on_open_node=controller._open_cluster_node,
-            on_add_manual_host=controller._add_manual_host,
             on_remove_manual=controller._remove_manual_host,
             on_permissions=controller._set_node_permissions,
             on_role_change=controller._set_node_roles,

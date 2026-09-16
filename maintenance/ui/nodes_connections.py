@@ -50,7 +50,6 @@ class NodesConnectionsCallbacks:
     on_revoke: Callable[[str], None]
     on_test_connection: Callable[[str], None]
     on_open_node: Callable[[str], None]
-    on_add_manual_host: Callable[[str, str, int | None], None]
     on_remove_manual: Callable[[str], None]
     on_permissions: Callable[[str, frozenset[str]], None] | None = None
     on_role_change: Callable[[str, frozenset[str]], None] | None = None
@@ -1033,33 +1032,11 @@ class NodesConnectionsPage:
             colors=self.colors,
             fonts=self.fonts,
             description=(
-                "Add a node by hostname or IP when local discovery is unavailable."
+                "These hosts were added directly by address. "
+                "Remove them if they are no longer needed."
             ),
         )
         self._manual_body = body
-        form = self.frame_cls(body, bg=self.colors["card"])
-        form.pack(fill="x", pady=(0, 10))
-        self._manual_name_var = self._var_factory()
-        self._manual_host_var = self._var_factory()
-        self._manual_port_var = self._var_factory()
-        self._build_entry(form, "Name", self._manual_name_var)
-        self._build_entry(form, "Host", self._manual_host_var)
-        self._build_entry(form, "Port", self._manual_port_var)
-        form_actions = self.frame_cls(form, bg=self.colors["card"])
-        form_actions.pack(fill="x", pady=(0, 2))
-        self.add_host_button = self.button_cls(
-            form_actions,
-            text="Add host",
-            command=self._add_manual_host,
-            style=ui_styles.STYLE_NEUTRAL_BUTTON,
-        )
-        self.add_host_button.pack(side="right", padx=(8, 0), pady=(4, 0))
-        self._register_button(
-            "nodes:manual:add-host",
-            self._add_manual_host,
-            self.add_host_button,
-            True,
-        )
         self._manual_hosts_body = body
         self.refresh_manual(list(self._manual.values()))
 
@@ -1214,28 +1191,6 @@ class NodesConnectionsPage:
         )
         self._details_button(actions, spec)
         return row
-
-    def _add_manual_host(self) -> None:
-        if self.callbacks.on_open_connection is not _noop_open_connection:
-            self.callbacks.on_open_connection(None)
-            return
-        name = self._manual_name_var.get().strip()
-        host = self._manual_host_var.get().strip()
-        raw_port = self._manual_port_var.get().strip()
-        port: int | None = None
-        if raw_port:
-            try:
-                port = int(raw_port)
-            except ValueError:
-                self.show_error("Port must be a whole number or empty")
-                return
-            if not 0 <= port <= 65535:
-                self.show_error("Port must be between 0 and 65535")
-                return
-        if not name or not host:
-            self.show_error("Name and host are required for a manual host")
-            return
-        self.callbacks.on_add_manual_host(name, host, port)
 
     def _register_button(
         self,

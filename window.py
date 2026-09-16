@@ -570,7 +570,6 @@ class AppWindow:
             return
         dialog = ConnectionDialog(
             self.master,
-            on_add=self._add_manual_host,
             node_id=spec.node_id if spec is not None else None,
             on_test=self._test_connection if spec is not None else None,
         )
@@ -865,14 +864,6 @@ class AppWindow:
             + 1
         )
         ui_node_actions.revoke_trusted_node(self, node_id)
-
-    def _add_manual_host(
-        self,
-        display_name: str,
-        host: str,
-        port: int | None,
-    ) -> None:
-        ui_node_actions.add_manual_host(self, display_name, host, port)
 
     def _remove_manual_host(self, node_id: str) -> None:
         ui_node_actions.remove_manual_host(self, node_id)

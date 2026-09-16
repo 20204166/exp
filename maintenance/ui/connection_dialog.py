@@ -12,7 +12,7 @@ from maintenance.ui import styles as ui_styles
 
 @dataclass(frozen=True, slots=True)
 class ConnectionDialogCallbacks:
-    on_add: Callable[[str, str, int | None], None]
+    on_add: Callable[[str, str, int | None], None] | None = None
     on_test: Callable[[str], None] | None = None
 
 
@@ -26,7 +26,7 @@ class ConnectionDialog:
         self,
         parent: Any,
         *,
-        on_add: Callable[[str, str, int | None], None],
+        on_add: Callable[[str, str, int | None], None] | None = None,
         node_id: str | None = None,
         on_test: Callable[[str], None] | None = None,
         frame_cls: Callable[..., Any] = tk.Frame,
@@ -70,13 +70,17 @@ class ConnectionDialog:
             colors=colors,
             status_text="",
         )
-        button_cls(container, text="Add", command=self.submit).pack(side="right")
+        if self._on_add is not None:
+            button_cls(container, text="Add", command=self.submit).pack(side="right")
         if self._node_id is not None and self._on_test is not None:
             button_cls(
                 container, text="Test connection", command=self.test_connection
             ).pack(side="right")
 
     def submit(self) -> None:
+        if self._on_add is None:
+            self.close()
+            return
         name = str(self.name_var.get()).strip()
         host = str(self.host_var.get()).strip()
         port_text = str(self.port_var.get()).strip()
