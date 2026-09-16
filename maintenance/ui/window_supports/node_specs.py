@@ -100,7 +100,7 @@ def trusted_node_specs(
                 role_editable=any(item.value == "coordinator" for item in actor.roles),
                 paused=assignment.paused if assignment is not None else False,
                 has_active_job=(
-                    assignment.has_active_job if assignment is not None else True
+                    assignment.has_active_job if assignment is not None else False
                 ),
             )
         )
@@ -197,7 +197,7 @@ def cluster_node_specs(
                 role=descriptor.role,
                 role_editable=role_editable,
                 has_active_job=(
-                    assignment.has_active_job if assignment is not None else True
+                    assignment.has_active_job if assignment is not None else False
                 ),
             )
         )

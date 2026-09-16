@@ -70,7 +70,7 @@ class ClusterNodeSpec:
     role: str = "worker"
     paused: bool = False
     role_editable: bool = False
-    has_active_job: bool = True
+    has_active_job: bool = False
     share_active: bool = False
 
 
@@ -333,7 +333,7 @@ class ClusterPage:
             )
             remove_connection.pack(side="right", padx=(0, 8))
         on_remove_job = self.callbacks.on_remove_job
-        if spec.role_editable and not spec.is_local and on_remove_job is not None:
+        if spec.role_editable and not spec.is_local and spec.has_active_job and on_remove_job is not None:
             remove_job = self.button_cls(
                 row,
                 text="Remove job",

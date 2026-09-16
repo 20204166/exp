@@ -1012,7 +1012,7 @@ class ClusterStore:
                     node_id=NodeId(item["node_id"]),
                     paused=bool(item.get("paused", False)),
                     revoked=bool(item.get("revoked", False)),
-                    has_active_job=bool(item.get("has_active_job", True)),
+                    has_active_job=False,  # normalized at startup; no recoverable job runtime
                 )
             except (TypeError, ValueError):
                 continue

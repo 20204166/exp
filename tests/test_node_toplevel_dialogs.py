@@ -424,7 +424,7 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
                 selectable=True,
                 role="worker",
                 role_editable=True,
-                has_active_job=False,
+                has_active_job=True,
                 is_manual=False,
             ),
             callbacks=NodeDetailsDialogCallbacks(
@@ -451,6 +451,23 @@ class NodeToplevelDialogContractTests(unittest.TestCase):
             ],
         )
         self.assertIsNone(dialog.action("remove_connection"))
+
+    def test_node_details_dialog_hides_remove_job_for_idle_worker(self) -> None:
+        dialog = NodeDetailsDialog(
+            RecordingWidget(),
+            spec=NodeDetailsDialogSpec(
+                node_id="node-1",
+                role_editable=True,
+                has_active_job=False,
+                is_manual=False,
+            ),
+            callbacks=NodeDetailsDialogCallbacks(
+                on_remove_job=lambda _node_id: None,
+            ),
+            **_dialog_widgets(),
+        )
+
+        self.assertIsNone(dialog.action("remove_job"))
 
     def test_node_details_dialog_shows_remove_job_for_active_editable_trusted_node(
         self,

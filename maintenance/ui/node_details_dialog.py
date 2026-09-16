@@ -26,7 +26,7 @@ class NodeDetailsDialogSpec:
     is_manual: bool = False
     paused: bool = False
     role_editable: bool = False
-    has_active_job: bool = True
+    has_active_job: bool = False
     identity_status: str = ""
     identity_fingerprint: str | None = None
     transport_fingerprint: str | None = None
@@ -128,7 +128,7 @@ class NodeDetailsDialog:
             (
                 "remove_job",
                 "Remove job",
-                spec.role_editable and not spec.is_manual,
+                spec.role_editable and not spec.is_manual and spec.has_active_job,
                 self.callbacks.on_remove_job,
             ),
         )

@@ -824,7 +824,11 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window = _make_window(start_discovery=False)
         state = ClusterState.create_local(local_node_id="local")
         state.role_assignments = state.role_assignments + (
-            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")),
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}),
+                node_id=NodeId("peer-a"),
+                has_active_job=True,
+            ),
         )
         window._cluster_state = state
         window._save_cluster_state = Mock(return_value=True)

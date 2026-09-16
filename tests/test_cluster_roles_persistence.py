@@ -57,7 +57,10 @@ class ClusterRolePersistenceTests(unittest.TestCase):
         loaded = self.store.load()
         self.assertFalse(loaded.local_assignment.has_active_job)
 
-    def test_has_active_job_defaults_true_for_old_documents(self) -> None:
+    def test_persisted_active_job_normalized_to_false_at_startup(self) -> None:
+        # Old documents (no has_active_job field) and documents with has_active_job=true
+        # both start as idle on load — no recoverable job runtime exists, so persisted
+        # True would create ghost-busy workers.
         payload = {
             "schema_version": 2,
             "local_node_id": "worker",
@@ -67,7 +70,7 @@ class ClusterRolePersistenceTests(unittest.TestCase):
         }
         self.path.write_text(json.dumps(payload), encoding="utf-8")
         loaded = self.store.load()
-        self.assertTrue(loaded.local_assignment.has_active_job)
+        self.assertFalse(loaded.local_assignment.has_active_job)
 
     def test_has_active_job_false_and_paused_round_trip(self) -> None:
         state = ClusterState.create_local(local_node_id="worker")
@@ -84,7 +87,8 @@ class ClusterRolePersistenceTests(unittest.TestCase):
         self.assertTrue(assignment.paused)
         self.assertFalse(assignment.has_active_job)
 
-    def test_non_bool_has_active_job_defaults_true(self) -> None:
+    def test_malformed_has_active_job_field_normalized_to_false(self) -> None:
+        # Invalid has_active_job values are normalized to False — no ghost-busy workers.
         payload = {
             "schema_version": 2,
             "local_node_id": "worker",
@@ -96,7 +100,7 @@ class ClusterRolePersistenceTests(unittest.TestCase):
         }
         self.path.write_text(json.dumps(payload), encoding="utf-8")
         loaded = self.store.load()
-        self.assertTrue(loaded.local_assignment.has_active_job)
+        self.assertFalse(loaded.local_assignment.has_active_job)
 
     def test_revoked_with_no_active_job_round_trip(self) -> None:
         state = ClusterState.create_local(local_node_id="coord")
@@ -118,11 +122,28 @@ class ClusterRolePersistenceTests(unittest.TestCase):
         self.assertTrue(peer.revoked)
         self.assertFalse(peer.has_active_job)
 
-    def test_coordinator_assignment_persists_active_job(self) -> None:
+    def test_coordinator_assignment_starts_idle_after_restart(self) -> None:
+        # Active-job state is not preserved across restart; no recoverable job runtime exists.
         state = ClusterState.create_local(local_node_id="coord")
         self.store.save(state)
         loaded = self.store.load()
-        self.assertTrue(loaded.local_assignment.has_active_job)
+        self.assertFalse(loaded.local_assignment.has_active_job)
+
+    def test_explicit_true_in_json_normalized_to_false_at_startup(self) -> None:
+        # A persisted has_active_job=true (from a pre-fix or old session) must never
+        # create a ghost-busy worker on restart since there is no recoverable job runtime.
+        payload = {
+            "schema_version": 2,
+            "local_node_id": "worker",
+            "trusted_nodes": [],
+            "peer_grants": [],
+            "role_assignments": [
+                {"node_id": "worker", "roles": ["worker"], "has_active_job": True}
+            ],
+        }
+        self.path.write_text(json.dumps(payload), encoding="utf-8")
+        loaded = self.store.load()
+        self.assertFalse(loaded.local_assignment.has_active_job)
 
     def test_expired_invite_is_consumed_and_rejected(self) -> None:
         state = ClusterState.create_local(local_node_id="coord")

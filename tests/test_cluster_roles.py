@@ -139,8 +139,8 @@ class ClusterRoleTests(unittest.TestCase):
         assert assignment is not None
         self.assertTrue(assignment.has_active_job)
 
-    def test_default_assignment_has_active_job(self) -> None:
-        self.assertTrue(self.worker.has_active_job)
+    def test_default_assignment_is_idle(self) -> None:
+        self.assertFalse(self.worker.has_active_job)
 
     def test_clear_revocation_drops_stale_revoked_assignment(self) -> None:
         revoked = RoleAssignment(
@@ -348,3 +348,65 @@ class ClusterRoleTests(unittest.TestCase):
         state = RoleState(assignments=(self.coordinator, self.sub))
         with self.assertRaises(RoleAuthorizationError):
             state.remove_job(actor=self.coordinator, target=NodeId("sub"))
+
+    def test_role_assign_preserves_idle_occupancy(self) -> None:
+        state = RoleState(assignments=(self.coordinator, self.worker))
+        updated, _ = state.assign(
+            actor=self.coordinator,
+            target=NodeId("worker"),
+            roles=frozenset({ClusterRole.SUBCOORDINATOR}),
+        )
+        assignment = updated.assignment_for(NodeId("worker"))
+        assert assignment is not None
+        self.assertFalse(assignment.has_active_job)
+
+    def test_role_assign_preserves_active_occupancy(self) -> None:
+        active_worker = RoleAssignment(
+            frozenset({ClusterRole.WORKER}), NodeId("worker"), has_active_job=True
+        )
+        state = RoleState(assignments=(self.coordinator, active_worker))
+        updated, _ = state.assign(
+            actor=self.coordinator,
+            target=NodeId("worker"),
+            roles=frozenset({ClusterRole.SUBCOORDINATOR}),
+        )
+        assignment = updated.assignment_for(NodeId("worker"))
+        assert assignment is not None
+        self.assertTrue(assignment.has_active_job)
+
+    def test_new_assignment_via_assign_is_idle(self) -> None:
+        state = RoleState(assignments=(self.coordinator,))
+        updated, _ = state.assign(
+            actor=self.coordinator,
+            target=NodeId("new-worker"),
+            roles=frozenset({ClusterRole.WORKER}),
+        )
+        assignment = updated.assignment_for(NodeId("new-worker"))
+        assert assignment is not None
+        self.assertFalse(assignment.has_active_job)
+
+    def test_revoke_clears_active_job(self) -> None:
+        active_worker = RoleAssignment(
+            frozenset({ClusterRole.WORKER}), NodeId("worker"), has_active_job=True
+        )
+        state = RoleState(assignments=(self.coordinator, active_worker))
+        updated = state.revoke(actor=self.coordinator, target=NodeId("worker"))
+        assignment = updated.assignment_for(NodeId("worker"))
+        assert assignment is not None
+        self.assertTrue(assignment.revoked)
+        self.assertFalse(assignment.has_active_job)
+
+    def test_rejoin_as_worker_clears_active_job(self) -> None:
+        active_coord = RoleAssignment(
+            frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}),
+            NodeId("coord"),
+            has_active_job=True,
+        )
+        state = RoleState(
+            assignments=(active_coord, self.sub),
+            epoch=CoordinatorEpoch(8, NodeId("sub"), "fence", 0.0, 100.0),
+        )
+        returned = rejoin_as_worker(state, node_id=NodeId("coord"), current_epoch=8)
+        assignment = returned.assignment_for(NodeId("coord"))
+        assert assignment is not None
+        self.assertFalse(assignment.has_active_job)

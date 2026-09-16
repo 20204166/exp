@@ -419,10 +419,12 @@ def _apply_cluster_join(controller: Any, response: dict[str, Any]) -> None:
             RoleAssignment(
                 frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}),
                 node_id=NodeId(coordinator_id),
+                has_active_job=False,
             ),
             RoleAssignment(
                 frozenset({ClusterRole.WORKER}),
                 node_id=NodeId(controller._cluster_state.local_node_id),
+                has_active_job=False,
             ),
         ),
         capability_grants=(),

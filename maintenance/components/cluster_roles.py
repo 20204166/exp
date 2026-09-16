@@ -39,7 +39,7 @@ class RoleAssignment:
     node_id: NodeId | None = None
     paused: bool = False
     revoked: bool = False
-    has_active_job: bool = True
+    has_active_job: bool = False
 
     def __post_init__(self) -> None:
         roles = frozenset(self.roles)
@@ -281,6 +281,9 @@ class RoleState:
         current = state.assignment_for(target)
         if current is not None and current.revoked:
             raise RoleAuthorizationError("revoked node requires a new pairing invite")
+        if current is not None:
+            # Preserve existing occupancy; role reassignment does not start or stop a job.
+            assignment = replace(assignment, has_active_job=current.has_active_job)
         if ClusterRole.COORDINATOR in assignment.roles:
             raise RoleAuthorizationError("Coordinator ownership cannot be delegated")
         other_sub = next(
@@ -345,7 +348,7 @@ class RoleState:
         current = self.assignment_for(target)
         if current is None or current.revoked:
             raise RoleAuthorizationError("unknown or revoked node")
-        updated = self._replace_assignment(replace(current, revoked=True))
+        updated = self._replace_assignment(replace(current, revoked=True, has_active_job=False))
         return replace(
             updated,
             capability_grants=tuple(
@@ -491,6 +494,8 @@ def rejoin_as_worker(
             assignment,
             roles=frozenset({ClusterRole.WORKER}),
             paused=False,
+            # A returning node cannot resume a prior job; no recoverable job runtime exists.
+            has_active_job=False,
         )
     )
 

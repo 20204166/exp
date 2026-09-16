@@ -123,7 +123,7 @@ class TrustedNodeSpec:
     roles: tuple[str, ...] = ()
     role_editable: bool = False
     paused: bool = False
-    has_active_job: bool = True
+    has_active_job: bool = False
 
 
 class NodesConnectionsPage:
@@ -1005,7 +1005,7 @@ class NodesConnectionsPage:
             )
             remove_connection.pack(side="left", padx=(0, 8))
         on_remove_job = self.callbacks.on_remove_job
-        if spec.role_editable and not spec.is_manual and on_remove_job is not None:
+        if spec.role_editable and not spec.is_manual and spec.has_active_job and on_remove_job is not None:
             remove_job = self.button_cls(
                 secondary_actions,
                 text="Remove job",

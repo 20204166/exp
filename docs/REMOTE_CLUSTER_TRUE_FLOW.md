@@ -130,7 +130,7 @@ Every subsystem/flow claim in this document uses exactly one of:
 | Coordinator epoch / fencing | VERIFIED COMPLETE (server-side enforcement) | `remote.py:458-473 _verify_role_fence` | same | `cluster.json` | Unit (adversarial tests) | none found | HIGH |
 | Worker snapshot | VERIFIED CURRENT | `window_discovery.py:681-778` | `maintenance/components/cluster_storage.py` | SQLite (`cluster-history.sqlite3`) | **NOT TESTED at dispatch layer** (§46, §51 F-4) | Untested authorization branch | MEDIUM |
 | Standby batch | VERIFIED CURRENT | same function | same | SQLite (`cluster-standby.sqlite3`) | NOT TESTED at dispatch layer | Same gap | MEDIUM |
-| Active job state (`has_active_job`) | BROKEN / ONE-WAY | `cluster_roles.py:358-365 remove_job` (only writer used in production) | same | `cluster.json` | Unit (model), zero production "set" path | `assign_job()` never called in production (§32, §51) | HIGH |
+| Active job state (`has_active_job`) | VERIFIED CURRENT | `cluster_roles.py remove_job` / `revoke` / `rejoin_as_worker` (production writers); `assign_job()` has no caller (no MOVABLE job yet) | same | `cluster.json` (written); normalized to `False` on parse | Unit model tests, persistence normalization tests | `assign_job()` no caller — correct, no MOVABLE job exists (§60) | HIGH |
 | Placement TARGET_BOUND | VERIFIED COMPLETE | `window_components.py`, `window_scan.py` via `window_placement.py` | `maintenance/components/placement.py` | n/a | Unit + integration | none found | HIGH |
 | Placement MOVABLE | TEST-ONLY | none in production | same | n/a | Unit only | Zero cluster-role awareness even if wired (§34-36) | HIGH |
 | Cluster diagnostics | VERIFIED CURRENT | `window.py:448-479, 517-525` | `maintenance/diagnostics.py` | n/a | Unit | Individual snapshot values not browsable (§33, §42) | MEDIUM |
@@ -990,7 +990,7 @@ Covering the required scenarios; grouped by first-broken-boundary where one exis
 
 **C. WIRED BUT PARTIAL** — manual host entry (persists, cannot authenticate), placement (solid TARGET_BOUND, dormant MOVABLE with no role awareness), Coordinator lifecycle (self-renewal and promotion work; remote-renewal and stale-rejoin-fencing are unreachable).
 
-**D. BROKEN** — worker `has_active_job` accounting (one-way in production, doesn't reach placement even when true).
+**D. VERIFIED CURRENT** — worker `has_active_job` accounting repaired (Phase 7): default `False`, role edits preserve occupancy, revoke/rejoin clear it, persistence normalizes `True`→`False` at startup. `assign_job()` still has no production caller — correct, no MOVABLE job yet.
 
 **E. DRIFTED** — cluster-as-a-bilateral-concept vs. cluster-as-per-machine-bookkeeping (§27); Revoke's stated intent ("destroys trust") vs. its actual one-sided reach (§25).
 
@@ -1060,7 +1060,7 @@ Dependencies: BL-2 should land before BL-7 becomes meaningful (a real job-assign
 
 **Coordinator role assignment** — entry: **none (UI checkbox hard-disabled)**; owner: `maintenance/components/cluster_roles.py::RoleState`; automatic path: `maintenance/components/peer_connection.py::promote_if_due`; status: MISSING WIRING (UI), VERIFIED CURRENT (automatic path).
 
-**Worker `has_active_job`** — production writer: `RoleState.remove_job` only; dead writer: `RoleState.assign_job`; consumer: `maintenance/ui/window_discovery.py::should_upload_job`; status: BROKEN.
+**Worker `has_active_job`** — default: `False` (repaired, Phase 7); production writers: `remove_job`, `revoke`, `rejoin_as_worker`; dead writer: `assign_job` (no MOVABLE job yet); consumers: `should_upload_job`, snapshot payload, UI spec builders, Remove Job button gate; status: VERIFIED CURRENT. See §60.
 
 **Elevation thread-safety bug** — location: `maintenance/ui/window_discovery.py::handle_elevation_request`, missing `_submit_ui` wrapper present in the sibling `handle_pairing_request`; status: confirmed defect, unaddressed in this pass.
 
@@ -1847,3 +1847,119 @@ SHARE       — target-owner dashboard consent (per-peer)
 ```
 
 These remain orthogonal. Role authority does not bypass trust authentication. Lease renewal does not transfer dashboard share recipient identity. Coordinator change does not affect `_peer_dashboard_shares`.
+
+---
+
+## 60. 2026-09-16 — Worker job occupancy repair (Phase 7)
+
+### Previous broken state
+
+`RoleAssignment.has_active_job` had a default of `True`. As a result:
+
+- Every newly created Worker was born "busy" with no real job assigned.
+- Every call to `RoleState.assign()` (role change, cluster join, promotion) created a fresh `RoleAssignment` using the default, silently fabricating active-job state.
+- Deserialization in `ClusterState._parse_roles()` used `item.get("has_active_job", True)`, meaning old JSON files (no `has_active_job` field) also loaded as busy.
+- `revoke()` and `rejoin_as_worker()` preserved the existing `has_active_job` via `replace()` without explicitly clearing it.
+- All UI spec dataclasses (`TrustedNodeSpec`, `NodeDetailsDialogSpec`, `ClusterNodeSpec`) defaulted to `has_active_job=True`, so nodes with no cluster assignment also appeared busy.
+- The Remove Job button was shown regardless of current occupancy state.
+
+### Canonical definition
+
+`has_active_job=True` means: **a real distributed job has been explicitly assigned to this Worker through `RoleState.assign_job()`**. It does not describe CPU load, ongoing scans, or TARGET_BOUND application work.
+
+`has_active_job=False` means: the Worker is **idle** — no distributed job assigned.
+
+### Default: `False`
+
+A newly created `RoleAssignment` has `has_active_job=False`. A Worker that just joined a cluster, was assigned a new role, or was restored from disk is idle until an explicit `assign_job()` call.
+
+### Canonical owner
+
+`RoleState` / `RoleAssignment` in `maintenance/components/cluster_roles.py`. No parallel registry.
+
+### Production writers
+
+| Writer | Effect |
+|---|---|
+| `RoleState.assign_job(actor, target)` | Sets `True`; no production caller yet (MOVABLE job not created) |
+| `RoleState.remove_job(actor, target)` | Sets `False`; called via `remove_job_node()` in `roles.py` and the `remove_job` wire op handler |
+| `RoleState.revoke(actor, target)` | Forces `False`; a revoked Worker cannot hold a real job |
+| `rejoin_as_worker()` | Forces `False`; a returning Coordinator cannot resume a prior job |
+
+### Production readers
+
+| Reader | Purpose |
+|---|---|
+| `should_upload_job(sequence, has_active_job)` in `window_discovery.py` | Controls upload cadence: active → every tick; idle → every 5th tick |
+| Worker snapshot payload | Carries `has_active_job` to the Coordinator |
+| UI spec builders in `node_specs.py` | Exposes occupancy to cluster/nodes pages |
+| Remove Job button visibility | Shown only when `has_active_job=True` |
+
+### Persistence: normalize to `False` on startup
+
+`has_active_job` is serialized to `cluster.json` for observability but is **always read back as `False`** on load. There is no recoverable job runtime; persisting `True` through a restart would create ghost-busy Workers. The parse line:
+
+```python
+has_active_job=False,  # normalized at startup; no recoverable job runtime
+```
+
+supersedes the previous `bool(item.get("has_active_job", True))`.
+
+### Restart invariant
+
+**No ghost busy Worker without a recoverable job.** Any persisted `has_active_job=True` in `cluster.json` from a pre-fix or mid-session save is normalized to `False` on the next load.
+
+### Role-change behavior
+
+`RoleState.assign()` preserves the existing `has_active_job` when updating an existing assignment:
+
+```python
+if current is not None:
+    assignment = replace(assignment, has_active_job=current.has_active_job)
+```
+
+New assignments (first-time enrollment) use the default `False`. This means:
+- Idle Worker reassigned to Subcoordinator → remains idle
+- Active Worker reassigned to Subcoordinator → retains `True` (role change does not settle a job)
+- Brand-new cluster member → starts idle
+
+### Pause behavior
+
+Pause/resume (`RoleState.pause`, `RoleState.resume`) use `replace(current, paused=...)` which preserves `has_active_job`. Pausing does not terminate a job; resuming does not start one.
+
+### Remove Job button visibility
+
+The button is now gated on `spec.has_active_job`:
+
+| Location | Condition |
+|---|---|
+| `nodes_connections.py` | `role_editable and not is_manual and has_active_job` |
+| `cluster_page.py` | `role_editable and not is_local and has_active_job` |
+| `node_details_dialog.py` | `role_editable and not is_manual and has_active_job` |
+
+A destructive-looking action for a state that cannot exist is not shown.
+
+### PlacementView
+
+`placement_view_for_context()` accepts `active_jobs: int = 0`. The production call site in `window_placement.py` passes `active_jobs=0` (default). Wiring `has_active_job` into `PlacementView.active_jobs` is deferred: no MOVABLE job exists yet, and TARGET_BOUND placement ignores `active_jobs` entirely. The field remains correctly modelled (`0 or 1`) for a future wiring pass.
+
+### `assign_job()` has no production caller
+
+`RoleState.assign_job()` has no production caller. This is correct — there is no MOVABLE distributed job yet. The field is left intact for the first real job assignment trigger, which will be designed alongside the first MOVABLE workload.
+
+### MOVABLE placement remains dormant
+
+No worker queue, generic job framework, fake workload, or synthetic MOVABLE job was introduced. The repair is confined to truthful default state.
+
+### Tests added / updated
+
+| Test file | Change |
+|---|---|
+| `test_cluster_roles.py` | Renamed `test_default_assignment_has_active_job` → `test_default_assignment_is_idle` (asserts `False`); added `test_role_assign_preserves_idle_occupancy`, `test_role_assign_preserves_active_occupancy`, `test_new_assignment_via_assign_is_idle`, `test_revoke_clears_active_job`, `test_rejoin_as_worker_clears_active_job` |
+| `test_cluster_roles_persistence.py` | Renamed 3 tests to describe normalization behavior; added `test_explicit_true_in_json_normalized_to_false_at_startup` |
+| `test_node_toplevel_dialogs.py` | Fixed `test_node_details_dialog_gates_actions_by_spec_and_callbacks` (`has_active_job=True` so Remove Job is reachable); added `test_node_details_dialog_hides_remove_job_for_idle_worker` |
+| `window_node_cases/switching.py` | Explicit `has_active_job=True` in cancel test setup; assertion unchanged |
+
+### No new real-socket test needed
+
+No wire semantics changed. The `remove_job` RPC handler was already tested in `RealSocketRoleTests`. The occupancy repair is a domain/persistence fix, not a protocol change.
