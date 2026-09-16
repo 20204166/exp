@@ -35,10 +35,13 @@ def trusted_node_specs(
     registry: Any,
     cluster_state: Any,
     manual_node_ids: Iterable[str] = (),
+    *,
+    disconnected_ids: Iterable[Any] = (),
 ) -> list[ui_nodes.TrustedNodeSpec]:
     """Project trusted non-manual contexts and preserve their display policy."""
 
     manual = set(manual_node_ids)
+    disconnected = frozenset(disconnected_ids)
     selectable = {descriptor.id for descriptor in registry.selectable_descriptors()}
     actor = cluster_state.local_assignment
     specs: list[ui_nodes.TrustedNodeSpec] = []
@@ -102,6 +105,9 @@ def trusted_node_specs(
                 has_active_job=(
                     assignment.has_active_job if assignment is not None else False
                 ),
+                connection_status=context.connection.status.value,
+                manual_disconnected=descriptor.id in disconnected,
+                retry_automatic=context.retry.automatic_retry,
             )
         )
     return specs
@@ -111,9 +117,12 @@ def manual_node_specs(
     registry: Any,
     cluster_state: Any,
     manual_node_ids: Iterable[str] = (),
+    *,
+    disconnected_ids: Iterable[Any] = (),
 ) -> list[ui_nodes.TrustedNodeSpec]:
     """Project manually configured hosts as non-selectable trusted rows."""
 
+    disconnected = frozenset(disconnected_ids)
     specs: list[ui_nodes.TrustedNodeSpec] = []
     for node_id in tuple(manual_node_ids):
         try:
@@ -141,6 +150,9 @@ def manual_node_specs(
                 ),
                 pairing_state=descriptor.pairing_state.value,
                 target_state=render_target_state(descriptor, context.snapshot).label,
+                connection_status=context.connection.status.value,
+                manual_disconnected=NodeId(node_id) in disconnected,
+                retry_automatic=context.retry.automatic_retry,
             )
         )
     return specs

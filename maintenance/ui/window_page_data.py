@@ -90,6 +90,21 @@ def nodes_peer_specs(controller: Any) -> list[ui_nodes.DiscoveredPeerSpec]:
     return [] if registry is None else node_specs.discovered_peer_specs(registry)
 
 
+def _peer_disconnected_ids(controller: Any) -> list[Any]:
+    peer_mgr = controller.__dict__.get("_peer_connection_manager")
+    if peer_mgr is None:
+        return []
+    registry = controller.__dict__.get("_node_registry")
+    if registry is None:
+        return []
+    return [
+        ctx.descriptor.id
+        for ctx in registry.contexts()
+        if not ctx.descriptor.is_local
+        and peer_mgr.is_manual_disconnected(ctx.descriptor.id)
+    ]
+
+
 def nodes_trusted_specs(controller: Any) -> list[ui_nodes.TrustedNodeSpec]:
     registry = controller.__dict__.get("_node_registry")
     return (
@@ -99,6 +114,7 @@ def nodes_trusted_specs(controller: Any) -> list[ui_nodes.TrustedNodeSpec]:
             registry,
             controller._cluster_state,
             getattr(controller, "_manual_host_ids", set()),
+            disconnected_ids=_peer_disconnected_ids(controller),
         )
     )
 
@@ -112,6 +128,7 @@ def nodes_manual_specs(controller: Any) -> list[ui_nodes.TrustedNodeSpec]:
             registry,
             controller._cluster_state,
             getattr(controller, "_manual_host_ids", set()),
+            disconnected_ids=_peer_disconnected_ids(controller),
         )
     )
 
