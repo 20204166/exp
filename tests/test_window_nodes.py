@@ -1,5 +1,6 @@
 """Window node integration tests: selector, switching, isolation, discovery."""
 
+import sys
 import unittest
 from typing import Any
 from unittest.mock import Mock
@@ -10,13 +11,11 @@ from maintenance.models import CapabilityState
 from maintenance.nodes import (
     NodeCapability,
     NodeContext,
-    NodeId,
     NodePermission,
     NodeRegistry,
     NodeStatus,
     NodeTrustState,
 )
-from maintenance.remote import RemoteRequest
 from tests.support.models import make_snapshot, make_summary
 from tests.support.nodes import make_candidate, make_local_context, make_remote_context
 from tests.support.window import make_window as make_bare_window
@@ -24,20 +23,6 @@ from tests.support.window import make_window as make_bare_window
 
 def _summary(key: str, value: str = "10%") -> Any:
     return make_summary(key, key, value=value, capability=CapabilityState.SUPPORTED)
-
-
-def _role_request(
-    op: str, caller_node_id: NodeId, params: dict[str, Any]
-) -> RemoteRequest:
-    return RemoteRequest(
-        node_id=NodeId("local"),
-        caller_node_id=caller_node_id,
-        op=op,
-        params=params,
-        request_id="test-request",
-        nonce="test-nonce",
-        timestamp=0.0,
-    )
 
 
 def _local_context(analyzer: Any = None) -> NodeContext:
@@ -145,6 +130,9 @@ def _candidate(stable_id: str, fingerprint: str | None = None) -> Any:
         last_seen=1.0,
         identity_fingerprint=fingerprint,
     )
+
+
+sys.modules.setdefault("tests.test_window_nodes", sys.modules[__name__])
 
 
 from tests.window_node_cases.selector import WindowNodeSelectorTests  # noqa: F401, I001

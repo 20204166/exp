@@ -3,6 +3,7 @@
 import threading
 import unittest
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock, call
 
 from maintenance.cluster import ClusterState, PeerGrantRecord, trusted_node_record
@@ -18,7 +19,7 @@ from maintenance.nodes import (
     NodeTrustState,
     node_operation_key,
 )
-from maintenance.remote import RemoteAuthError
+from maintenance.remote import RemoteAuthError, RemoteRequest
 from maintenance.ui import window_discovery as ui_window_discovery
 from maintenance.ui import window_node_actions
 from maintenance.ui.render_coordinator import UICoordinator
@@ -28,11 +29,24 @@ from tests.support.nodes import make_remote_context
 from tests.support.scheduling import DeferredRunner
 from tests.test_window_nodes import (
     _make_window,
-    _role_request,
     _summary,
     _trusted_context,
 )
 from window import AppWindow
+
+
+def _role_request(
+    op: str, caller_node_id: NodeId, params: dict[str, Any]
+) -> RemoteRequest:
+    return RemoteRequest(
+        node_id=NodeId("local"),
+        caller_node_id=caller_node_id,
+        op=op,
+        params=params,
+        request_id="test-request",
+        nonce="test-nonce",
+        timestamp=0.0,
+    )
 
 
 # Preserve the extracted case bodies exactly as they were in the facade.
