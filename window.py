@@ -1281,3 +1281,13 @@ class AppWindow:
         ui_window_scan.show_error_for_generation(
             self, generation, message, node_id=node_id
         )
+
+
+def attempt_pending_trust_revocations(controller: Any, node_id: str) -> None:
+    """Dispatch any durable pending trust revocation for ``node_id``.
+
+    Called from the discovery candidate callback so that when a previously
+    revoked-while-offline peer reappears, the ``revoke_self`` RPC is sent
+    without requiring user interaction.  The peer remains untrusted regardless.
+    """
+    ui_node_actions.attempt_pending_trust_revocations(controller, node_id)

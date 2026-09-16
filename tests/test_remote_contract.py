@@ -1563,5 +1563,177 @@ class RealSocketRoleRpcTests(unittest.TestCase):
         self.assertEqual(ops, ["pause_worker", "resume_worker"])
 
 
+def _trust_revoke_service(
+    trust_revoke_handler: Any = None,
+    *,
+    secret: str = SECRET,
+    caller_node_id: str = "peer-a",
+) -> RemoteService:
+    """A RemoteService wired for trust self-revocation."""
+    return RemoteService(
+        node_id=NodeId("peer-b"),
+        display_name="Peer B",
+        hostname="peer-b-host",
+        platform="Linux",
+        status=NodeStatus.ONLINE,
+        capabilities=frozenset({NodeCapability.DASHBOARD_READ}),
+        permissions=frozenset({NodePermission.DASHBOARD_READ}),
+        provider=None,
+        secret=secret,
+        expected_caller_id=NodeId(caller_node_id),
+        grants={
+            NodeId(caller_node_id): PeerGrant(
+                NodeId(caller_node_id),
+                secret,
+                frozenset({NodePermission.DASHBOARD_READ}),
+            )
+        },
+        trust_revoke_handler=trust_revoke_handler
+        or (lambda _caller: {"ok": True, "revoked": True}),
+    )
+
+
+class RealSocketTrustRevokeTests(unittest.TestCase):
+    """revoke_self accepted/rejected over a real loopback socket.
+
+    These tests prove that the trust-revoke flow authenticates via the
+    caller's grant secret, that the trust_revoke_handler is called with the
+    authenticated caller identity, and that structural constraints hold.
+    """
+
+    def _provider(
+        self,
+        port: int,
+        *,
+        secret: str = SECRET,
+        caller_node_id: str = "peer-a",
+    ) -> AuthenticatedNodeProvider:
+        return AuthenticatedNodeProvider(
+            node_id=NodeId("peer-b"),
+            secret=secret,
+            caller_node_id=NodeId(caller_node_id),
+            transport=SocketRemoteTransport("127.0.0.1", port, timeout=5),
+        )
+
+    def test_revoke_self_accepted_over_real_socket(self) -> None:
+        """revoke_self round-trip: handler called with authenticated caller id."""
+        calls: list[NodeId] = []
+
+        def handler(caller: NodeId) -> dict[str, Any]:
+            calls.append(caller)
+            return {"ok": True, "revoked": True}
+
+        server = RemoteSocketServer(_trust_revoke_service(handler))
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        result = self._provider(port).revoke_self()
+
+        self.assertEqual(result, {"ok": True, "revoked": True})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].value, "peer-a")
+
+    def test_revoke_self_already_absent_is_idempotent(self) -> None:
+        """Handler returning already-absent gives success, not error."""
+        def handler(_caller: NodeId) -> dict[str, Any]:
+            return {"ok": True, "revoked": False}
+
+        server = RemoteSocketServer(_trust_revoke_service(handler))
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        result = self._provider(port).revoke_self()
+        self.assertEqual(result["ok"], True)
+
+    def test_wrong_hmac_secret_is_rejected_before_trust_revoke_handler(self) -> None:
+        """revoke_self with wrong secret closes connection; handler not called."""
+        calls: list[NodeId] = []
+        server = RemoteSocketServer(_trust_revoke_service(lambda c: (calls.append(c), {"ok": True})[1]))
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        wrong_secret = "b" * 64
+        with self.assertRaises((RemoteAuthError, RemoteTransportError)):
+            self._provider(port, secret=wrong_secret).revoke_self()
+
+        self.assertEqual(len(calls), 0)
+
+    def test_read_only_peer_can_revoke_self(self) -> None:
+        """A read-only paired peer (DASHBOARD_READ only) can still revoke its own grant."""
+        calls: list[NodeId] = []
+
+        def handler(caller: NodeId) -> dict[str, Any]:
+            calls.append(caller)
+            return {"ok": True, "revoked": True}
+
+        server = RemoteSocketServer(
+            RemoteService(
+                node_id=NodeId("peer-b"),
+                display_name="Peer B",
+                hostname="peer-b-host",
+                platform="Linux",
+                status=NodeStatus.ONLINE,
+                capabilities=frozenset({NodeCapability.DASHBOARD_READ}),
+                permissions=frozenset({NodePermission.DASHBOARD_READ}),
+                provider=None,
+                secret=SECRET,
+                expected_caller_id=NodeId("read-only-peer"),
+                grants={
+                    NodeId("read-only-peer"): PeerGrant(
+                        NodeId("read-only-peer"),
+                        SECRET,
+                        frozenset({NodePermission.DASHBOARD_READ}),
+                    )
+                },
+                trust_revoke_handler=handler,
+            )
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        result = self._provider(port, caller_node_id="read-only-peer").revoke_self()
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(len(calls), 1)
+
+    def test_revoke_self_with_unavailable_handler_returns_error(self) -> None:
+        """revoke_self with no handler yields a RemoteUnavailableError."""
+        service = RemoteService(
+            node_id=NodeId("peer-b"),
+            display_name="Peer B",
+            hostname="peer-b-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=frozenset({NodeCapability.DASHBOARD_READ}),
+            permissions=frozenset({NodePermission.DASHBOARD_READ}),
+            provider=None,
+            secret=SECRET,
+            expected_caller_id=NodeId("peer-a"),
+            grants={
+                NodeId("peer-a"): PeerGrant(
+                    NodeId("peer-a"),
+                    SECRET,
+                    frozenset({NodePermission.DASHBOARD_READ}),
+                )
+            },
+            trust_revoke_handler=None,
+        )
+        server = RemoteSocketServer(service)
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        with self.assertRaises(RemoteUnavailableError):
+            self._provider(port).revoke_self()
+
+
 if __name__ == "__main__":
     unittest.main()

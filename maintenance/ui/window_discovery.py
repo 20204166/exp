@@ -12,7 +12,7 @@ import time
 from dataclasses import replace
 from typing import Any, cast
 
-from maintenance.cluster import PeerGrantRecord, PendingPairing
+from maintenance.cluster import PeerGrantRecord, PendingPairing, PendingTrustRevocation
 from maintenance.components import PeerConnectionManager
 from maintenance.components.cluster_storage import (
     ResourceSnapshot,
@@ -144,6 +144,7 @@ def start_peer_listener(controller: Any) -> None:
             else None
         ),
         role_handler=lambda request: handle_role_request(controller, request),
+        trust_revoke_handler=lambda caller: handle_trust_revoke(controller, caller),
         require_dashboard_share=True,
     )
     try:
@@ -653,6 +654,54 @@ def handle_elevation_request(
     return controller._save_cluster_state(updated)
 
 
+def handle_trust_revoke(controller: Any, caller: NodeId) -> dict[str, Any]:
+    """Delete the authenticated caller's PeerGrantRecord on this target.
+
+    Called from RemoteService when a paired peer sends ``revoke_self``.  The
+    request was already authenticated using the caller's grant secret before
+    this function is called.
+
+    Idempotent: an absent grant returns success so the caller can safely retry
+    after a lost response without being permanently stuck.
+
+    The grant is removed from both the durable cluster state and the live
+    RemoteService ACL so every subsequent request from the same caller
+    immediately fails.
+    """
+    state = controller._cluster_state
+    existing = next(
+        (g for g in state.peer_grants if g.caller_node_id == caller.value),
+        None,
+    )
+    if existing is None:
+        return {"ok": True, "revoked": False}
+    updated = replace(
+        state,
+        peer_grants=tuple(
+            g for g in state.peer_grants if g.caller_node_id != caller.value
+        ),
+        pending_pairings=tuple(
+            p for p in state.pending_pairings if p.caller_node_id != caller.value
+        ),
+    )
+    if not controller._save_cluster_state(updated):
+        raise RemoteAuthError("target grant could not be saved")
+    service = controller.__dict__.get("_peer_service")
+    if service is not None:
+        service.update_grants(
+            {
+                NodeId(g.caller_node_id): PeerGrant(
+                    caller_node_id=NodeId(g.caller_node_id),
+                    secret=g.secret,
+                    permissions=g.permissions,
+                    expires_at=g.expires_at,
+                )
+                for g in updated.peer_grants
+            }
+        )
+    return {"ok": True, "revoked": True}
+
+
 def start_discovery(controller: Any) -> None:
     """Advertise this node and browse for peers via the shared coordinator."""
     if controller.__dict__.get("_node_registry") is None:
@@ -1032,6 +1081,7 @@ def on_discovered_candidate(controller: Any, candidate: Any) -> None:
                 controller._nodes_status(
                     f"Verified {descriptor.display_name} at a new address"
                 )
+    _window_symbols().attempt_pending_trust_revocations(controller, candidate.stable_id)
 
 
 def on_discovered_lost(controller: Any, stable_id: str) -> None:

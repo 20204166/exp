@@ -224,6 +224,10 @@ def revoke_trusted_node(controller: Any, node_id: str) -> None:
     return _connections_impl.revoke_trusted_node(controller, node_id)
 
 
+def attempt_pending_trust_revocations(controller: Any, node_id: str) -> None:
+    return _connections_impl.attempt_pending_trust_revocations(controller, node_id)
+
+
 def remove_manual_host(
     controller: Any, node_id: str, *, messagebox_module: Any = messagebox
 ) -> None:

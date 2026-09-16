@@ -633,6 +633,25 @@ class PendingPairing:
             raise ValueError("pending pairing expiry must be finite")
 
 
+@dataclass(frozen=True, slots=True)
+class PendingTrustRevocation:
+    """Durable outbox record for remote grant cleanup after offline revoke.
+
+    Created when trust is revoked but the target is unreachable.  The
+    ``secret`` is HIGH-SENSITIVITY: used only for the narrow ``revoke_self``
+    RPC and deleted immediately on confirmed cleanup.  It must never appear
+    in logs, diagnostics, or UI.
+    """
+
+    target_node_id: str
+    target_host: str
+    target_port: int
+    target_transport_fingerprint: str
+    caller_node_id: str
+    secret: str
+    created_at: float
+
+
 @dataclass(slots=True)
 class ClusterState:
     """The persisted cluster settings and trusted-node records."""
@@ -649,6 +668,7 @@ class ClusterState:
     promotion_epochs: frozenset[int] = frozenset()
     capability_grants: tuple[CapabilityGrant, ...] = ()
     pending_pairings: tuple[PendingPairing, ...] = ()
+    pending_trust_revocations: tuple[PendingTrustRevocation, ...] = ()
 
     @classmethod
     def create_local(cls, *, local_node_id: str | None = None) -> ClusterState:
@@ -947,6 +967,9 @@ class ClusterStore:
         if len(set(grant_keys)) != len(grant_keys):
             capability_grants = ()
         pending_pairings = self._parse_pending_pairings(data.get("pending_pairings"))
+        pending_trust_revocations = self._parse_pending_trust_revocations(
+            data.get("pending_trust_revocations")
+        )
         state = ClusterState(
             discovery_enabled=discovery,
             trusted_nodes=records,
@@ -963,6 +986,7 @@ class ClusterStore:
             promotion_epochs=promotion_epochs,
             capability_grants=capability_grants,
             pending_pairings=pending_pairings,
+            pending_trust_revocations=pending_trust_revocations,
         )
         state.prune_pending_pairings()
         return state
@@ -1269,6 +1293,60 @@ class ClusterStore:
         return tuple(records)
 
     @staticmethod
+    def _parse_pending_trust_revocations(
+        value: Any,
+    ) -> tuple[PendingTrustRevocation, ...]:
+        if not isinstance(value, list):
+            return ()
+        records: list[PendingTrustRevocation] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            target_node_id = item.get("target_node_id")
+            target_host = item.get("target_host")
+            target_port = item.get("target_port")
+            target_transport_fingerprint = item.get("target_transport_fingerprint")
+            caller_node_id = item.get("caller_node_id")
+            secret = item.get("secret")
+            created_at = item.get("created_at")
+            if (
+                not isinstance(target_node_id, str)
+                or not target_node_id
+                or not isinstance(target_host, str)
+                or not target_host
+                or not isinstance(target_port, int)
+                or isinstance(target_port, bool)
+                or not 0 <= target_port <= 65535
+                or not isinstance(target_transport_fingerprint, str)
+                or not target_transport_fingerprint
+                or not isinstance(caller_node_id, str)
+                or not caller_node_id
+                or not isinstance(secret, str)
+                or len(secret) != 64
+                or not isinstance(created_at, (int, float))
+                or isinstance(created_at, bool)
+            ):
+                LOGGER.warning("Ignoring malformed pending trust revocation")
+                continue
+            try:
+                bytes.fromhex(secret)
+            except ValueError:
+                LOGGER.warning("Ignoring non-hex pending trust revocation secret")
+                continue
+            records.append(
+                PendingTrustRevocation(
+                    target_node_id=target_node_id,
+                    target_host=target_host,
+                    target_port=target_port,
+                    target_transport_fingerprint=target_transport_fingerprint,
+                    caller_node_id=caller_node_id,
+                    secret=secret,
+                    created_at=float(created_at),
+                )
+            )
+        return tuple(records)
+
+    @staticmethod
     def _parse_capability_grant(item: Any) -> CapabilityGrant | None:
         if not isinstance(item, dict):
             return None
@@ -1414,6 +1492,18 @@ class ClusterStore:
                     "expires_at": pairing.expires_at,
                 }
                 for pairing in state.pending_pairings
+            ],
+            "pending_trust_revocations": [
+                {
+                    "target_node_id": r.target_node_id,
+                    "target_host": r.target_host,
+                    "target_port": r.target_port,
+                    "target_transport_fingerprint": r.target_transport_fingerprint,
+                    "caller_node_id": r.caller_node_id,
+                    "secret": r.secret,
+                    "created_at": r.created_at,
+                }
+                for r in state.pending_trust_revocations
             ],
         }
         return json.dumps(payload, indent=2, sort_keys=True) + "\n"

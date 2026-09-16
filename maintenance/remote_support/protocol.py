@@ -66,6 +66,7 @@ OP_REQUIRED_CAPABILITY: dict[str, NodeCapability] = {
     "sync_capability_grant": NodeCapability.REMOTE_MANAGEMENT,
     "start_dashboard_share": NodeCapability.DASHBOARD_READ,
     "stop_dashboard_share": NodeCapability.DASHBOARD_READ,
+    "revoke_self": NodeCapability.DASHBOARD_READ,
 }
 
 OP_REQUIRED_PERMISSION: dict[str, NodePermission] = {

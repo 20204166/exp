@@ -192,6 +192,7 @@ class RemoteService:
         coordinator_epoch: int | None = None,
         fencing_token: str | None = None,
         role_handler: Callable[[RemoteRequest], dict[str, Any]] | None = None,
+        trust_revoke_handler: Callable[[NodeId], dict[str, Any]] | None = None,
         require_dashboard_share: bool = False,
     ) -> None:
         self._node_id = node_id
@@ -242,6 +243,7 @@ class RemoteService:
         self._coordinator_epoch = coordinator_epoch
         self._fencing_token = fencing_token
         self._role_handler = role_handler
+        self._trust_revoke_handler = trust_revoke_handler
         self._require_dashboard_share = require_dashboard_share
         self._dashboard_shares: dict[NodeId, float] = {}
 
@@ -387,6 +389,12 @@ class RemoteService:
             if self._role_handler is None:
                 raise RemoteUnavailableError("role operations are unavailable")
             return self._role_handler(request)
+        if request.op == "revoke_self":
+            if request.caller_node_id is None:
+                raise RemoteAuthorizationError("caller identity required for self-revocation")
+            if self._trust_revoke_handler is None:
+                raise RemoteUnavailableError("trust revocation is unavailable")
+            return self._trust_revoke_handler(request.caller_node_id)
         if request.op == "hello":
             return {
                 "ok": True,
@@ -561,6 +569,16 @@ class AuthenticatedNodeProvider:
         payload = self._request("hello", {}, cancel_event)
         validate_hello_payload(payload, expected_node_id=self._node_id)
         return payload
+
+    def revoke_self(self, cancel_event: Any | None = None) -> dict[str, Any]:
+        """Ask the target to delete this caller's grant (self-revocation).
+
+        The target authenticates the request with the current secret and then
+        deletes the matching ``PeerGrantRecord``.  The same secret will fail on
+        the very next request because the grant is gone from the target ACL.
+        Idempotent: a missing grant is treated as already revoked (success).
+        """
+        return self._request("revoke_self", {}, cancel_event)
 
     @staticmethod
     def request_pairing(

@@ -1,12 +1,13 @@
 """Trusted and manual node connection actions for the window facade."""
 
+import time
 import threading
 from collections.abc import Callable
 from dataclasses import replace
 from tkinter import messagebox
 from typing import Any
 
-from maintenance.cluster import trusted_node_record
+from maintenance.cluster import PendingTrustRevocation, trusted_node_record
 from maintenance.components.coordinator import ComponentRefreshScheduler
 from maintenance.nodes import (
     READ_PERMISSIONS,
@@ -25,11 +26,18 @@ from maintenance.remote import (
     AuthenticatedNodeProvider,
     RemoteProcessActionBackend,
     SocketRemoteTransport,
+    TLSRemoteTransport,
     build_trusted_transport,
 )
 
 
-def revoke_trusted_node(controller: Any, node_id: str) -> None:
+def revoke_trusted_node(
+    controller: Any,
+    node_id: str,
+    *,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = TLSRemoteTransport,
+) -> None:
     registry = controller.__dict__.get("_node_registry")
     if registry is None:
         return
@@ -45,6 +53,31 @@ def revoke_trusted_node(controller: Any, node_id: str) -> None:
     except ValueError as error:
         controller._nodes_error(str(error))
         return
+
+    trust_record = controller._cluster_state.record(node_id)
+    pending_revocation: PendingTrustRevocation | None = None
+    if (
+        trust_record is not None
+        and trust_record.port is not None
+        and trust_record.transport_fingerprint
+    ):
+        pending_revocation = PendingTrustRevocation(
+            target_node_id=node_id,
+            target_host=trust_record.host,
+            target_port=trust_record.port,
+            target_transport_fingerprint=trust_record.transport_fingerprint,
+            caller_node_id=controller._cluster_state.local_node_id,
+            secret=trust_record.secret,
+            created_at=time.time(),
+        )
+
+    existing_revocations = controller._cluster_state.pending_trust_revocations
+    new_revocations = tuple(
+        r for r in existing_revocations if r.target_node_id != node_id
+    )
+    if pending_revocation is not None:
+        new_revocations = new_revocations + (pending_revocation,)
+
     state = replace(
         controller._cluster_state,
         trusted_nodes=tuple(
@@ -57,6 +90,12 @@ def revoke_trusted_node(controller: Any, node_id: str) -> None:
             for grant in controller._cluster_state.peer_grants
             if grant.caller_node_id != node_id
         ),
+        pending_pairings=tuple(
+            p
+            for p in controller._cluster_state.pending_pairings
+            if p.caller_node_id != node_id
+        ),
+        pending_trust_revocations=new_revocations,
     )
     if not controller._save_cluster_state(state):
         controller._nodes_error("Cluster settings could not be saved")
@@ -90,6 +129,98 @@ def revoke_trusted_node(controller: Any, node_id: str) -> None:
         controller._sync_selected_context_mirrors(context)
         controller._render_selected_node(context)
     controller._nodes_status("Node removed from trusted machines")
+
+    if pending_revocation is not None:
+        _dispatch_trust_revocation(
+            controller,
+            pending_revocation,
+            provider_cls=provider_cls,
+            transport_cls=transport_cls,
+        )
+
+
+def _dispatch_trust_revocation(
+    controller: Any,
+    pending: PendingTrustRevocation,
+    *,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = TLSRemoteTransport,
+) -> None:
+    """Spawn a background task to send ``revoke_self`` to the target.
+
+    On success the ``PendingTrustRevocation`` is removed from durable state.
+    On failure the record is left in place for reconciliation when the target
+    comes back online.  Either way local trust is already fully removed.
+    """
+    node_id = NodeId(pending.target_node_id)
+    key = node_operation_key(node_id, "trust_revoke")
+
+    def task(
+        _cancel_event: threading.Event,
+        _progress: Callable[[str], None],
+    ) -> dict[str, Any]:
+        transport = transport_cls(
+            pending.target_host,
+            pending.target_port,
+            expected_fingerprint=pending.target_transport_fingerprint,
+        )
+        p = provider_cls(
+            node_id=node_id,
+            secret=pending.secret,
+            caller_node_id=NodeId(pending.caller_node_id),
+            transport=transport,
+        )
+        return p.revoke_self()
+
+    def on_result(_key: str, _result: dict[str, Any]) -> None:
+        current = controller.__dict__.get("_cluster_state")
+        if current is None:
+            return
+        updated = replace(
+            current,
+            pending_trust_revocations=tuple(
+                r
+                for r in current.pending_trust_revocations
+                if r.target_node_id != pending.target_node_id
+            ),
+        )
+        controller._save_cluster_state(updated)
+
+    def on_error(_key: str, _message: str) -> None:
+        pass
+
+    controller._coordinator.run(key, task, on_result=on_result, on_error=on_error)
+
+
+def attempt_pending_trust_revocations(
+    controller: Any,
+    node_id: str,
+    *,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = TLSRemoteTransport,
+) -> None:
+    """If a durable revocation is pending for ``node_id``, dispatch it now.
+
+    Called when the peer is discovered online so cleanup happens without
+    requiring the user to re-open the Nodes page.  The peer remains untrusted
+    and inoperable regardless — this is a security-cleanup background task
+    only.
+    """
+    state = controller.__dict__.get("_cluster_state")
+    if state is None:
+        return
+    pending = next(
+        (r for r in state.pending_trust_revocations if r.target_node_id == node_id),
+        None,
+    )
+    if pending is None:
+        return
+    _dispatch_trust_revocation(
+        controller,
+        pending,
+        provider_cls=provider_cls,
+        transport_cls=transport_cls,
+    )
 
 
 def add_manual_host(
