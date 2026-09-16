@@ -1350,5 +1350,218 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _role_service(
+    role_handler: Any = None,
+    *,
+    cluster_id: str = "cluster-1",
+    coordinator_epoch: int = 5,
+    fencing_token: str = "fence-abc",
+    secret: str = SECRET,
+    caller_node_id: str = "coordinator",
+) -> RemoteService:
+    """A RemoteService wired for REMOTE_MANAGEMENT role operations."""
+    return RemoteService(
+        node_id=NodeId("worker"),
+        display_name="Worker",
+        hostname="worker-host",
+        platform="Linux",
+        status=NodeStatus.ONLINE,
+        capabilities=frozenset({NodeCapability.REMOTE_MANAGEMENT}),
+        permissions=frozenset({NodePermission.REMOTE_MANAGEMENT}),
+        provider=None,
+        secret=secret,
+        expected_caller_id=NodeId(caller_node_id),
+        cluster_id=cluster_id,
+        coordinator_epoch=coordinator_epoch,
+        fencing_token=fencing_token,
+        role_handler=role_handler or (lambda _request: {"ok": True}),
+    )
+
+
+class RealSocketRoleRpcTests(unittest.TestCase):
+    """Role RPCs accepted/rejected over a real loopback socket.
+
+    These tests prove that cluster_id, epoch, and fencing_token validation
+    happen on the target side before the role_handler is reached, and that
+    a well-formed request is accepted end-to-end.
+    """
+
+    def _provider(
+        self,
+        port: int,
+        *,
+        secret: str = SECRET,
+        caller_node_id: str = "coordinator",
+    ) -> AuthenticatedNodeProvider:
+        return AuthenticatedNodeProvider(
+            node_id=NodeId("worker"),
+            secret=secret,
+            caller_node_id=NodeId(caller_node_id),
+            transport=SocketRemoteTransport("127.0.0.1", port, timeout=5),
+        )
+
+    def test_assign_role_accepted_over_real_socket(self) -> None:
+        """Coordinator sends assign_role over real socket; target accepts and calls handler."""
+        calls: list[RemoteRequest] = []
+
+        def role_handler(request: RemoteRequest) -> dict[str, Any]:
+            calls.append(request)
+            return {"ok": True}
+
+        server = RemoteSocketServer(_role_service(role_handler))
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        result = self._provider(port).assign_role(
+            "worker",
+            ["worker"],
+            cluster_id="cluster-1",
+            epoch=5,
+            fencing_token="fence-abc",
+        )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].op, "assign_role")
+        self.assertEqual(calls[0].params["target_node_id"], "worker")
+
+    def test_wrong_cluster_id_is_rejected_over_real_socket(self) -> None:
+        """assign_role with a mismatched cluster_id is rejected before the handler."""
+        calls: list[RemoteRequest] = []
+        server = RemoteSocketServer(
+            _role_service(lambda req: (calls.append(req), {"ok": True})[1])
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        with self.assertRaises(
+            (RemoteAuthorizationError, RemoteExecutionError, RemoteTransportError)
+        ):
+            self._provider(port).assign_role(
+                "worker",
+                ["worker"],
+                cluster_id="WRONG-CLUSTER",
+                epoch=5,
+                fencing_token="fence-abc",
+            )
+
+        self.assertEqual(len(calls), 0, "role_handler must not be reached on bad cluster_id")
+
+    def test_stale_epoch_is_rejected_over_real_socket(self) -> None:
+        """assign_role with a stale epoch is rejected before the handler."""
+        calls: list[RemoteRequest] = []
+        server = RemoteSocketServer(
+            _role_service(lambda req: (calls.append(req), {"ok": True})[1])
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        with self.assertRaises(
+            (RemoteAuthorizationError, RemoteExecutionError, RemoteTransportError)
+        ):
+            self._provider(port).assign_role(
+                "worker",
+                ["worker"],
+                cluster_id="cluster-1",
+                epoch=99,  # stale — service expects 5
+                fencing_token="fence-abc",
+            )
+
+        self.assertEqual(len(calls), 0, "role_handler must not be reached on stale epoch")
+
+    def test_wrong_fencing_token_is_rejected_over_real_socket(self) -> None:
+        """assign_role with a wrong fencing token is rejected before the handler."""
+        calls: list[RemoteRequest] = []
+        server = RemoteSocketServer(
+            _role_service(lambda req: (calls.append(req), {"ok": True})[1])
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        with self.assertRaises(
+            (RemoteAuthorizationError, RemoteExecutionError, RemoteTransportError)
+        ):
+            self._provider(port).assign_role(
+                "worker",
+                ["worker"],
+                cluster_id="cluster-1",
+                epoch=5,
+                fencing_token="WRONG-FENCE",
+            )
+
+        self.assertEqual(len(calls), 0, "role_handler must not be reached on bad fencing_token")
+
+    def test_wrong_hmac_secret_is_rejected_before_role_handler(self) -> None:
+        """A caller with a wrong HMAC secret cannot reach the role handler."""
+        calls: list[RemoteRequest] = []
+        server = RemoteSocketServer(
+            _role_service(lambda req: (calls.append(req), {"ok": True})[1])
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        wrong_secret_provider = AuthenticatedNodeProvider(
+            node_id=NodeId("worker"),
+            secret="b" * 64,  # wrong secret
+            caller_node_id=NodeId("coordinator"),
+            transport=SocketRemoteTransport("127.0.0.1", port, timeout=5),
+        )
+
+        with self.assertRaises(
+            (RemoteAuthError, RemoteExecutionError, RemoteAuthorizationError, RemoteTransportError)
+        ):
+            wrong_secret_provider.assign_role(
+                "worker",
+                ["worker"],
+                cluster_id="cluster-1",
+                epoch=5,
+                fencing_token="fence-abc",
+            )
+
+        self.assertEqual(len(calls), 0, "role_handler must not be reached with wrong HMAC secret")
+
+    def test_pause_and_resume_accepted_over_real_socket(self) -> None:
+        """pause_worker and resume_worker are accepted end-to-end over a real socket."""
+        ops: list[str] = []
+
+        def role_handler(request: RemoteRequest) -> dict[str, Any]:
+            ops.append(request.op)
+            return {"ok": True}
+
+        server = RemoteSocketServer(_role_service(role_handler))
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+        provider = self._provider(port)
+
+        result_pause = provider.pause_worker(
+            "worker",
+            cluster_id="cluster-1",
+            epoch=5,
+            fencing_token="fence-abc",
+        )
+        result_resume = provider.resume_worker(
+            "worker",
+            cluster_id="cluster-1",
+            epoch=5,
+            fencing_token="fence-abc",
+        )
+
+        self.assertEqual(result_pause, {"ok": True})
+        self.assertEqual(result_resume, {"ok": True})
+        self.assertEqual(ops, ["pause_worker", "resume_worker"])
+
+
 if __name__ == "__main__":
     unittest.main()

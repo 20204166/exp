@@ -1739,9 +1739,25 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window = _make_window(start_discovery=False)
         state = ClusterState.create_local(local_node_id="local")
         state.role_assignments = state.role_assignments + (
-            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("peer-a")),
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}),
+                node_id=NodeId("peer-a"),
+                has_active_job=True,
+            ),
+        )
+        state.trusted_nodes = (
+            trusted_node_record(
+                node_id="peer-a",
+                display_name="Peer A",
+                hostname="peer-a",
+                host="192.0.2.10",
+                port=5000,
+                secret="secret",
+                transport_fingerprint="tls-pin",
+            ),
         )
         window._cluster_state = state
+        window._coordinator = AppCoordinator(runner=lambda w: w(), deliver=lambda cb: cb())
 
         def save_state(saved: ClusterState) -> bool:
             window._cluster_state = saved
@@ -1752,9 +1768,14 @@ class WindowNodeSwitchingTests(unittest.TestCase):
         window._refresh_cluster_page = Mock()
         window._nodes_status = Mock()
         window._nodes_error = Mock()
+        mock_provider = Mock()
+        mock_provider.remove_job.return_value = {"ok": True}
 
         window_node_actions.remove_job_node(
-            window, "peer-a", messagebox_module=Mock(return_value=True)
+            window, "peer-a",
+            messagebox_module=Mock(return_value=True),
+            provider_cls=Mock(return_value=mock_provider),
+            transport_cls=Mock,
         )
 
         peer = next(
@@ -3802,18 +3823,120 @@ class RemoteRoleOperationTests(unittest.TestCase):
         self.assertEqual(runner.pending, 0)
         window._nodes_error.assert_called_once()
 
-    def test_role_op_without_coordinator_epoch_skips_rpc(self) -> None:
+    def test_role_op_without_coordinator_epoch_fails_closed_for_enrolled_member(
+        self,
+    ) -> None:
+        """An enrolled cluster member + no epoch must fail with an error, not mutate locally."""
         runner = DeferredRunner()
         window = self._cluster_window(runner)
         window._cluster_state = replace(window._cluster_state, coordinator_epoch=None)
         provider_cls = Mock()
+        original_assignments = window._cluster_state.role_assignments
 
         window_node_actions.pause_node(
             window, "peer-a", provider_cls=provider_cls, transport_cls=Mock
         )
 
+        # No RPC dispatched, no task queued
         provider_cls.assert_not_called()
         self.assertEqual(runner.pending, 0)
+        # Error surfaced — not silently dropped
+        window._nodes_error.assert_called()
+        # Role state must NOT have been mutated locally
+        self.assertEqual(window._cluster_state.role_assignments, original_assignments)
+
+    def test_enrolled_member_without_port_fails_closed_not_silently_local(self) -> None:
+        """An enrolled cluster member with no port must fail closed; not mutate locally.
+
+        This was the dangerous silent-fallback bug: peer with a role assignment
+        but no reachable endpoint would silently receive a local-only role write,
+        diverging from the target's actual state.
+        """
+        runner = DeferredRunner()
+        window = self._cluster_window(runner)
+        # Remove port from peer-a's trusted_nodes entry to simulate offline node
+        window._cluster_state.trusted_nodes = (
+            trusted_node_record(
+                node_id="peer-a",
+                display_name="Peer A",
+                hostname="peer-a",
+                host="192.0.2.10",
+                port=None,  # no port → endpoint unavailable
+                secret="secret",
+                transport_fingerprint="tls-pin",
+            ),
+        )
+        provider_cls = Mock()
+        original_assignments = window._cluster_state.role_assignments
+
+        window_node_actions.pause_node(
+            window, "peer-a", provider_cls=provider_cls, transport_cls=Mock
+        )
+
+        # No RPC, no task queued
+        provider_cls.assert_not_called()
+        self.assertEqual(runner.pending, 0)
+        # Error must be surfaced
+        window._nodes_error.assert_called()
+        error_msg = window._nodes_error.call_args[0][0]
+        self.assertIn("unavailable", error_msg)
+        # Cluster state must NOT have been mutated locally
+        self.assertEqual(window._cluster_state.role_assignments, original_assignments)
+
+    def test_enrolled_member_without_record_fails_closed(self) -> None:
+        """Enrolled member with no trusted_nodes entry must fail, not mutate locally."""
+        runner = DeferredRunner()
+        window = self._cluster_window(runner)
+        # Clear trusted_nodes so state.record("peer-a") returns None
+        window._cluster_state.trusted_nodes = ()
+        provider_cls = Mock()
+        original_assignments = window._cluster_state.role_assignments
+
+        window_node_actions.set_node_roles(
+            window, "peer-a", frozenset({"worker"}),
+            provider_cls=provider_cls, transport_cls=Mock,
+        )
+
+        provider_cls.assert_not_called()
+        self.assertEqual(runner.pending, 0)
+        window._nodes_error.assert_called()
+        error_msg = window._nodes_error.call_args[0][0]
+        self.assertIn("connection record", error_msg)
+        self.assertEqual(window._cluster_state.role_assignments, original_assignments)
+
+    def test_remove_connection_proceeds_locally_even_for_offline_enrolled_member(
+        self,
+    ) -> None:
+        """remove_connection local cleanup must always proceed; RPC is best-effort."""
+        runner = DeferredRunner()
+        window = self._cluster_window(runner)
+        # Remove port so endpoint is unavailable
+        window._cluster_state.trusted_nodes = (
+            trusted_node_record(
+                node_id="peer-a",
+                display_name="Peer A",
+                hostname="peer-a",
+                host="192.0.2.10",
+                port=None,
+                secret="secret",
+                transport_fingerprint="tls-pin",
+            ),
+        )
+        provider_cls = Mock()
+
+        window_node_actions.remove_connection_node(
+            window, "peer-a",
+            messagebox_module=Mock(askyesno=Mock(return_value=True)),
+            provider_cls=provider_cls, transport_cls=Mock,
+        )
+
+        # Local cleanup must have run (refresh was called)
+        window._refresh_nodes_page.assert_called()
+        # No RPC attempt for unreachable node
+        provider_cls.assert_not_called()
+        self.assertEqual(runner.pending, 0)
+        # No error surfaced (fire-and-forget; silently skip when unreachable)
+        window._nodes_error.assert_not_called()
 
 
 if __name__ == "__main__":

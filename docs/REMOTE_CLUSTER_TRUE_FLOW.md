@@ -1486,10 +1486,150 @@ An invite persisted before this change (no fence fields) decodes with empty/zero
 
 ### Remaining gaps (unchanged from §51/§52 unless noted)
 
-- Role-management RPCs for anything *other* than initial admission (`assign_role`, `pause_worker`, `resume_worker`, `revoke_worker`, `remove_job`, `grant_capabilities`, `revoke_capabilities`) are still local-only bookkeeping with no remote caller — deliberately out of scope for this repair.
+- Role-management RPCs for anything *other* than initial admission (`assign_role`, `pause_worker`, `resume_worker`, `revoke_worker`, `remove_job`, `grant_capabilities`, `revoke_capabilities`) are still local-only bookkeeping with no remote caller — deliberately out of scope for this repair. (**SUPERSEDED by §57 below — these are now wired.**)
 - MOVABLE placement is still dormant; `PlacementView` still has no reference to `RoleState`/cluster membership.
 - No UI exists yet to leave a joined cluster or to view "which invite is this" once consumed — an invite is one-shot and self-describing, but there is no cluster-side membership-list UI beyond the existing All Systems rows.
 - Coordinator failover mid-invite-lifetime (epoch bump between invite creation and consumption) fails the join closed via the existing fencing check — this is correct fail-safe behavior, not a gap, but it is untested against a live failover scenario end-to-end.
 - Invite creation has no rate limiting and no UI list of currently-outstanding invites.
+
+---
+
+## 57. 2026-09-16 — Role management wired into the remote control plane (Phase 2 + Phase 2.5)
+
+**Previous finding from §29/§51 that this supersedes:**
+> *"Role-management RPCs (`assign_role`, `pause_worker`, `resume_worker`, `revoke_worker`, `remove_job`, `remove_connection`) have zero production callers. Every role change made in the UI mutates the local machine's own `cluster.json` only."*
+
+That finding is no longer accurate for enrolled cluster members. This section documents the repair and its hardening.
+
+---
+
+### Phase 2: Compose role management into the real remote control plane
+
+**Production entry points (all in `maintenance/ui/window_node_actions.py`):**
+
+| Function | RPC sent | Condition |
+|---|---|---|
+| `set_node_roles` | `assign_role` | enrolled cluster member with reachable endpoint |
+| `pause_node` | `pause_worker` | same |
+| `resume_node` | `resume_worker` | same |
+| `revoke_node` | `revoke_worker` | same |
+| `remove_job_node` | `remove_job` | same |
+| `remove_connection_node` | `remove_connection` (fire-and-forget) | same |
+
+**REMOTE FIRST → LOCAL COMMIT pattern (all except `remove_connection`):**
+1. Compute local role state transition (validates authorization, catches `RoleAuthorizationError`).
+2. Classify target via `_classify_role_dispatch` (see §57.1).
+3. If REMOTE: send RPC to target via `AuthenticatedNodeProvider` over existing authenticated transport.
+4. On acknowledgment (`on_result`): commit local `ClusterState` via `_save_cluster_state`.
+5. On error (`on_error`): surface error, no local mutation.
+
+**`remove_connection` is fire-and-forget:** local context cleanup always happens first; the RPC is a best-effort notification and its failure is silently ignored.
+
+**`_apply_cluster_join` fix (prerequisite to Phase 2):**
+Before Phase 2, `_apply_cluster_join` set the joining Worker's `role_assignments` to contain only the Worker's own entry. `handle_role_request` requires `actor_id ∈ state.role_assignments` — so any subsequent role RPC from the Coordinator would be rejected with "role caller is not enrolled". The fix adds the Coordinator's `RoleAssignment` to the joining Worker's `role_assignments`:
+```python
+role_assignments=(
+    RoleAssignment({COORDINATOR, WORKER}, node_id=coordinator_id),
+    RoleAssignment({WORKER}, node_id=local_node_id),
+)
+```
+
+**Coordinator enrollment validation:** The coordinator entry records the exact `coordinator_id` returned in the `consume_invite` response, which itself was taken from the admitting node's live `coordinator_epoch.coordinator_id`. The fence (`cluster_id`, `epoch`, `fencing_token`) is then checked by `RemoteService._verify_role_fence` on every subsequent RPC — an epoch change (Coordinator failover) rejects any stale role RPCs.
+
+**Capability-grant propagation:** Unchanged from before Phase 2; `_propagate_capability_grants` / `sync_capability_grant` were already live.
+
+---
+
+### §57.1 `_classify_role_dispatch` — the remote-vs-local gate
+
+Replaces the old boolean `_is_remote_cluster_target` which silently fell through to local-only mutation on connectivity/authority failure.
+
+**Returns one of:**
+
+| Kind | Meaning |
+|---|---|
+| `_ROLE_LOCAL` | Legitimate local-only: operating on self, or target has no `RoleAssignment` (not cluster-enrolled). |
+| `_ROLE_REMOTE` | Target is an enrolled, active, reachable cluster member; dispatch via control plane. |
+| `_ROLE_FAIL` | Enrolled member but cannot dispatch; surface explicit error; **never** silently mutate locally. |
+
+**Fail-closed conditions (return `_ROLE_FAIL`):**
+
+| Condition | Error surfaced |
+|---|---|
+| `coordinator_epoch is None` (enrolled but no epoch) | "Coordinator epoch unavailable — cluster state is inconsistent" |
+| Local node is not COORDINATOR | "This node is not the current Coordinator" |
+| Assignment is revoked | "Target is already revoked" |
+| No `trusted_nodes` record for enrolled member | "No connection record for enrolled cluster member" |
+| Record exists but `port is None` | "Target endpoint is unavailable (offline or no port saved)" |
+
+**REMOTE FAILURE IS NOT LOCAL PERMISSION TO MUTATE.** The old code fell through to local-only mutation when `record.port is None`. This created cluster divergence: the Coordinator's local state would say "paused" while the Worker never received the notification. The new code surfaces an explicit error instead.
+
+**Legitimate local-only cases (return `_ROLE_LOCAL`):**
+- Operating on the local node itself (`node_id == local_node_id`).
+- Target has no `RoleAssignment` — not enrolled; may be a newly-trusted peer or legacy solo-bootstrap record.
+
+---
+
+### §57.2 Idempotency analysis per RPC
+
+| Operation | Idempotent? | Analysis |
+|---|---|---|
+| `assign_role` | **YES** — calling twice with the same roles produces the same assignment. | `RoleState.assign` replaces or adds; same input → same result. |
+| `pause_worker` | **YES** — sets `paused=True`; calling twice is a no-op on an already-paused node. | `RoleState.pause` → `replace(current, paused=True)`. |
+| `resume_worker` | **YES** — sets `paused=False`; calling twice on already-resumed is no-op. | `RoleState.resume` → `replace(current, paused=False)`. |
+| `revoke_worker` | **NO** — calling twice raises `RoleAuthorizationError("unknown or revoked node")` on the target. | `RoleState.revoke` checks `current.revoked` and raises if already revoked. |
+| `remove_job` | **YES** — sets `has_active_job=False`; calling twice is a no-op. | `RoleState.remove_job` → `replace(current, has_active_job=False)`. |
+| `remove_connection` | **YES** — `manager.disconnect_manual` on an already-disconnected node is harmless. | Local cleanup only; no persistent state to check. |
+
+---
+
+### §57.3 Response-loss / ambiguous-outcome strategy
+
+**Pattern:** RPC sent → target applies mutation and saves → network drops response → initiator receives timeout error → `on_error` fires → no local commit.
+
+**For the 5 idempotent operations** (`assign_role`, `pause_worker`, `resume_worker`, `remove_job`, `remove_connection`): the user can safely retry the action from the UI. The second RPC call produces the same target state. No special handling is needed.
+
+**For `revoke_worker`** (the one non-idempotent RPC): a transport timeout after the target committed is genuinely ambiguous — the target may be revoked while the Coordinator's local state still shows it as active. The current implementation reports the transport error to the user and takes no local action. The operator must verify the remote state (e.g. via Test Connection — a successful `hello` from an already-revoked node would confirm the ambiguity) and retry if needed. A full distributed-transaction or read-back protocol for this case is deferred; the correct operator response is documented here rather than automated.
+
+---
+
+### §57.4 Real-socket validation evidence
+
+`tests/test_remote_contract.py::RealSocketRoleRpcTests` (6 tests, all over a real loopback socket):
+
+| Test | What it proves |
+|---|---|
+| `test_assign_role_accepted_over_real_socket` | Correct cluster_id/epoch/fence → role_handler called; result returned to caller |
+| `test_wrong_cluster_id_is_rejected_over_real_socket` | Wrong cluster_id → `RemoteService._verify_role_fence` rejects; role_handler never called |
+| `test_stale_epoch_is_rejected_over_real_socket` | Stale epoch → same |
+| `test_wrong_fencing_token_is_rejected_over_real_socket` | Wrong fencing_token → same |
+| `test_wrong_hmac_secret_is_rejected_before_role_handler` | Wrong HMAC secret → rejected before any role dispatch |
+| `test_pause_and_resume_accepted_over_real_socket` | pause_worker + resume_worker both accepted end-to-end |
+
+The rejection path closes the connection rather than returning a signed error response; callers receive `RemoteTransportError("connection closed before response")`, which is handled by the `on_error` callback.
+
+---
+
+### §57.5 Coordinator enrollment authority
+
+After `join_cluster_via_invite`:
+- The joining Worker's `role_assignments` contains an entry `RoleAssignment({COORDINATOR, WORKER}, coordinator_id)`.
+- This entry is derived from the `consume_invite` response's `coordinator_id`, which equals the admitting node's live `coordinator_epoch.coordinator_id`.
+- Every subsequent role RPC from the Coordinator carries `cluster_id`, `epoch`, `fencing_token` — all checked by `RemoteService._verify_role_fence` before the handler is reached.
+- A stale Coordinator (epoch/fence mismatch) is rejected at the fence check; a wrong-cluster Coordinator is rejected by cluster_id check.
+- **Tests:** `tests/test_window_nodes.py::WindowNodeConnectionTests::test_join_cluster_via_invite_includes_coordinator_in_role_assignments` verifies the enrollment; `RealSocketRoleRpcTests::test_stale_epoch_is_rejected_over_real_socket` and `test_wrong_cluster_id_is_rejected_over_real_socket` prove the fence is authoritative.
+
+---
+
+### §57.6 Remaining gaps after Phase 2 + 2.5
+
+| Gap | Status |
+|---|---|
+| Bilateral trust Revoke (peer's own grant for revoker removed remotely) | **NOT YET** — `revoke_node` still calls `revoke_trusted_node` locally only; peer's `PeerGrantRecord` for the Coordinator is not removed. Phase 3 scope. |
+| Response-loss handling for `revoke_worker` | Operator-documented (§57.3); no automated reconciliation. |
+| Coordinator failover / epoch rollover for in-flight role RPCs | A role RPC carrying a stale fence is rejected on the target. Caller receives error; no local mutation. Operator retries with current fence. |
+| MOVABLE placement | Still dormant. |
+| `assign_job` | Still has no production caller. |
+| Coordinator role transfer via UI | Still not exposed (§30). |
 
 ---

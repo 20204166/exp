@@ -179,20 +179,73 @@ def _propagate_capability_grants(controller: Any, state: RoleState) -> None:
                 )
 
 
-def _is_remote_cluster_target(controller: Any, node_id: str) -> bool:
-    """True when node_id is an enrolled, reachable peer and we are the Coordinator."""
+_ROLE_LOCAL = "local_only"
+_ROLE_REMOTE = "remote"
+_ROLE_FAIL = "fail"
+
+
+def _classify_role_dispatch(controller: Any, node_id: str) -> tuple[str, str | None]:
+    """Classify a role mutation as local-only, remote, or fail-closed.
+
+    Returns (kind, reason):
+    - (_ROLE_LOCAL, None)   — legitimate local-only: self, no cluster enrollment,
+                              or non-cluster bootstrap state.
+    - (_ROLE_REMOTE, None)  — dispatch via the remote control plane.
+    - (_ROLE_FAIL, reason)  — enrolled cluster member; surface reason; do NOT
+                              fall back to local-only mutation.
+
+    REMOTE FAILURE IS NOT LOCAL PERMISSION TO MUTATE.
+    An enrolled node is a cluster entity: connectivity or authority failures must
+    surface as explicit errors, not be silently absorbed as local-only writes that
+    create divergence between the Coordinator and the Worker.
+
+    Legitimate local-only conditions (return _ROLE_LOCAL):
+    - Operating on the local node itself.
+    - No RoleAssignment for the target (not cluster-enrolled; may be a newly
+      trusted peer or a legacy solo-bootstrap record).
+
+    Fail-closed conditions (return _ROLE_FAIL):
+    - Enrolled member + no coordinator_epoch: inconsistent cluster state.
+    - Enrolled member + local node is not the Coordinator: cannot authorize RPC.
+    - Enrolled member + assignment is revoked: use Revoke to manage state.
+    - Enrolled member + no saved connection record: cannot reach target.
+    - Enrolled member + port is None: target endpoint unavailable (offline).
+    """
     state = controller._cluster_state
-    if state.coordinator_epoch is None:
-        return False
-    if ClusterRole.COORDINATOR not in state.local_assignment.roles:
-        return False
+
+    # Operating on self is always a local action.
     if node_id == state.local_node_id:
-        return False
+        return _ROLE_LOCAL, None
+
+    # A node with no RoleAssignment is not cluster-enrolled; local bookkeeping
+    # is valid (e.g. a freshly-trusted peer awaiting explicit cluster admission).
     assignment = _role_state(controller).assignment_for(NodeId(node_id))
-    if assignment is None or assignment.revoked:
-        return False
+    if assignment is None:
+        return _ROLE_LOCAL, None
+
+    # The node IS enrolled.  Every further failure must be surfaced explicitly;
+    # do not silently reinterpret a cluster member mutation as a local write.
+
+    if state.coordinator_epoch is None:
+        return (
+            _ROLE_FAIL,
+            "Coordinator epoch unavailable — cluster state is inconsistent",
+        )
+
+    if ClusterRole.COORDINATOR not in state.local_assignment.roles:
+        return _ROLE_FAIL, "This node is not the current Coordinator"
+
+    if assignment.revoked:
+        return _ROLE_FAIL, "Target is already revoked"
+
     record = state.record(node_id)
-    return record is not None and record.port is not None
+    if record is None:
+        return _ROLE_FAIL, "No connection record for enrolled cluster member"
+
+    if record.port is None:
+        return _ROLE_FAIL, "Target endpoint is unavailable (offline or no port saved)"
+
+    return _ROLE_REMOTE, None
 
 
 def _remote_role_op(
@@ -251,7 +304,11 @@ def set_node_roles(
     except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
         controller._nodes_error(str(error))
         return
-    if _is_remote_cluster_target(controller, node_id):
+    dispatch, reason = _classify_role_dispatch(controller, node_id)
+    if dispatch == _ROLE_FAIL:
+        controller._nodes_error(reason)
+        return
+    if dispatch == _ROLE_REMOTE:
         epoch = controller._cluster_state.coordinator_epoch
         def rpc_call(provider: Any) -> Any:
             return provider.assign_role(
@@ -448,7 +505,11 @@ def pause_node(
     except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
         controller._nodes_error(str(error))
         return
-    if _is_remote_cluster_target(controller, node_id):
+    dispatch, reason = _classify_role_dispatch(controller, node_id)
+    if dispatch == _ROLE_FAIL:
+        controller._nodes_error(reason)
+        return
+    if dispatch == _ROLE_REMOTE:
         epoch = controller._cluster_state.coordinator_epoch
         def rpc_call(provider: Any) -> Any:
             return provider.pause_worker(
@@ -481,7 +542,11 @@ def resume_node(
     except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
         controller._nodes_error(str(error))
         return
-    if _is_remote_cluster_target(controller, node_id):
+    dispatch, reason = _classify_role_dispatch(controller, node_id)
+    if dispatch == _ROLE_FAIL:
+        controller._nodes_error(reason)
+        return
+    if dispatch == _ROLE_REMOTE:
         epoch = controller._cluster_state.coordinator_epoch
         def rpc_call(provider: Any) -> Any:
             return provider.resume_worker(
@@ -546,7 +611,12 @@ def remove_connection_node(
         controller._sync_selected_context_mirrors(context)
         controller._render_selected_node(context)
     controller._nodes_status(f"Removed connection to {node_id}")
-    if _is_remote_cluster_target(controller, node_id):
+    # remove_connection is a local action: the local disconnect above always
+    # proceeds.  The RPC is a best-effort notification — fire-and-forget with
+    # silent failure — so we attempt it only when the cluster path is fully
+    # reachable; otherwise we accept the asymmetric disconnect gracefully.
+    dispatch, _reason = _classify_role_dispatch(controller, node_id)
+    if dispatch == _ROLE_REMOTE:
         epoch = controller._cluster_state.coordinator_epoch
         record = controller._cluster_state.record(node_id)
         if record is not None and record.port is not None:
@@ -599,7 +669,11 @@ def remove_job_node(
     except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
         controller._nodes_error(str(error))
         return
-    if _is_remote_cluster_target(controller, node_id):
+    dispatch, reason = _classify_role_dispatch(controller, node_id)
+    if dispatch == _ROLE_FAIL:
+        controller._nodes_error(reason)
+        return
+    if dispatch == _ROLE_REMOTE:
         epoch = controller._cluster_state.coordinator_epoch
         def rpc_call(provider: Any) -> Any:
             return provider.remove_job(
@@ -648,7 +722,11 @@ def revoke_node(
     except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
         controller._nodes_error(str(error))
         return
-    if _is_remote_cluster_target(controller, node_id):
+    dispatch, reason = _classify_role_dispatch(controller, node_id)
+    if dispatch == _ROLE_FAIL:
+        controller._nodes_error(reason)
+        return
+    if dispatch == _ROLE_REMOTE:
         epoch = controller._cluster_state.coordinator_epoch
         def rpc_call(provider: Any) -> Any:
             return provider.revoke_worker(
