@@ -51,6 +51,7 @@ packages = [
     "maintenance.scanner_support",
     "maintenance.ui",
     "maintenance.ui.window_supports",
+    "maintenance.ui.window_node_actions_impl",
 ]
 py-modules = [
     "main",

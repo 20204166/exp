@@ -41,6 +41,10 @@ class PyprojectConfigurationTests(unittest.TestCase):
         packages = load_project()["tool"]["setuptools"]["packages"]
         self.assertIn("maintenance.ui.window_supports", packages)
 
+    def test_window_node_actions_impl_subpackage_is_shipped(self) -> None:
+        packages = load_project()["tool"]["setuptools"]["packages"]
+        self.assertIn("maintenance.ui.window_node_actions_impl", packages)
+
     def test_console_scripts_are_declared(self) -> None:
         scripts = load_project()["project"]["scripts"]
         self.assertEqual(

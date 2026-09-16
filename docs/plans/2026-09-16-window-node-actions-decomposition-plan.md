@@ -34,7 +34,13 @@ depends on a patchable facade symbol. For example, the facade keeps its current
 signature and forwards the current module global:
 
 ```python
-def request_target_grant(controller: Any, candidate: Any, grant: PeerGrantRecord, *, cancel_event: threading.Event | None = None) -> PairingTransaction | bool:
+def request_target_grant(
+    controller: Any,
+    candidate: Any,
+    grant: PeerGrantRecord,
+    *,
+    cancel_event: threading.Event | None = None,
+) -> PairingTransaction | bool:
     return pairing.request_target_grant(
         controller,
         candidate,
