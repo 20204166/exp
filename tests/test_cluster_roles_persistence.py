@@ -13,7 +13,12 @@ from maintenance.cluster import (
     decode_invite_blob,
     encode_invite_blob,
 )
-from maintenance.components.cluster_roles import CapabilityGrant, ClusterRole
+from maintenance.components.cluster_roles import (
+    CapabilityGrant,
+    ClusterRole,
+    CoordinatorEpoch,
+    RoleAssignment,
+)
 from maintenance.nodes import NodeId, NodePermission
 
 
@@ -342,3 +347,100 @@ class ClusterRolePersistenceTests(unittest.TestCase):
         )
         loaded = self.store.load()
         self.assertEqual(loaded.capability_grants, ())
+
+
+class CoordinatorAuthorityTests(unittest.TestCase):
+    """ClusterState.is_active_coordinator is the gating predicate for MOVABLE placement."""
+
+    def _epoch(self, coordinator_id: str = "coord") -> CoordinatorEpoch:
+        return CoordinatorEpoch(1, NodeId(coordinator_id), "fence", 0.0, 9999.0)
+
+    def test_active_coordinator_returns_true(self) -> None:
+        state = ClusterState.create_local(local_node_id="coord")
+        self.assertTrue(state.is_active_coordinator)
+
+    def test_worker_only_returns_false(self) -> None:
+        state = ClusterState(
+            local_node_id="worker",
+            role_assignments=(
+                RoleAssignment(frozenset({ClusterRole.WORKER}), NodeId("worker")),
+            ),
+            coordinator_epoch=self._epoch("coord"),
+        )
+        self.assertFalse(state.is_active_coordinator)
+
+    def test_subcoordinator_returns_false(self) -> None:
+        state = ClusterState(
+            local_node_id="sub",
+            role_assignments=(
+                RoleAssignment(frozenset({ClusterRole.SUBCOORDINATOR}), NodeId("sub")),
+            ),
+            coordinator_epoch=self._epoch("coord"),
+        )
+        self.assertFalse(state.is_active_coordinator)
+
+    def test_no_epoch_returns_false(self) -> None:
+        state = ClusterState(
+            local_node_id="coord",
+            role_assignments=(
+                RoleAssignment(
+                    frozenset({ClusterRole.COORDINATOR}), NodeId("coord")
+                ),
+            ),
+            coordinator_epoch=None,
+        )
+        self.assertFalse(state.is_active_coordinator)
+
+    def test_stale_former_coordinator_returns_false(self) -> None:
+        # Epoch belongs to a different (newer) coordinator — stale former node.
+        state = ClusterState(
+            local_node_id="old-coord",
+            role_assignments=(
+                RoleAssignment(
+                    frozenset({ClusterRole.COORDINATOR}), NodeId("old-coord")
+                ),
+            ),
+            coordinator_epoch=self._epoch("new-coord"),
+        )
+        self.assertFalse(state.is_active_coordinator)
+
+    def test_paused_coordinator_returns_false(self) -> None:
+        state = ClusterState(
+            local_node_id="coord",
+            role_assignments=(
+                RoleAssignment(
+                    frozenset({ClusterRole.COORDINATOR}),
+                    NodeId("coord"),
+                    paused=True,
+                ),
+            ),
+            coordinator_epoch=self._epoch("coord"),
+        )
+        self.assertFalse(state.is_active_coordinator)
+
+    def test_revoked_coordinator_returns_false(self) -> None:
+        state = ClusterState(
+            local_node_id="coord",
+            role_assignments=(
+                RoleAssignment(
+                    frozenset({ClusterRole.COORDINATOR}),
+                    NodeId("coord"),
+                    revoked=True,
+                ),
+            ),
+            coordinator_epoch=self._epoch("coord"),
+        )
+        self.assertFalse(state.is_active_coordinator)
+
+    def test_promoted_new_coordinator_returns_true(self) -> None:
+        # After Phase-6 failover: new epoch with local node as coordinator_id.
+        state = ClusterState(
+            local_node_id="new-coord",
+            role_assignments=(
+                RoleAssignment(
+                    frozenset({ClusterRole.COORDINATOR}), NodeId("new-coord")
+                ),
+            ),
+            coordinator_epoch=self._epoch("new-coord"),
+        )
+        self.assertTrue(state.is_active_coordinator)

@@ -694,6 +694,28 @@ class ClusterState:
             frozenset({ClusterRole.WORKER}), node_id=NodeId(self.local_node_id)
         )
 
+    @property
+    def is_active_coordinator(self) -> bool:
+        """True when the local node currently holds active Coordinator authority.
+
+        Requires: a live coordinator_epoch whose coordinator_id matches the
+        local node, a COORDINATOR role assignment that is neither paused nor
+        revoked.  Any gap — no epoch, epoch belonging to a different node, or
+        paused/revoked role — returns False.
+
+        This is the gating predicate for orchestration work that only the
+        current Coordinator may initiate, such as MOVABLE job placement.
+        """
+        if self.coordinator_epoch is None:
+            return False
+        assignment = self.local_assignment
+        return (
+            not assignment.revoked
+            and not assignment.paused
+            and ClusterRole.COORDINATOR in assignment.roles
+            and self.coordinator_epoch.coordinator_id.value == self.local_node_id
+        )
+
     def create_invite(
         self,
         *,

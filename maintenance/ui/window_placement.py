@@ -104,6 +104,11 @@ def build_movable_views(
     cluster; ``worker_eligible`` when it holds the WORKER role and is neither
     paused nor revoked.  ``active_jobs`` is 1 for an assigned job, 0 for idle.
 
+    **Authority gate (caller responsibility):** only the current active
+    Coordinator may initiate MOVABLE work.  Callers must check
+    ``cluster_state.is_active_coordinator`` before invoking this function;
+    a Worker, Subcoordinator, or stale former Coordinator must not call it.
+
     No production MOVABLE job exists yet; this function is the prepared seam.
     """
 
