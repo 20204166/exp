@@ -1444,3 +1444,52 @@ No genuine unresolved disagreement between the five research agents was found on
 | Local object thread-safety under concurrent local+remote access | **LOW** | Identified as a plausible concern from the thread map, not investigated at the `algo.py` implementation level |
 
 ---
+
+## 56. 2026-09-16 — Cluster membership join (post-repair)
+
+This is the first repair against §27's central finding ("no canonical bilateral cluster-membership owner exists") and the invitation gap documented in §28/§37 (E-3). It closes exactly one gap: two already-**trusted** peers can now explicitly converge on one shared `cluster_id` and one canonical `RoleState.assignments` registry. It deliberately does **not** wire any of the other dormant role RPCs (`assign_role`, `pause_worker`, `revoke_worker`, `grant_capabilities`, …) into a remote caller — those stay local-only bookkeeping (§29), unchanged, per the explicit instruction that role *control* stays out of scope until membership itself is real.
+
+### BEFORE
+
+- Every installation minted its own random `cluster_id` in `ClusterState.create_local()`; two paired, trusted machines never converged on one.
+- `ClusterState.create_invite()` had zero production callers — mint-only, dead code outside its own unit tests.
+- `consume_invite`'s target-side wire handler (`window_discovery.py::handle_role_request`) burned the invite and returned `{target_node_id, expires_at}`; it never touched `role_assignments`. Consuming an invite granted **no membership at all**.
+- `RemoteService._verify_role_fence` already required every role operation, `consume_invite` included, to carry the *target's own* live `cluster_id`/`epoch`/`fencing_token` — which a joining node had no way to learn in advance, since nothing exposed those values.
+
+### AFTER
+
+- `InviteRecord` (`maintenance/cluster.py`) now snapshots the issuing `ClusterState`'s `cluster_id`, `coordinator_epoch.coordinator_id`, `.epoch`, and `.fencing_token` at creation time. `encode_invite_blob`/`decode_invite_blob` turn that record into one copy-pasteable, self-validating string — this is what teaches the joining node the fence it must present back.
+- The `consume_invite` handler now requires the local node to still be the active Coordinator, clears any stale *role-level* revocation (`RoleState.clear_revocation`, the same mechanism pairing's own re-establishment path already uses), admits the caller as `WORKER` via the existing `RoleState.assign`, and returns the admitting node's live `cluster_id`/`coordinator_id`/`epoch`/`fencing_token`.
+- The initiator (`window_node_actions.join_cluster_via_invite`) decodes the pasted blob, sends it to the chosen trusted peer's `consume_invite`, and on success **replaces** its own `cluster_id`, `coordinator_epoch`, `role_assignments` (collapsed to one `WORKER` entry for itself), `capability_grants`, and `promotion_epochs` with the admitting cluster's — a full membership switch, not a merge.
+- `create_cluster_invite` is Coordinator-gated: only a node currently holding `ClusterRole.COORDINATOR` may mint one.
+- Minimal UI: a "Create Invite" button on the local row of the All Systems page when that node is the active Coordinator, and a "Join Cluster" button on any trusted/authorised remote row (`maintenance/ui/cluster_page.py`).
+
+### Canonical membership owner
+
+Unchanged from the pre-existing design and **not** a new component: the active Coordinator's `RoleState.assignments` (persisted as `ClusterState.role_assignments`) is the one canonical answer to "is node N a member of cluster X" — a member is an entry in that Coordinator's `role_assignments` that is not `revoked`, under that Coordinator's current `cluster_id`. No `ClusterMembershipManager`, no `membership.json`, no second registry was introduced.
+
+### Join path
+
+`Pair` (establish trust) → Coordinator clicks **Create Invite** → the coordinator's own live fence + a fresh one-time token travel together as one blob → the candidate pastes it into **Join Cluster** on that peer's row → `consume_invite` over the same authenticated, HMAC-signed, `REMOTE_MANAGEMENT`-gated wire path every other role operation already uses → the candidate adopts the returned fence locally. Pair and Join remain two separate, explicit user actions (§4's invariant); trust never implies membership.
+
+### Persistence / schema
+
+Purely additive. `InviteRecord` gained four defaulted fields (`cluster_id`, `coordinator_id`, `epoch`, `fencing_token`); `ClusterStore`'s invite parsing/serialization carries them, defaulting absent values to `""`/`0` on old documents. No field was removed, renamed, or narrowed.
+
+### Migration behavior
+
+An invite persisted before this change (no fence fields) decodes with empty/zero defaults on load — it can never satisfy `_verify_role_fence`, so it simply keeps failing closed rather than crashing `ClusterStore.load()`. No existing trusted-peer relationship, secret, TLS pin, or role assignment is touched by loading old data; trust and role state migrate exactly as before this change (§10's "do not infer trusted peer ⇒ member" invariant is preserved because nothing here infers membership from trust — it still requires the explicit invite exchange).
+
+### Adoption / protection of a non-empty cluster
+
+`join_cluster_via_invite` refuses, before any network call, unless the local `ClusterState` is still an untouched solo bootstrap: exactly one role assignment, that assignment is the local node as `{COORDINATOR, WORKER}`, not paused/revoked, and no `capability_grants`/`promotion_epochs`. A machine already coordinating a real cluster of its own cannot have that membership silently replaced (§7); it is simply refused with a clear error, since no migration/merge concept exists in the current architecture to make replacement safe.
+
+### Remaining gaps (unchanged from §51/§52 unless noted)
+
+- Role-management RPCs for anything *other* than initial admission (`assign_role`, `pause_worker`, `resume_worker`, `revoke_worker`, `remove_job`, `grant_capabilities`, `revoke_capabilities`) are still local-only bookkeeping with no remote caller — deliberately out of scope for this repair.
+- MOVABLE placement is still dormant; `PlacementView` still has no reference to `RoleState`/cluster membership.
+- No UI exists yet to leave a joined cluster or to view "which invite is this" once consumed — an invite is one-shot and self-describing, but there is no cluster-side membership-list UI beyond the existing All Systems rows.
+- Coordinator failover mid-invite-lifetime (epoch bump between invite creation and consumption) fails the join closed via the existing fencing check — this is correct fail-safe behavior, not a gap, but it is untested against a live failover scenario end-to-end.
+- Invite creation has no rate limiting and no UI list of currently-outstanding invites.
+
+---
