@@ -30,7 +30,6 @@ def make_callbacks() -> Any:
         on_revoke=Mock(),
         on_test_connection=Mock(),
         on_open_node=Mock(),
-        on_add_manual_host=Mock(),
         on_remove_manual=Mock(),
         on_start_discovery=Mock(),
         on_permissions=Mock(),
@@ -299,14 +298,6 @@ class NodesConnectionsPageTests(unittest.TestCase):
 
         callbacks.on_open_connection.assert_called_once_with(spec)
 
-    def test_manual_add_routes_to_connection_opener(self) -> None:
-        callbacks = replace(make_callbacks(), on_open_connection=Mock())
-        page, _parent, _recorder = make_page(callbacks)
-
-        page.add_host_button.kwargs["command"]()
-
-        callbacks.on_open_connection.assert_called_once_with(None)
-
     def test_trusted_actions_use_primary_and_danger_styles(self) -> None:
         _page, _parent, recorder = make_page()
 
@@ -369,27 +360,6 @@ class NodesConnectionsPageTests(unittest.TestCase):
         combo.bindings["<<ComboboxSelected>>"](None)
         callbacks.on_color.assert_called_once_with("peer-a", "emerald")
 
-    def test_manual_host_add_emits_with_port(self) -> None:
-        callbacks = make_callbacks()
-        page, _parent, _recorder = make_page(callbacks)
-        page._manual_name_var.set("Lab Box")
-        page._manual_host_var.set("192.168.1.20")
-        page._manual_port_var.set("9")
-        page.add_host_button.kwargs["command"]()
-        callbacks.on_add_manual_host.assert_called_once_with(
-            "Lab Box", "192.168.1.20", 9
-        )
-
-    def test_manual_host_add_without_port(self) -> None:
-        callbacks = make_callbacks()
-        page, _parent, _recorder = make_page(callbacks)
-        page._manual_name_var.set("Lab Box")
-        page._manual_host_var.set("192.168.1.20")
-        page._manual_port_var.set("")
-        page.add_host_button.kwargs["command"]()
-        callbacks.on_add_manual_host.assert_called_once_with(
-            "Lab Box", "192.168.1.20", None
-        )
 
     def test_manual_host_remove_emits(self) -> None:
         callbacks = make_callbacks()

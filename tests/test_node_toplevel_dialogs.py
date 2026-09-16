@@ -78,7 +78,6 @@ def _nodes_callbacks(*, on_details: Any = None) -> NodesConnectionsCallbacks:
         "on_revoke": callback,
         "on_test_connection": callback,
         "on_open_node": callback,
-        "on_add_manual_host": callback,
         "on_remove_manual": callback,
     }
     if on_details is not None:

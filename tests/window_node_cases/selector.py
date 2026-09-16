@@ -86,10 +86,6 @@ class WindowNodeSelectorTests(unittest.TestCase):
         sharing.assert_called_once()
         self.assertIs(connection.call_args.args[0], window.master)
         self.assertEqual(
-            connection.call_args.kwargs["on_add"].__func__,
-            window._add_manual_host.__func__,
-        )
-        self.assertEqual(
             pairing.call_args.kwargs["on_pair"].__func__,
             window._pair_discovered_node.__func__,
         )
@@ -271,24 +267,53 @@ class WindowNodeSelectorTests(unittest.TestCase):
             "rose",
         )
 
-    def test_invalid_manual_port_is_rejected(self) -> None:
-        window = _make_window(start_discovery=False)
-        window._cluster_state = ClusterState()
-        window._nodes_error = Mock()
-
-        window._add_manual_host("Peer", "peer", 70000)
-
-        window._nodes_error.assert_called_once_with("Port must be between 0 and 65535")
-        self.assertIsNone(window._cluster_state.record("manual-peer:70000"))
-
-    def test_non_integer_manual_port_is_rejected_at_controller_boundary(self) -> None:
-        window = _make_window(start_discovery=False)
-        window._cluster_state = ClusterState()
-        window._nodes_error = Mock()
-
-        window._add_manual_host("Peer", "peer", "5000")
-
-        window._nodes_error.assert_called_once_with("Port must be between 0 and 65535")
+    def _setup_manual_host(
+        self, window: object, display_name: str, host: str, port: int | None
+    ) -> str:
+        from maintenance.nodes import NodeContext, NodeDescriptor, NodeId, NodeTrustState, NodeStatus
+        from maintenance.remote_support.protocol import READ_CAPABILITIES
+        from maintenance.nodes import READ_PERMISSIONS
+        node_id = f"manual-{host}:{port}" if port is not None else f"manual-{host}"
+        descriptor = NodeDescriptor(
+            id=NodeId(node_id),
+            display_name=display_name,
+            hostname=host,
+            is_local=False,
+            trust=NodeTrustState.TRUSTED,
+            status=NodeStatus.UNKNOWN,
+            capabilities=READ_CAPABILITIES,
+            platform=None,
+            color=None,
+            permissions=READ_PERMISSIONS,
+        )
+        context = NodeContext(
+            descriptor=descriptor,
+            provider=None,
+            process_manager=None,
+            file_manager=None,
+            scheduler=None,
+            coordinator=None,
+        )
+        record = trusted_node_record(
+            node_id=node_id,
+            display_name=display_name,
+            hostname=host,
+            host=host,
+            port=port,
+            capabilities=READ_CAPABILITIES,
+            permissions=READ_PERMISSIONS,
+        )
+        window._cluster_state = replace(  # type: ignore[attr-defined]
+            window._cluster_state,  # type: ignore[attr-defined]
+            trusted_nodes=window._cluster_state.trusted_nodes + (record,),  # type: ignore[attr-defined]
+        )
+        window._node_registry.register_context(context)  # type: ignore[attr-defined]
+        manual_ids = getattr(window, "_manual_host_ids", None)
+        if manual_ids is None:
+            manual_ids = set()
+            window._manual_host_ids = manual_ids  # type: ignore[attr-defined]
+        manual_ids.add(node_id)
+        return node_id
 
     def test_remove_manual_host_prompts_before_revoking(self) -> None:
         window = _make_window(start_discovery=False)
@@ -297,8 +322,7 @@ class WindowNodeSelectorTests(unittest.TestCase):
         window._refresh_nodes_page = Mock()
         window._refresh_cluster_page = Mock()
         window._nodes_status = Mock()
-        window._add_manual_host("Lab Box", "lab-box.local", None)
-        node_id = "manual-lab-box.local"
+        node_id = self._setup_manual_host(window, "Lab Box", "lab-box.local", None)
         self.assertIsNotNone(window._cluster_state.record(node_id))
 
         with patch("window.messagebox.askyesno", return_value=False) as confirm:
@@ -314,8 +338,7 @@ class WindowNodeSelectorTests(unittest.TestCase):
         window._refresh_nodes_page = Mock()
         window._refresh_cluster_page = Mock()
         window._nodes_status = Mock()
-        window._add_manual_host("Lab Box", "lab-box.local", None)
-        node_id = "manual-lab-box.local"
+        node_id = self._setup_manual_host(window, "Lab Box", "lab-box.local", None)
 
         with patch("window.messagebox.askyesno", return_value=True):
             window._remove_manual_host(node_id)

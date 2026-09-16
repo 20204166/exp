@@ -60,27 +60,37 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         self.assertEqual(kwargs["advertisement"].stable_id, LOCAL_NODE_ID)
         self.assertFalse(kwargs["advertisement"].connectable)
 
-    def test_manual_hostname_and_ip_fallback_registers_trusted_endpoint(self) -> None:
+    def test_manual_host_records_are_preserved_in_cluster_state(self) -> None:
+        from maintenance.nodes import NodeContext, NodeDescriptor, NodeId, NodeStatus
+        from maintenance.remote_support.protocol import READ_CAPABILITIES
         window = _make_window(start_discovery=False)
         window._cluster_state = ClusterState()
-        window._cluster_store = Mock()
-        window._refresh_nodes_page = Mock()
-        window._refresh_cluster_page = Mock()
-        window._nodes_status = Mock()
 
-        window._add_manual_host("Lab Box", "lab-box.local", None)
-        window._add_manual_host("IP Box", "192.168.1.20", 5000)
-
-        hostname_record = window._cluster_state.record("manual-lab-box.local")
-        ip_record = window._cluster_state.record("manual-192.168.1.20:5000")
-        self.assertIsNotNone(hostname_record)
-        self.assertIsNotNone(ip_record)
-        assert hostname_record is not None
-        assert ip_record is not None
-        self.assertEqual(
-            window._node_registry.contexts()[-1].descriptor.trust,
-            NodeTrustState.TRUSTED,
+        hostname_record = trusted_node_record(
+            node_id="manual-lab-box.local",
+            display_name="Lab Box",
+            hostname="lab-box.local",
+            host="lab-box.local",
+            port=None,
+            capabilities=READ_CAPABILITIES,
+            permissions=READ_PERMISSIONS,
         )
+        ip_record = trusted_node_record(
+            node_id="manual-192.168.1.20:5000",
+            display_name="IP Box",
+            hostname="192.168.1.20",
+            host="192.168.1.20",
+            port=5000,
+            capabilities=READ_CAPABILITIES,
+            permissions=READ_PERMISSIONS,
+        )
+        window._cluster_state = replace(
+            window._cluster_state,
+            trusted_nodes=(hostname_record, ip_record),
+        )
+
+        self.assertIsNotNone(window._cluster_state.record("manual-lab-box.local"))
+        self.assertIsNotNone(window._cluster_state.record("manual-192.168.1.20:5000"))
         self.assertEqual(hostname_record.host, "lab-box.local")
         self.assertEqual(ip_record.host, "192.168.1.20")
 
