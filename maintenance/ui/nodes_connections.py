@@ -124,6 +124,9 @@ class TrustedNodeSpec:
     role_editable: bool = False
     paused: bool = False
     has_active_job: bool = False
+    connection_status: str = "unknown"
+    manual_disconnected: bool = False
+    retry_automatic: bool = True
 
 
 class NodesConnectionsPage:
@@ -617,6 +620,8 @@ class NodesConnectionsPage:
         "identity_status",
         "target_state",
         "identity_fingerprint",
+        "connection_status",
+        "manual_disconnected",
     )
 
     def refresh_trusted(self, specs: list[TrustedNodeSpec]) -> None:
