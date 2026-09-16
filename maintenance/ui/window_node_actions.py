@@ -248,12 +248,6 @@ def remove_manual_host(
     )
 
 
-def add_manual_host(
-    controller: Any, display_name: str, host: str, port: int | None
-) -> None:
-    return _connections_impl.add_manual_host(controller, display_name, host, port)
-
-
 def test_connection(
     controller: Any,
     node_id: str,
