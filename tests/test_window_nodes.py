@@ -11,6 +11,8 @@ from unittest.mock import Mock, call, patch
 from maintenance.cluster import (
     ClusterState,
     PeerGrantRecord,
+    decode_invite_blob,
+    encode_invite_blob,
     trusted_node_record,
 )
 from maintenance.components.cluster_roles import ClusterRole, RoleAssignment
@@ -690,6 +692,205 @@ class WindowNodeConnectionTests(unittest.TestCase):
 
         messages.showinfo.assert_called_once()
         self.assertIn("replacement", messages.showinfo.call_args.args[1])
+
+    def _join_window(self, runner: DeferredRunner) -> Any:
+        window = self._window(runner)
+        state = ClusterState.create_local(local_node_id="local")
+        state.trusted_nodes = (
+            trusted_node_record(
+                node_id="peer-a",
+                display_name="Peer A",
+                hostname="peer-a",
+                host="192.0.2.10",
+                port=5000,
+                secret="secret",
+                transport_fingerprint="tls-pin",
+            ),
+        )
+        window._cluster_state = state
+
+        def save(saved: Any) -> bool:
+            window._cluster_state = saved
+            return True
+
+        window._save_cluster_state = Mock(side_effect=save)
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._nodes_status = Mock()
+        window._nodes_error = Mock()
+        return window
+
+    @staticmethod
+    def _remote_invite_blob(coordinator_id: str = "peer-a") -> str:
+        remote_state = ClusterState.create_local(local_node_id=coordinator_id)
+        invite = remote_state.create_invite(target_node_id="local")
+        return encode_invite_blob(invite)
+
+    def test_join_cluster_via_invite_adopts_the_returned_fence(self) -> None:
+        runner = DeferredRunner()
+        window = self._join_window(runner)
+        blob = self._remote_invite_blob()
+        provider = Mock()
+        provider.consume_invite.return_value = {
+            "target_node_id": "local",
+            "expires_at": time.time() + 300.0,
+            "cluster_id": "remote-cluster",
+            "coordinator_id": "peer-a",
+            "epoch": 3,
+            "fencing_token": "fence-token",
+        }
+        provider_cls = Mock(return_value=provider)
+
+        window_node_actions.join_cluster_via_invite(
+            window, "peer-a", blob, provider_cls=provider_cls, transport_cls=Mock
+        )
+        runner.run_next()
+
+        window._nodes_error.assert_not_called()
+        self.assertEqual(window._cluster_state.cluster_id, "remote-cluster")
+        epoch = window._cluster_state.coordinator_epoch
+        assert epoch is not None
+        self.assertEqual(epoch.coordinator_id, NodeId("peer-a"))
+        self.assertEqual(epoch.epoch, 3)
+        self.assertEqual(epoch.fencing_token, "fence-token")
+        self.assertEqual(
+            window._cluster_state.role_assignments,
+            (RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("local")),),
+        )
+        self.assertEqual(window._cluster_state.capability_grants, ())
+        self.assertEqual(window._cluster_state.promotion_epochs, frozenset())
+
+    def test_join_cluster_via_invite_rejects_a_non_solo_local_cluster(self) -> None:
+        runner = DeferredRunner()
+        window = self._join_window(runner)
+        original = window._cluster_state
+        original.role_assignments = original.role_assignments + (
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("other")),
+        )
+        blob = self._remote_invite_blob()
+        provider_cls = Mock()
+
+        window_node_actions.join_cluster_via_invite(
+            window, "peer-a", blob, provider_cls=provider_cls, transport_cls=Mock
+        )
+
+        window._nodes_error.assert_called_once()
+        provider_cls.assert_not_called()
+        self.assertIs(window._cluster_state, original)
+
+    def test_join_cluster_via_invite_rejects_a_malformed_blob(self) -> None:
+        runner = DeferredRunner()
+        window = self._join_window(runner)
+        provider_cls = Mock()
+
+        window_node_actions.join_cluster_via_invite(
+            window,
+            "peer-a",
+            "not-a-real-invite",
+            provider_cls=provider_cls,
+            transport_cls=Mock,
+        )
+
+        window._nodes_error.assert_called_once()
+        provider_cls.assert_not_called()
+
+    def test_join_cluster_via_invite_rejects_unknown_target(self) -> None:
+        runner = DeferredRunner()
+        window = self._join_window(runner)
+        blob = self._remote_invite_blob(coordinator_id="ghost")
+        provider_cls = Mock()
+
+        window_node_actions.join_cluster_via_invite(
+            window, "ghost", blob, provider_cls=provider_cls, transport_cls=Mock
+        )
+
+        window._nodes_error.assert_called_once()
+        provider_cls.assert_not_called()
+
+    def test_join_cluster_via_invite_target_error_leaves_state_unchanged(self) -> None:
+        runner = DeferredRunner()
+        window = self._join_window(runner)
+        original = window._cluster_state
+        blob = self._remote_invite_blob()
+        provider_cls = Mock(side_effect=RuntimeError("cluster identity is invalid"))
+
+        window_node_actions.join_cluster_via_invite(
+            window, "peer-a", blob, provider_cls=provider_cls, transport_cls=Mock
+        )
+        runner.run_next()
+
+        self.assertIs(window._cluster_state, original)
+        window._nodes_error.assert_called_once()
+
+    def test_join_cluster_via_invite_save_failure_reports_error(self) -> None:
+        runner = DeferredRunner()
+        window = self._join_window(runner)
+        original = window._cluster_state
+        window._save_cluster_state = Mock(return_value=False)
+        blob = self._remote_invite_blob()
+        provider = Mock()
+        provider.consume_invite.return_value = {
+            "target_node_id": "local",
+            "expires_at": time.time() + 300.0,
+            "cluster_id": "remote-cluster",
+            "coordinator_id": "peer-a",
+            "epoch": 3,
+            "fencing_token": "fence-token",
+        }
+        provider_cls = Mock(return_value=provider)
+
+        window_node_actions.join_cluster_via_invite(
+            window, "peer-a", blob, provider_cls=provider_cls, transport_cls=Mock
+        )
+        runner.run_next()
+
+        self.assertIs(window._cluster_state, original)
+        window._nodes_error.assert_called_once()
+
+    def test_create_cluster_invite_requires_local_coordinator_role(self) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        state.role_assignments = (
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("local")),
+        )
+        window._cluster_state = state
+        window._nodes_error = Mock()
+        window._save_cluster_state = Mock(return_value=True)
+
+        blob = window_node_actions.create_cluster_invite(window)
+
+        self.assertIsNone(blob)
+        window._nodes_error.assert_called_once()
+        window._save_cluster_state.assert_not_called()
+
+    def test_create_cluster_invite_returns_a_decodable_blob(self) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        window._cluster_state = state
+        window._nodes_error = Mock()
+        window._save_cluster_state = Mock(return_value=True)
+
+        blob = window_node_actions.create_cluster_invite(window)
+
+        self.assertIsNotNone(blob)
+        assert blob is not None
+        decoded = decode_invite_blob(blob)
+        self.assertEqual(decoded.cluster_id, state.cluster_id)
+        window._save_cluster_state.assert_called_once()
+        window._nodes_error.assert_not_called()
+
+    def test_create_cluster_invite_rolls_back_on_save_failure(self) -> None:
+        window = _make_window(start_discovery=False)
+        state = ClusterState.create_local(local_node_id="local")
+        window._cluster_state = state
+        window._nodes_error = Mock()
+        window._save_cluster_state = Mock(return_value=False)
+
+        blob = window_node_actions.create_cluster_invite(window)
+
+        self.assertIsNone(blob)
+        self.assertEqual(window._cluster_state.active_invites, ())
+        window._nodes_error.assert_called_once()
 
     def test_reconcile_does_not_promote_when_local_is_coordinator(self) -> None:
         window = _make_window(

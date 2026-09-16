@@ -13,9 +13,18 @@ from dataclasses import dataclass, replace
 from tkinter import messagebox, simpledialog
 from typing import Any
 
-from maintenance.cluster import PeerGrantRecord, trusted_node_record
+from maintenance.cluster import (
+    ClusterDataError,
+    PeerGrantRecord,
+    decode_invite_blob,
+    encode_invite_blob,
+    trusted_node_record,
+)
 from maintenance.components.cluster_roles import (
+    HEARTBEAT_TIMEOUT_SECONDS,
     ClusterRole,
+    CoordinatorEpoch,
+    RoleAssignment,
     RoleAuthorizationError,
     RoleState,
 )
@@ -182,6 +191,165 @@ def set_node_roles(controller: Any, node_id: str, roles: frozenset[str]) -> None
         _save_role_state(controller, assignment)
     except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
         controller._nodes_error(str(error))
+
+
+def create_cluster_invite(controller: Any) -> str | None:
+    """Mint a join invite bound to this node's live cluster fence.
+
+    Only the active Coordinator may invite a peer into its cluster --
+    membership admission on the target side (see
+    ``window_discovery.handle_role_request``'s ``consume_invite`` branch)
+    trusts this invite's stamped fence, so only a Coordinator may stamp one.
+    """
+
+    state = controller._cluster_state
+    if ClusterRole.COORDINATOR not in state.local_assignment.roles:
+        controller._nodes_error("Only the active Coordinator can create an invite")
+        return None
+    invite = state.create_invite()
+    if not controller._save_cluster_state(state):
+        state.active_invites = tuple(
+            item
+            for item in state.active_invites
+            if item.token_hash != invite.token_hash
+        )
+        controller._nodes_error("Cluster settings could not be saved")
+        return None
+    return encode_invite_blob(invite)
+
+
+def _solo_bootstrap_violation(state: Any) -> str | None:
+    """Refuse to join when leaving would silently destroy a real cluster."""
+
+    message = (
+        "This machine already coordinates a cluster with other members; "
+        "leaving it to join another cluster is not supported yet."
+    )
+    if (
+        len(state.role_assignments) != 1
+        or state.capability_grants
+        or state.promotion_epochs
+    ):
+        return message
+    (only,) = state.role_assignments
+    if (
+        only.node_id is None
+        or only.node_id.value != state.local_node_id
+        or only.paused
+        or only.revoked
+        or only.roles != frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER})
+    ):
+        return message
+    return None
+
+
+def join_cluster_via_invite(
+    controller: Any,
+    node_id: str,
+    blob: str,
+    *,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = SocketRemoteTransport,
+) -> None:
+    """Ask a trusted peer's Coordinator to admit this node into its cluster.
+
+    Pairing establishes trust only; this is the separate, explicit operation
+    that converges ``cluster_id`` across two already-trusted peers. Refuses
+    up front if the local cluster is not still an untouched solo bootstrap
+    (see ``_solo_bootstrap_violation``), so a machine already coordinating a
+    real cluster of its own can never have that membership silently
+    replaced.
+    """
+
+    try:
+        invite = decode_invite_blob(blob)
+    except ClusterDataError as error:
+        controller._nodes_error(f"That invite could not be read: {error}")
+        return
+    guard = _solo_bootstrap_violation(controller._cluster_state)
+    if guard is not None:
+        controller._nodes_error(guard)
+        return
+    record = controller._cluster_state.record(node_id)
+    if record is None:
+        controller._nodes_error("No connection details saved for that node")
+        return
+    if record.port is None:
+        controller._nodes_error("That node has no authenticated remote port")
+        return
+    node = NodeId(node_id)
+
+    def task() -> dict[str, Any]:
+        provider = provider_cls(
+            node_id=node,
+            secret=record.secret,
+            caller_node_id=NodeId(controller._cluster_state.local_node_id),
+            transport=build_trusted_transport(record, transport_cls=transport_cls),
+        )
+        return provider.consume_invite(
+            invite.token,
+            cluster_id=invite.cluster_id,
+            epoch=invite.epoch,
+            fencing_token=invite.fencing_token,
+        )
+
+    def on_success(response: dict[str, Any]) -> None:
+        _apply_cluster_join(controller, response)
+
+    def on_error(message: str) -> None:
+        controller._nodes_error(f"Could not join cluster: {message}")
+
+    key = node_operation_key(node, "join_cluster")
+
+    def coordinated_task(
+        _cancel_event: threading.Event,
+        _progress: Callable[[str], None],
+    ) -> dict[str, Any]:
+        return task()
+
+    controller._coordinator.run(
+        key,
+        coordinated_task,
+        on_result=lambda _key, result: on_success(result),
+        on_error=lambda _key, message: on_error(message),
+    )
+
+
+def _apply_cluster_join(controller: Any, response: dict[str, Any]) -> None:
+    try:
+        cluster_id = str(response["cluster_id"])
+        coordinator_id = str(response["coordinator_id"])
+        epoch = int(response["epoch"])
+        fencing_token = str(response["fencing_token"])
+    except (KeyError, TypeError, ValueError) as error:
+        controller._nodes_error(f"Join response was invalid: {error}")
+        return
+    now = time.time()
+    updated = replace(
+        controller._cluster_state,
+        cluster_id=cluster_id,
+        coordinator_epoch=CoordinatorEpoch(
+            epoch=epoch,
+            coordinator_id=NodeId(coordinator_id),
+            fencing_token=fencing_token,
+            issued_at=now,
+            lease_expires_at=now + HEARTBEAT_TIMEOUT_SECONDS,
+        ),
+        role_assignments=(
+            RoleAssignment(
+                frozenset({ClusterRole.WORKER}),
+                node_id=NodeId(controller._cluster_state.local_node_id),
+            ),
+        ),
+        capability_grants=(),
+        promotion_epochs=frozenset(),
+    )
+    if not controller._save_cluster_state(updated):
+        controller._nodes_error("Cluster settings could not be saved")
+        return
+    controller._refresh_nodes_page()
+    controller._refresh_cluster_page()
+    controller._nodes_status(f"Joined cluster {cluster_id}")
 
 
 def pause_node(controller: Any, node_id: str) -> None:
