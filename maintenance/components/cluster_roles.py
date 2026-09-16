@@ -405,7 +405,11 @@ def renew_lease(
         raise FencingError("heartbeat fencing token is stale")
     if now > epoch.lease_expires_at:
         raise FencingError("coordinator lease has expired")
-    return replace(epoch, issued_at=now, lease_expires_at=now + lease_seconds)
+    return replace(
+        epoch,
+        issued_at=now,
+        lease_expires_at=max(epoch.lease_expires_at, now + lease_seconds),
+    )
 
 
 def can_promote(

@@ -12,7 +12,7 @@ import time
 from dataclasses import replace
 from typing import Any, cast
 
-from maintenance.cluster import PeerGrantRecord, PendingPairing, PendingTrustRevocation
+from maintenance.cluster import PeerGrantRecord, PendingPairing
 from maintenance.components import PeerConnectionManager
 from maintenance.components.cluster_storage import (
     ResourceSnapshot,
@@ -918,6 +918,7 @@ def _renew_local_coordinator_lease(
         )
     except FencingError:
         return
+    _window_symbols().propagate_coordinator_lease(controller)
 
 
 def reconcile_peer_connections(controller: Any) -> None:
@@ -1082,6 +1083,7 @@ def on_discovered_candidate(controller: Any, candidate: Any) -> None:
                     f"Verified {descriptor.display_name} at a new address"
                 )
     _window_symbols().attempt_pending_trust_revocations(controller, candidate.stable_id)
+    _window_symbols().propagate_coordinator_lease(controller, candidate.stable_id)
 
 
 def on_discovered_lost(controller: Any, stable_id: str) -> None:

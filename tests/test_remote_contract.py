@@ -1671,10 +1671,7 @@ class RealSocketDashboardShareTests(unittest.TestCase):
 
     def test_wire_op_start_dashboard_share_rejected(self) -> None:
         """start_dashboard_share wire op is no longer in the protocol."""
-        from maintenance.remote_support.protocol import (
-            OP_REQUIRED_PERMISSION,
-            validate_operation_params,
-        )
+        from maintenance.remote_support.protocol import OP_REQUIRED_PERMISSION
         self.assertNotIn("start_dashboard_share", OP_REQUIRED_PERMISSION)
         self.assertNotIn("stop_dashboard_share", OP_REQUIRED_PERMISSION)
 
@@ -1914,6 +1911,264 @@ class RealSocketTrustRevokeTests(unittest.TestCase):
 
         with self.assertRaises(RemoteUnavailableError):
             self._provider(port).revoke_self()
+
+
+def _lease_service(
+    role_handler: Any = None,
+    *,
+    cluster_id: str = "cluster-1",
+    coordinator_epoch: int = 5,
+    fencing_token: str = "fence-abc",
+    secret: str = SECRET,
+    caller_node_id: str = "coordinator-a",
+) -> RemoteService:
+    """RemoteService configured for lease-renewal role operations."""
+    return RemoteService(
+        node_id=NodeId("member-b"),
+        display_name="Member B",
+        hostname="member-b-host",
+        platform="Linux",
+        status=NodeStatus.ONLINE,
+        capabilities=frozenset({NodeCapability.REMOTE_MANAGEMENT}),
+        permissions=frozenset({NodePermission.REMOTE_MANAGEMENT}),
+        provider=None,
+        secret=secret,
+        expected_caller_id=NodeId(caller_node_id),
+        cluster_id=cluster_id,
+        coordinator_epoch=coordinator_epoch,
+        fencing_token=fencing_token,
+        role_handler=role_handler or (lambda _request: {"ok": True}),
+    )
+
+
+class RealSocketLeaseTests(unittest.TestCase):
+    """Coordinator lease-renewal RPCs accepted/rejected over a real loopback socket.
+
+    These tests prove that the fence validation (cluster_id, epoch, fencing_token)
+    gates lease renewals before the handler is reached, that a valid renewal
+    round-trips end-to-end, that the monotonic lease rule is upheld, and that a
+    promoted Coordinator's new epoch fences out stale authority from the old epoch.
+    """
+
+    def _provider(
+        self,
+        port: int,
+        *,
+        secret: str = SECRET,
+        caller_node_id: str = "coordinator-a",
+    ) -> AuthenticatedNodeProvider:
+        return AuthenticatedNodeProvider(
+            node_id=NodeId("member-b"),
+            secret=secret,
+            caller_node_id=NodeId(caller_node_id),
+            transport=SocketRemoteTransport("127.0.0.1", port, timeout=5),
+        )
+
+    def test_valid_lease_renewal_accepted(self) -> None:
+        """Coordinator sends renew_coordinator_lease; handler is called and result returned."""
+        calls: list[RemoteRequest] = []
+
+        def role_handler(request: RemoteRequest) -> dict[str, Any]:
+            calls.append(request)
+            return {"ok": True, "epoch": request.params["epoch"]}
+
+        server = RemoteSocketServer(_lease_service(role_handler))
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        result = self._provider(port).renew_coordinator_lease(
+            cluster_id="cluster-1",
+            epoch=5,
+            fencing_token="fence-abc",
+        )
+
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(result["epoch"], 5)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].op, "renew_coordinator_lease")
+        self.assertEqual(calls[0].params["cluster_id"], "cluster-1")
+        self.assertEqual(calls[0].params["epoch"], 5)
+        self.assertEqual(calls[0].params["fencing_token"], "fence-abc")
+
+    def test_wrong_cluster_id_rejected(self) -> None:
+        """renew_coordinator_lease with a mismatched cluster_id is rejected before the handler."""
+        calls: list[RemoteRequest] = []
+        server = RemoteSocketServer(
+            _lease_service(lambda req: (calls.append(req), {"ok": True})[1])
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        with self.assertRaises(
+            (RemoteAuthorizationError, RemoteExecutionError, RemoteTransportError)
+        ):
+            self._provider(port).renew_coordinator_lease(
+                cluster_id="WRONG-CLUSTER",
+                epoch=5,
+                fencing_token="fence-abc",
+            )
+
+        self.assertEqual(len(calls), 0, "role_handler must not be reached on bad cluster_id")
+
+    def test_wrong_coordinator_id_rejected(self) -> None:
+        """Caller not matching stored coordinator_id causes FencingError in the handler."""
+        from maintenance.components.cluster_roles import FencingError
+
+        def role_handler(request: RemoteRequest) -> dict[str, Any]:
+            # Simulate renew_cluster_lease coordinator_id check
+            if request.caller_node_id is None or request.caller_node_id.value != "coordinator-a":
+                raise FencingError("coordinator identity mismatch")
+            return {"ok": True, "epoch": request.params["epoch"]}
+
+        # Authenticates as a different caller — HMAC key matches but identity is wrong
+        wrong_caller_service = RemoteService(
+            node_id=NodeId("member-b"),
+            display_name="Member B",
+            hostname="member-b-host",
+            platform="Linux",
+            status=NodeStatus.ONLINE,
+            capabilities=frozenset({NodeCapability.REMOTE_MANAGEMENT}),
+            permissions=frozenset({NodePermission.REMOTE_MANAGEMENT}),
+            provider=None,
+            secret=SECRET,
+            expected_caller_id=NodeId("coordinator-b"),  # authenticates as coordinator-b
+            cluster_id="cluster-1",
+            coordinator_epoch=5,
+            fencing_token="fence-abc",
+            role_handler=role_handler,
+        )
+        server = RemoteSocketServer(wrong_caller_service)
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        with self.assertRaises(
+            (RemoteAuthorizationError, RemoteExecutionError, RemoteTransportError)
+        ):
+            AuthenticatedNodeProvider(
+                node_id=NodeId("member-b"),
+                secret=SECRET,
+                caller_node_id=NodeId("coordinator-b"),
+                transport=SocketRemoteTransport("127.0.0.1", port, timeout=5),
+            ).renew_coordinator_lease(
+                cluster_id="cluster-1",
+                epoch=5,
+                fencing_token="fence-abc",
+            )
+
+    def test_stale_epoch_rejected(self) -> None:
+        """renew_coordinator_lease with a stale epoch is rejected before the handler."""
+        calls: list[RemoteRequest] = []
+        server = RemoteSocketServer(
+            _lease_service(lambda req: (calls.append(req), {"ok": True})[1])
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        with self.assertRaises(
+            (RemoteAuthorizationError, RemoteExecutionError, RemoteTransportError)
+        ):
+            self._provider(port).renew_coordinator_lease(
+                cluster_id="cluster-1",
+                epoch=3,  # stale — service expects 5
+                fencing_token="fence-abc",
+            )
+
+        self.assertEqual(len(calls), 0, "role_handler must not be reached on stale epoch")
+
+    def test_wrong_fence_rejected(self) -> None:
+        """renew_coordinator_lease with correct epoch but wrong fencing_token is rejected."""
+        calls: list[RemoteRequest] = []
+        server = RemoteSocketServer(
+            _lease_service(lambda req: (calls.append(req), {"ok": True})[1])
+        )
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        with self.assertRaises(
+            (RemoteAuthorizationError, RemoteExecutionError, RemoteTransportError)
+        ):
+            self._provider(port).renew_coordinator_lease(
+                cluster_id="cluster-1",
+                epoch=5,
+                fencing_token="WRONG-FENCE",
+            )
+
+        self.assertEqual(len(calls), 0, "role_handler must not be reached on bad fencing_token")
+
+    def test_lease_not_shortened_by_older_renewal(self) -> None:
+        """Monotonic rule: an earlier-timestamp renewal cannot shorten an already-long lease."""
+        from maintenance.components.cluster_roles import CoordinatorEpoch, renew_lease
+
+        base_epoch = CoordinatorEpoch(
+            epoch=5,
+            coordinator_id=NodeId("coordinator-a"),
+            fencing_token="fence-abc",
+            issued_at=100.0,
+            lease_expires_at=200.0,  # already expires at T=200
+        )
+
+        # A renewal arriving with now=150 wants to extend to 150+120=270 — keeps max
+        renewed_later = renew_lease(
+            base_epoch,
+            coordinator_id=NodeId("coordinator-a"),
+            fencing_token="fence-abc",
+            now=150.0,
+        )
+        self.assertEqual(renewed_later.lease_expires_at, 270.0)
+
+        # A renewal arriving with now=50 would set 50+120=170 < 200 — monotonic keeps 200
+        renewed_earlier = renew_lease(
+            base_epoch,
+            coordinator_id=NodeId("coordinator-a"),
+            fencing_token="fence-abc",
+            now=50.0,
+        )
+        self.assertEqual(renewed_earlier.lease_expires_at, 200.0)
+
+    def test_promoted_coordinator_fences_old_authority(self) -> None:
+        """After B is promoted to epoch 6, A's stale epoch-5 role op is rejected by B."""
+        calls: list[RemoteRequest] = []
+
+        # B is now at epoch 6 (promoted); old A using epoch 5 is stale
+        service_at_epoch_6 = _lease_service(
+            lambda req: (calls.append(req), {"ok": True})[1],
+            cluster_id="cluster-1",
+            coordinator_epoch=6,
+            fencing_token="new-fence-xyz",
+            caller_node_id="coordinator-b",  # B is the new Coordinator
+        )
+        server = RemoteSocketServer(service_at_epoch_6)
+        server.start()
+        self.addCleanup(server.stop)
+        port = server.bound_port
+        assert port is not None
+
+        # A still thinks it holds epoch 5 and tries to renew
+        with self.assertRaises(
+            (RemoteAuthorizationError, RemoteExecutionError, RemoteTransportError)
+        ):
+            AuthenticatedNodeProvider(
+                node_id=NodeId("member-b"),
+                secret=SECRET,
+                caller_node_id=NodeId("coordinator-b"),
+                transport=SocketRemoteTransport("127.0.0.1", port, timeout=5),
+            ).renew_coordinator_lease(
+                cluster_id="cluster-1",
+                epoch=5,  # stale — member now at epoch 6
+                fencing_token="fence-abc",
+            )
+
+        self.assertEqual(len(calls), 0, "stale-epoch op must not reach handler after promotion")
 
 
 if __name__ == "__main__":

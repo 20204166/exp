@@ -228,6 +228,14 @@ def attempt_pending_trust_revocations(controller: Any, node_id: str) -> None:
     return _connections_impl.attempt_pending_trust_revocations(controller, node_id)
 
 
+def propagate_coordinator_lease(
+    controller: Any, target_node_id: str | None = None
+) -> None:
+    return _connections_impl.propagate_coordinator_lease(
+        controller, target_node_id
+    )
+
+
 def remove_manual_host(
     controller: Any, node_id: str, *, messagebox_module: Any = messagebox
 ) -> None:

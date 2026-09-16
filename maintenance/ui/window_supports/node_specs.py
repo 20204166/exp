@@ -236,6 +236,7 @@ def local_cluster_spec(
     cluster_state: Any,
     *,
     dashboard_share_expires_at: float = 0.0,
+    coordinator_lease_expires_at: float = 0.0,
     now: float | None = None,
 ) -> ui_nodes.LocalClusterSpec | None:
     """Build the local cluster membership spec from canonical state.
@@ -293,4 +294,6 @@ def local_cluster_spec(
         dashboard_share_active=dashboard_share_expires_at > now,
         dashboard_share_expires_at=dashboard_share_expires_at,
         has_peer_grants=bool(cluster_state.peer_grants),
+        coordinator_lease_expires_at=coordinator_lease_expires_at,
+        coordinator_lease_healthy=coordinator_lease_expires_at > now + 30.0,
     )

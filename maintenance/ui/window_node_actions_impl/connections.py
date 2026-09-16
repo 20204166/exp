@@ -1,7 +1,7 @@
 """Trusted and manual node connection actions for the window facade."""
 
-import time
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from tkinter import messagebox
@@ -221,6 +221,137 @@ def attempt_pending_trust_revocations(
         provider_cls=provider_cls,
         transport_cls=transport_cls,
     )
+
+
+def _dispatch_lease_renewal(
+    controller: Any,
+    node_id: NodeId,
+    *,
+    cluster_id: str,
+    epoch: int,
+    fencing_token: str,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = TLSRemoteTransport,
+) -> None:
+    """Propagate the active Coordinator lease renewal to one enrolled member.
+
+    Keyed by node so concurrent renewals to different members do not collide.
+    If a renewal is already in-flight for this node, the call is skipped
+    (backpressure: the in-flight attempt covers the window).
+    On stale-epoch rejection the Coordinator demotes itself via rejoin_as_worker.
+    """
+    key = node_operation_key(node_id, "lease_renew")
+    if controller._coordinator.in_flight(key):
+        return
+    state = controller.__dict__.get("_cluster_state")
+    if state is None:
+        return
+    record = state.record(node_id.value)
+    if record is None or record.port is None or not record.transport_fingerprint:
+        return
+    host = record.host
+    port = record.port
+    fingerprint = record.transport_fingerprint
+    secret = record.secret
+    local_id = state.local_node_id
+
+    def task(
+        _cancel_event: threading.Event,
+        _progress: Callable[[str], None],
+    ) -> dict[str, Any]:
+        transport = transport_cls(host, port, expected_fingerprint=fingerprint)
+        p = provider_cls(
+            node_id=node_id,
+            secret=secret,
+            caller_node_id=NodeId(local_id),
+            transport=transport,
+        )
+        return p.renew_coordinator_lease(
+            cluster_id=cluster_id, epoch=epoch, fencing_token=fencing_token
+        )
+
+    def on_error(_key: str, message: str) -> None:
+        if "epoch" in message or "stale" in message:
+            _rejoin_stale_coordinator(controller, epoch)
+
+    controller._coordinator.run(
+        key, task, on_result=lambda k, r: None, on_error=on_error
+    )
+
+
+def _rejoin_stale_coordinator(controller: Any, sent_epoch: int) -> None:
+    """Demote self if all members report our epoch as stale.
+
+    Called when a lease renewal is rejected with an epoch-related error.
+    Guards against spurious demotions by checking the local epoch still matches
+    what was sent — if the epoch already advanced (e.g. we restarted and minted
+    a new one), there is nothing to do.
+    """
+    from maintenance.components.cluster_roles import ClusterRole
+
+    state = controller.__dict__.get("_cluster_state")
+    if state is None:
+        return
+    epoch = state.coordinator_epoch
+    if epoch is None or epoch.epoch != sent_epoch:
+        return
+    assignment = state.local_assignment
+    if ClusterRole.COORDINATOR not in assignment.roles:
+        return
+    manager = controller._peer_connections() if hasattr(controller, "_peer_connections") else None
+    if manager is not None:
+        try:
+            manager.rejoin_as_worker(state, NodeId(state.local_node_id), sent_epoch)
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+
+def propagate_coordinator_lease(
+    controller: Any,
+    target_node_id: str | None = None,
+    *,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = TLSRemoteTransport,
+) -> None:
+    """Dispatch lease renewals to enrolled cluster members after local renewal.
+
+    If ``target_node_id`` is given, dispatch only to that member (used on
+    reconnect to reconcile one specific peer without disturbing others).
+    Otherwise all enrolled non-revoked members in the same cluster receive the
+    renewal.  Only dispatches when the local node IS the active Coordinator.
+    """
+    from maintenance.components.cluster_roles import ClusterRole
+
+    state = controller.__dict__.get("_cluster_state")
+    if state is None:
+        return
+    epoch = state.coordinator_epoch
+    if epoch is None:
+        return
+    assignment = state.local_assignment
+    if ClusterRole.COORDINATOR not in assignment.roles or assignment.revoked:
+        return
+    cluster_id = state.cluster_id
+    ep_num = epoch.epoch
+    fence = epoch.fencing_token
+    local_node_id = state.local_node_id
+
+    for ra in state.role_assignments:
+        if ra.node_id is None or ra.revoked:
+            continue
+        if ra.node_id.value == local_node_id:
+            continue
+        if target_node_id is not None and ra.node_id.value != target_node_id:
+            continue
+        _dispatch_lease_renewal(
+            controller,
+            ra.node_id,
+            cluster_id=cluster_id,
+            epoch=ep_num,
+            fencing_token=fence,
+            provider_cls=provider_cls,
+            transport_cls=transport_cls,
+        )
 
 
 def add_manual_host(

@@ -1753,3 +1753,97 @@ Implications:
 A Worker whose Coordinator has NOT done the reverse `Pair(Coordinator→Worker)` cannot grant dashboard access to the Coordinator via "Share My Dashboard" alone. The UI surfaces this clearly. No automated remedy is introduced; human-approved pairing remains the only path to granting reverse access.
 
 ---
+
+## 59. 2026-09-16 — Distributed Coordinator lease propagation + failover coherence (Phase 6)
+
+### The missing seam
+
+`AuthenticatedNodeProvider.renew_coordinator_lease()` existed in `remote.py` since Phase 2 but had zero production callers. The Coordinator renewed its own epoch locally inside `_renew_local_coordinator_lease()` but never pushed the updated `lease_expires_at` to enrolled members. Subcoordinators evaluated `can_promote()` against whatever epoch they last received — which could be arbitrarily stale. Phase 6 wires the propagation path.
+
+### What was added
+
+**`_dispatch_lease_renewal(controller, node_id, *, cluster_id, epoch, fencing_token)`** — dispatches one background task keyed `node_operation_key(node_id, "lease_renew")` to send `renew_coordinator_lease` to a single enrolled member. Guard: skips if a task for that key is already in-flight. Reads transport details from `ClusterState.record(node_id)`. On stale-epoch rejection (error message contains "epoch" or "stale"), calls `_rejoin_stale_coordinator` to demote self.
+
+**`_rejoin_stale_coordinator(controller, sent_epoch)`** — demotes the local node from Coordinator to Worker via `rejoin_as_worker()`. Guards: no-op if cluster state is absent, if the local epoch has already advanced beyond `sent_epoch` (transient rejection from a single member), or if the local role is no longer COORDINATOR.
+
+**`propagate_coordinator_lease(controller, target_node_id=None)`** — iterates enrolled non-revoked non-self role assignments. If `target_node_id` is given, dispatches only to that member (reconnect reconciliation). If `None`, dispatches to all. No-op when the local node is not the active Coordinator or cluster state is absent.
+
+### Call sites
+
+| Location | Trigger |
+|---|---|
+| `_renew_local_coordinator_lease()` in `window_discovery.py` | After every successful local `renew_cluster_lease()`, propagate to all enrolled members |
+| `on_discovered_candidate()` in `window_discovery.py` | After `attempt_pending_trust_revocations()`, push the current lease to the newly-online member |
+
+No new threads or thread pools are introduced. All background tasks flow through `controller._coordinator` (the existing `AppCoordinator` task runner), keyed per-node to prevent concurrent duplicates.
+
+### Monotonic lease rule
+
+`renew_lease()` in `cluster_roles.py` now computes:
+
+```python
+lease_expires_at = max(epoch.lease_expires_at, now + lease_seconds)
+```
+
+This ensures that a delayed or reordered renewal never shortens an already-accepted long lease. The target's accepted `lease_expires_at` is monotonically non-decreasing within a single epoch+fencing-token pair.
+
+### Subcoordinator promotion path
+
+`can_promote()` already checks `now >= state.epoch.lease_expires_at` using the *accepted* epoch — the one received from the Coordinator's most recent wire renewal. With propagation wired, that epoch stays fresh (renewed every ~80 s; lease valid for 120 s). A Subcoordinator will not promote unless the accepted `lease_expires_at` has passed, so spurious promotions are prevented in the normal case.
+
+### Stale Coordinator self-demotion
+
+If all members reject a renewal because the epoch is stale (a new Coordinator was promoted while the old one was partitioned), the old Coordinator eventually calls `_rejoin_stale_coordinator()` after the first confirmed rejection. It verifies that the local epoch still matches `sent_epoch` before demoting, so a single in-flight rejection from a partitioned member does not cause a spurious demotion.
+
+### Reconnect reconciliation
+
+When a cluster member comes online (discovered via mDNS or manual-host scan), `on_discovered_candidate()` calls `propagate_coordinator_lease(controller, candidate.stable_id)` immediately after attempting pending trust revocations. This means a member that was offline during a renewal window receives the current lease without waiting for the next reconciliation tick.
+
+### Partition limitation
+
+The propagation path is best-effort. If a member is unreachable, the background task fails silently (no retry storm). The member's accepted lease will expire normally, and `can_promote()` will fire once the lease window passes. This is the intended partition behavior: prolonged isolation eventually triggers promotion from a waiting Subcoordinator.
+
+### Restart behavior
+
+`coordinator_epoch` is persisted via `ClusterStore`. On restart, the local node loads the last-saved epoch. The Coordinator re-propagates on the next reconciliation tick (within the 120 s lease window). A member that restarts with a stale on-disk epoch will receive a fresh renewal when the Coordinator next reconciles or discovers it.
+
+### UI lease health indicator
+
+`LocalClusterSpec` now carries two new fields:
+
+| Field | Meaning |
+|---|---|
+| `coordinator_lease_expires_at: float` | Absolute timestamp from `coordinator_epoch.lease_expires_at` |
+| `coordinator_lease_healthy: bool` | `True` when `lease_expires_at > now + 30s` |
+
+`_update_cluster_membership_section()` appends a short label to the coordinator line:
+- `· lease healthy` — more than 30 s remaining
+- `· lease expiring` — non-zero but ≤ 30 s, or expired
+- `· lease expired` — `lease_expires_at > 0` but in the past
+
+### Real-socket evidence
+
+`RealSocketLeaseTests` in `tests/test_remote_contract.py` (7 tests):
+
+| Test | What it proves |
+|---|---|
+| `test_valid_lease_renewal_accepted` | Full round-trip: handler called, returns `{ok, epoch}` |
+| `test_wrong_cluster_id_rejected` | Bad `cluster_id` → rejected by `_verify_role_fence` before handler |
+| `test_wrong_coordinator_id_rejected` | Wrong caller identity → `FencingError` raised in handler |
+| `test_stale_epoch_rejected` | Stale `epoch` → rejected by `_verify_role_fence` before handler |
+| `test_wrong_fence_rejected` | Correct epoch, wrong `fencing_token` → rejected before handler |
+| `test_lease_not_shortened_by_older_renewal` | Monotonic rule: `max(200, 50+120)=200`; `max(200, 150+120)=270` |
+| `test_promoted_coordinator_fences_old_authority` | Member at epoch 6 rejects stale epoch-5 op from old Coordinator |
+
+### Conceptual model (unchanged)
+
+```
+CLUSTER ID  — which cluster
+ROLE        — responsibility within it
+LEASE       — is the Coordinator still live
+EPOCH+FENCE — which Coordinator authority is current
+TRUST       — can these two machines authenticate
+SHARE       — target-owner dashboard consent (per-peer)
+```
+
+These remain orthogonal. Role authority does not bypass trust authentication. Lease renewal does not transfer dashboard share recipient identity. Coordinator change does not affect `_peer_dashboard_shares`.

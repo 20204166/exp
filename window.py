@@ -1354,3 +1354,15 @@ def attempt_pending_trust_revocations(controller: Any, node_id: str) -> None:
     without requiring user interaction.  The peer remains untrusted regardless.
     """
     ui_node_actions.attempt_pending_trust_revocations(controller, node_id)
+
+
+def propagate_coordinator_lease(
+    controller: Any, target_node_id: str | None = None
+) -> None:
+    """Propagate the active Coordinator lease to enrolled cluster members.
+
+    Called after each successful local lease renewal and when a cluster member
+    is discovered online so their accepted lease stays current.  No-op when the
+    local node is not the active Coordinator.
+    """
+    ui_node_actions.propagate_coordinator_lease(controller, target_node_id)

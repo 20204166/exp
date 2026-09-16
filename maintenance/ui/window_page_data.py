@@ -124,10 +124,12 @@ def nodes_cluster_spec(controller: Any) -> ui_nodes.LocalClusterSpec | None:
     coordinator_id = epoch.coordinator_id.value if epoch is not None else None
     shares = controller.__dict__.get("_peer_dashboard_shares", {})
     coordinator_expires_at = shares.get(coordinator_id, 0.0) if coordinator_id else 0.0
+    coordinator_lease_expires_at = epoch.lease_expires_at if epoch is not None else 0.0
     return node_specs.local_cluster_spec(
         registry,
         controller._cluster_state,
         dashboard_share_expires_at=coordinator_expires_at,
+        coordinator_lease_expires_at=coordinator_lease_expires_at,
     )
 
 

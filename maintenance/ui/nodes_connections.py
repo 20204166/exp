@@ -96,6 +96,8 @@ class LocalClusterSpec:
     dashboard_share_active: bool
     dashboard_share_expires_at: float
     has_peer_grants: bool
+    coordinator_lease_expires_at: float = 0.0
+    coordinator_lease_healthy: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,9 +360,18 @@ class NodesConnectionsPage:
             return
         role_label = spec.local_role.title()
         if spec.joined and spec.coordinator_display_name:
+            lease_part = (
+                " · lease healthy"
+                if spec.coordinator_lease_healthy
+                else " · lease expiring"
+                if 0.0 < spec.coordinator_lease_expires_at > _time.time()
+                else " · lease expired"
+                if spec.coordinator_lease_expires_at > 0.0
+                else ""
+            )
             coordinator_part = (
                 f"  ·  Coordinator: {spec.coordinator_display_name}"
-                f" · {spec.coordinator_status.title()}"
+                f" · {spec.coordinator_status.title()}{lease_part}"
             )
         elif spec.joined:
             coordinator_part = (
