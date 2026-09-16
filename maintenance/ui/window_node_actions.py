@@ -179,7 +179,67 @@ def _propagate_capability_grants(controller: Any, state: RoleState) -> None:
                 )
 
 
-def set_node_roles(controller: Any, node_id: str, roles: frozenset[str]) -> None:
+def _is_remote_cluster_target(controller: Any, node_id: str) -> bool:
+    """True when node_id is an enrolled, reachable peer and we are the Coordinator."""
+    state = controller._cluster_state
+    if state.coordinator_epoch is None:
+        return False
+    if ClusterRole.COORDINATOR not in state.local_assignment.roles:
+        return False
+    if node_id == state.local_node_id:
+        return False
+    assignment = _role_state(controller).assignment_for(NodeId(node_id))
+    if assignment is None or assignment.revoked:
+        return False
+    record = state.record(node_id)
+    return record is not None and record.port is not None
+
+
+def _remote_role_op(
+    controller: Any,
+    node_id: str,
+    op_key: str,
+    rpc_call: Callable[[Any], Any],
+    local_op: Callable[[], None],
+    *,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = SocketRemoteTransport,
+) -> None:
+    """Dispatch a role RPC to node_id; run local_op only on success (REMOTE FIRST)."""
+    record = controller._cluster_state.record(node_id)
+    if record is None or record.port is None:
+        controller._nodes_error("No connection details saved for that node")
+        return
+    node = NodeId(node_id)
+
+    def task(
+        _cancel: threading.Event,
+        _progress: Callable[[str], None],
+    ) -> Any:
+        provider = provider_cls(
+            node_id=node,
+            secret=record.secret,
+            caller_node_id=NodeId(controller._cluster_state.local_node_id),
+            transport=build_trusted_transport(record, transport_cls=transport_cls),
+        )
+        return rpc_call(provider)
+
+    controller._coordinator.run(
+        node_operation_key(node, op_key),
+        task,
+        on_result=lambda _key, _result: local_op(),
+        on_error=lambda _key, message: controller._nodes_error(message),
+    )
+
+
+def set_node_roles(
+    controller: Any,
+    node_id: str,
+    roles: frozenset[str],
+    *,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = SocketRemoteTransport,
+) -> None:
     try:
         requested = frozenset(ClusterRole(value) for value in roles)
         current = _role_state(controller)
@@ -188,9 +248,26 @@ def set_node_roles(controller: Any, node_id: str, roles: frozenset[str]) -> None
             target=NodeId(node_id),
             roles=requested,
         )
-        _save_role_state(controller, assignment)
     except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
         controller._nodes_error(str(error))
+        return
+    if _is_remote_cluster_target(controller, node_id):
+        epoch = controller._cluster_state.coordinator_epoch
+        def rpc_call(provider: Any) -> Any:
+            return provider.assign_role(
+                node_id,
+                sorted(r.value for r in requested),
+                cluster_id=controller._cluster_state.cluster_id,
+                epoch=epoch.epoch,
+                fencing_token=epoch.fencing_token,
+            )
+        _remote_role_op(
+            controller, node_id, "assign_role",
+            rpc_call, lambda: _save_role_state(controller, assignment),
+            provider_cls=provider_cls, transport_cls=transport_cls,
+        )
+    else:
+        _save_role_state(controller, assignment)
 
 
 def create_cluster_invite(controller: Any) -> str | None:
@@ -337,6 +414,10 @@ def _apply_cluster_join(controller: Any, response: dict[str, Any]) -> None:
         ),
         role_assignments=(
             RoleAssignment(
+                frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}),
+                node_id=NodeId(coordinator_id),
+            ),
+            RoleAssignment(
                 frozenset({ClusterRole.WORKER}),
                 node_id=NodeId(controller._cluster_state.local_node_id),
             ),
@@ -352,34 +433,79 @@ def _apply_cluster_join(controller: Any, response: dict[str, Any]) -> None:
     controller._nodes_status(f"Joined cluster {cluster_id}")
 
 
-def pause_node(controller: Any, node_id: str) -> None:
+def pause_node(
+    controller: Any,
+    node_id: str,
+    *,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = SocketRemoteTransport,
+) -> None:
     try:
-        _save_role_state(
-            controller,
-            _role_state(controller).pause(
-                actor=controller._cluster_state.local_assignment,
-                target=NodeId(node_id),
-            ),
+        new_state = _role_state(controller).pause(
+            actor=controller._cluster_state.local_assignment,
+            target=NodeId(node_id),
         )
     except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
         controller._nodes_error(str(error))
+        return
+    if _is_remote_cluster_target(controller, node_id):
+        epoch = controller._cluster_state.coordinator_epoch
+        def rpc_call(provider: Any) -> Any:
+            return provider.pause_worker(
+                node_id,
+                cluster_id=controller._cluster_state.cluster_id,
+                epoch=epoch.epoch,
+                fencing_token=epoch.fencing_token,
+            )
+        _remote_role_op(
+            controller, node_id, "pause_worker",
+            rpc_call, lambda: _save_role_state(controller, new_state),
+            provider_cls=provider_cls, transport_cls=transport_cls,
+        )
+    else:
+        _save_role_state(controller, new_state)
 
 
-def resume_node(controller: Any, node_id: str) -> None:
+def resume_node(
+    controller: Any,
+    node_id: str,
+    *,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = SocketRemoteTransport,
+) -> None:
     try:
-        _save_role_state(
-            controller,
-            _role_state(controller).resume(
-                actor=controller._cluster_state.local_assignment,
-                target=NodeId(node_id),
-            ),
+        new_state = _role_state(controller).resume(
+            actor=controller._cluster_state.local_assignment,
+            target=NodeId(node_id),
         )
     except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
         controller._nodes_error(str(error))
+        return
+    if _is_remote_cluster_target(controller, node_id):
+        epoch = controller._cluster_state.coordinator_epoch
+        def rpc_call(provider: Any) -> Any:
+            return provider.resume_worker(
+                node_id,
+                cluster_id=controller._cluster_state.cluster_id,
+                epoch=epoch.epoch,
+                fencing_token=epoch.fencing_token,
+            )
+        _remote_role_op(
+            controller, node_id, "resume_worker",
+            rpc_call, lambda: _save_role_state(controller, new_state),
+            provider_cls=provider_cls, transport_cls=transport_cls,
+        )
+    else:
+        _save_role_state(controller, new_state)
 
 
 def remove_connection_node(
-    controller: Any, node_id: str, *, messagebox_module: Any = messagebox
+    controller: Any,
+    node_id: str,
+    *,
+    messagebox_module: Any = messagebox,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = SocketRemoteTransport,
 ) -> None:
     if not messagebox_module.askyesno(
         "Remove connection",
@@ -420,10 +546,44 @@ def remove_connection_node(
         controller._sync_selected_context_mirrors(context)
         controller._render_selected_node(context)
     controller._nodes_status(f"Removed connection to {node_id}")
+    if _is_remote_cluster_target(controller, node_id):
+        epoch = controller._cluster_state.coordinator_epoch
+        record = controller._cluster_state.record(node_id)
+        if record is not None and record.port is not None:
+            _node = node
+
+            def task(
+                _cancel: threading.Event,
+                _progress: Callable[[str], None],
+            ) -> Any:
+                provider = provider_cls(
+                    node_id=_node,
+                    secret=record.secret,
+                    caller_node_id=NodeId(controller._cluster_state.local_node_id),
+                    transport=build_trusted_transport(record, transport_cls=transport_cls),
+                )
+                return provider.remove_connection(
+                    node_id,
+                    cluster_id=controller._cluster_state.cluster_id,
+                    epoch=epoch.epoch,
+                    fencing_token=epoch.fencing_token,
+                )
+
+            controller._coordinator.run(
+                node_operation_key(node, "remove_connection"),
+                task,
+                on_result=lambda _key, _result: None,
+                on_error=lambda _key, _message: None,
+            )
 
 
 def remove_job_node(
-    controller: Any, node_id: str, *, messagebox_module: Any = messagebox
+    controller: Any,
+    node_id: str,
+    *,
+    messagebox_module: Any = messagebox,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = SocketRemoteTransport,
 ) -> None:
     if not messagebox_module.askyesno(
         "Remove job",
@@ -432,20 +592,42 @@ def remove_job_node(
     ):
         return
     try:
-        _save_role_state(
-            controller,
-            _role_state(controller).remove_job(
-                actor=controller._cluster_state.local_assignment,
-                target=NodeId(node_id),
-            ),
+        new_state = _role_state(controller).remove_job(
+            actor=controller._cluster_state.local_assignment,
+            target=NodeId(node_id),
         )
-        controller._nodes_status(f"Removed job for {node_id}")
     except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
         controller._nodes_error(str(error))
+        return
+    if _is_remote_cluster_target(controller, node_id):
+        epoch = controller._cluster_state.coordinator_epoch
+        def rpc_call(provider: Any) -> Any:
+            return provider.remove_job(
+                node_id,
+                cluster_id=controller._cluster_state.cluster_id,
+                epoch=epoch.epoch,
+                fencing_token=epoch.fencing_token,
+            )
+        def local_op() -> None:
+            _save_role_state(controller, new_state)
+            controller._nodes_status(f"Removed job for {node_id}")
+        _remote_role_op(
+            controller, node_id, "remove_job",
+            rpc_call, local_op,
+            provider_cls=provider_cls, transport_cls=transport_cls,
+        )
+    else:
+        _save_role_state(controller, new_state)
+        controller._nodes_status(f"Removed job for {node_id}")
 
 
 def revoke_node(
-    controller: Any, node_id: str, *, messagebox_module: Any = messagebox
+    controller: Any,
+    node_id: str,
+    *,
+    messagebox_module: Any = messagebox,
+    provider_cls: Any = AuthenticatedNodeProvider,
+    transport_cls: Any = SocketRemoteTransport,
 ) -> None:
     if not messagebox_module.askyesno(
         "Revoke",
@@ -457,23 +639,35 @@ def revoke_node(
         role_state = _role_state(controller)
         assignment = role_state.assignment_for(NodeId(node_id))
         if assignment is None or assignment.revoked:
-            # A trusted node without a role record, or one whose revocation was
-            # already persisted by an interrupted earlier revocation, has no
-            # role to revoke; revocation means removing trust entirely.
             revoke_trusted_node(controller, node_id)
             return
-        if not _save_role_state(
-            controller,
-            role_state.revoke(
-                actor=controller._cluster_state.local_assignment,
-                target=NodeId(node_id),
-            ),
-        ):
-            return
-        # Role revocation and trust/provider cleanup are one user-visible action.
-        revoke_trusted_node(controller, node_id)
+        revoked_state = role_state.revoke(
+            actor=controller._cluster_state.local_assignment,
+            target=NodeId(node_id),
+        )
     except (KeyError, TypeError, ValueError, RoleAuthorizationError) as error:
         controller._nodes_error(str(error))
+        return
+    if _is_remote_cluster_target(controller, node_id):
+        epoch = controller._cluster_state.coordinator_epoch
+        def rpc_call(provider: Any) -> Any:
+            return provider.revoke_worker(
+                node_id,
+                cluster_id=controller._cluster_state.cluster_id,
+                epoch=epoch.epoch,
+                fencing_token=epoch.fencing_token,
+            )
+        def local_op() -> None:
+            if _save_role_state(controller, revoked_state):
+                revoke_trusted_node(controller, node_id)
+        _remote_role_op(
+            controller, node_id, "revoke_worker",
+            rpc_call, local_op,
+            provider_cls=provider_cls, transport_cls=transport_cls,
+        )
+    else:
+        if _save_role_state(controller, revoked_state):
+            revoke_trusted_node(controller, node_id)
 
 
 @dataclass(slots=True)
