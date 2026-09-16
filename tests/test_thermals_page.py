@@ -182,25 +182,31 @@ def _thermals_page_kwargs(recorder: WidgetRecorder) -> dict[str, Any]:
 
 
 class ThermalsPageLearnMoreLinkTests(unittest.TestCase):
-    def test_learn_more_button_absent_by_default(self) -> None:
+    def _make_page(
+        self,
+        callbacks: ThermalsPageCallbacks,
+        coordinator: ButtonCoordinator | None = None,
+    ) -> tuple[WidgetRecorder, ThermalsPage]:
         recorder = WidgetRecorder()
+        page_options: dict[str, Any] = _thermals_page_kwargs(recorder)
+        if coordinator is not None:
+            page_options["button_coordinator"] = coordinator
         page = ThermalsPage(
             recorder.parent(),
-            callbacks=ThermalsPageCallbacks(on_back=Mock()),
-            **_thermals_page_kwargs(recorder),
+            callbacks=callbacks,
+            **page_options,
         )
+        return recorder, page
+
+    def test_learn_more_button_absent_by_default(self) -> None:
+        _recorder, page = self._make_page(ThermalsPageCallbacks(on_back=Mock()))
 
         self.assertFalse(hasattr(page, "learn_more_button"))
 
     def test_learn_more_button_invokes_callback_when_provided(self) -> None:
-        recorder = WidgetRecorder()
         on_learn_more = Mock()
-        _page = ThermalsPage(
-            recorder.parent(),
-            callbacks=ThermalsPageCallbacks(
-                on_back=Mock(), on_learn_more=on_learn_more
-            ),
-            **_thermals_page_kwargs(recorder),
+        recorder, _page = self._make_page(
+            ThermalsPageCallbacks(on_back=Mock(), on_learn_more=on_learn_more)
         )
 
         recorder.button_with_text("Why isn't a sensor available?").kwargs["command"]()
@@ -210,16 +216,11 @@ class ThermalsPageLearnMoreLinkTests(unittest.TestCase):
     def test_learn_more_button_registers_stable_action_id_when_coordinator_present(
         self,
     ) -> None:
-        recorder = WidgetRecorder()
         coordinator = ButtonCoordinator()
         on_learn_more = Mock()
-        page = ThermalsPage(
-            recorder.parent(),
-            callbacks=ThermalsPageCallbacks(
-                on_back=Mock(), on_learn_more=on_learn_more
-            ),
-            button_coordinator=coordinator,
-            **_thermals_page_kwargs(recorder),
+        _recorder, page = self._make_page(
+            ThermalsPageCallbacks(on_back=Mock(), on_learn_more=on_learn_more),
+            coordinator,
         )
 
         self.assertIn("thermals:learn-more", coordinator.registered_ids())

@@ -141,7 +141,7 @@ class AppWindowTests(unittest.TestCase):
         self.assertEqual(window.master.cancelled, ["after#1"])
         self.assertIsNone(window._discovery_tick_id)
 
-    def test_partial_window_without_registry_stops_discovery_timer(self) -> None:
+    def test_partial_window_with_registry_stops_discovery_timer(self) -> None:
         window: Any = object.__new__(AppWindow)
         window.master = TimerMaster()
         window._is_closing = True
