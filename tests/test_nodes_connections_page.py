@@ -514,6 +514,121 @@ class NodePresentationConnectionTests(unittest.TestCase):
             connection_status_color_role("offline", manual_disconnected=True), "secondary"
         )
 
+    def test_meta_text_uses_connection_status(self) -> None:
+        page, _, _ = make_page()
+        spec = replace(_trusted_spec("n1"), connection_status="connecting")
+        text = page._trusted_meta_text(spec)
+        self.assertIn("Connecting", text)
+        self.assertNotIn("Online", text)
+
+    def test_meta_text_auth_failed(self) -> None:
+        page, _, _ = make_page()
+        spec = replace(_trusted_spec("n1"), connection_status="authentication_failed")
+        self.assertIn("Auth failed", page._trusted_meta_text(spec))
+
+    def test_meta_text_manual_disconnected(self) -> None:
+        page, _, _ = make_page()
+        spec = replace(_trusted_spec("n1"), manual_disconnected=True)
+        self.assertIn("Disconnected", page._trusted_meta_text(spec))
+
+    def test_meta_text_offline_retrying(self) -> None:
+        page, _, _ = make_page()
+        spec = replace(_trusted_spec("n1"), connection_status="offline", retry_automatic=True)
+        self.assertIn("retrying", page._trusted_meta_text(spec))
+
+    def test_meta_color_auth_failed_is_danger(self) -> None:
+        page, _, _ = make_page()
+        spec = replace(_trusted_spec("n1"), connection_status="authentication_failed")
+        self.assertEqual(page._trusted_meta_color(spec), "danger")
+
+    def test_meta_color_manual_disconnected_is_secondary(self) -> None:
+        page, _, _ = make_page()
+        spec = replace(_trusted_spec("n1"), manual_disconnected=True)
+        self.assertEqual(page._trusted_meta_color(spec), "secondary")
+
+    def test_meta_color_identity_changed_is_danger(self) -> None:
+        page, _, _ = make_page()
+        spec = replace(_trusted_spec("n1"), connection_status="identity_changed")
+        self.assertEqual(page._trusted_meta_color(spec), "danger")
+
+    def test_meta_color_online_is_success(self) -> None:
+        page, _, _ = make_page()
+        spec = replace(_trusted_spec("n1"), connection_status="online")
+        self.assertEqual(page._trusted_meta_color(spec), "success")
+
+
+class ConnectionStateMatrixTests(unittest.TestCase):
+    """Assert backend state → TrustedNodeSpec → UI text/color for every state."""
+
+    def _make_spec(
+        self,
+        connection_status: str = "online",
+        manual_disconnected: bool = False,
+        retry_automatic: bool = True,
+        identity_status: str = "verified",
+    ) -> TrustedNodeSpec:
+        return TrustedNodeSpec(
+            "n1", "Node 1", "host", None, "online", "host", 5000, True,
+            connection_status=connection_status,
+            manual_disconnected=manual_disconnected,
+            retry_automatic=retry_automatic,
+            identity_status=identity_status,
+        )
+
+    def _meta(self, spec: TrustedNodeSpec) -> tuple[str, str]:
+        page, _, _ = make_page()
+        return page._trusted_meta_text(spec), page._trusted_meta_color(spec)
+
+    def test_online_shows_online(self) -> None:
+        text, color = self._meta(self._make_spec("online"))
+        self.assertIn("Online", text)
+        self.assertEqual(color, "success")
+
+    def test_connecting_not_offline(self) -> None:
+        text, color = self._meta(self._make_spec("connecting"))
+        self.assertIn("Connecting", text)
+        self.assertNotIn("Offline", text)
+        self.assertEqual(color, "secondary")
+
+    def test_offline_retrying(self) -> None:
+        text, color = self._meta(self._make_spec("offline", retry_automatic=True))
+        self.assertIn("Offline", text)
+        self.assertIn("retrying", text)
+        self.assertEqual(color, "warning")
+
+    def test_offline_no_retry(self) -> None:
+        text, color = self._meta(self._make_spec("offline", retry_automatic=False))
+        self.assertIn("Offline", text)
+        self.assertNotIn("retrying", text)
+        self.assertEqual(color, "warning")
+
+    def test_authentication_failed_distinct(self) -> None:
+        text, color = self._meta(self._make_spec("authentication_failed"))
+        self.assertNotIn("Offline", text)
+        self.assertIn("Auth failed", text)
+        self.assertEqual(color, "danger")
+
+    def test_identity_changed_distinct(self) -> None:
+        text, color = self._meta(self._make_spec("identity_changed"))
+        self.assertNotIn("Offline", text)
+        self.assertIn("Identity changed", text)
+        self.assertEqual(color, "danger")
+
+    def test_manual_disconnect_shows_disconnected(self) -> None:
+        text, color = self._meta(self._make_spec("offline", manual_disconnected=True))
+        self.assertIn("Disconnected", text)
+        self.assertNotIn("Offline", text)
+        self.assertEqual(color, "secondary")
+
+    def test_identity_mismatch_overrides_to_danger(self) -> None:
+        _, color = self._meta(self._make_spec("online", identity_status="mismatch"))
+        self.assertEqual(color, "danger")
+
+    def test_unknown_does_not_crash(self) -> None:
+        text, color = self._meta(self._make_spec("unknown"))
+        self.assertIsInstance(text, str)
+        self.assertIsInstance(color, str)
+
 
 if __name__ == "__main__":
     unittest.main()

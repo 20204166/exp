@@ -700,10 +700,12 @@ class NodesConnectionsPage:
             )
 
     def _trusted_meta_text(self, spec: TrustedNodeSpec) -> str:
-        role_status = (
-            f"{node_presentation.trust_label('trusted')} · "
-            f"{node_presentation.status_label(spec.status)}"
+        conn_label = node_presentation.connection_status_label(
+            spec.connection_status,
+            manual_disconnected=spec.manual_disconnected,
+            retry_automatic=spec.retry_automatic,
         )
+        role_status = f"{node_presentation.trust_label('trusted')} · {conn_label}"
         if spec.target_state != "Unknown":
             role_status += f" · {spec.target_state}"
         if spec.identity_status == "mismatch":
@@ -711,13 +713,15 @@ class NodesConnectionsPage:
         return role_status
 
     def _trusted_meta_color(self, spec: TrustedNodeSpec) -> str:
-        status_role = node_presentation.status_color_role(spec.status)
         if (
             spec.identity_status == "mismatch"
             or spec.target_state == "Permission denied"
         ):
-            status_role = "danger"
-        return status_role
+            return "danger"
+        return node_presentation.connection_status_color_role(
+            spec.connection_status,
+            manual_disconnected=spec.manual_disconnected,
+        )
 
     def _trusted_endpoint_text(self, spec: TrustedNodeSpec) -> str:
         endpoint = f"Host: {spec.host or spec.hostname}"
