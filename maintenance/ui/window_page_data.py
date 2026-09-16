@@ -116,6 +116,19 @@ def nodes_manual_specs(controller: Any) -> list[ui_nodes.TrustedNodeSpec]:
     )
 
 
+def nodes_cluster_spec(controller: Any) -> ui_nodes.LocalClusterSpec | None:
+    registry = controller.__dict__.get("_node_registry")
+    if registry is None:
+        return None
+    return node_specs.local_cluster_spec(
+        registry,
+        controller._cluster_state,
+        dashboard_share_expires_at=controller.__dict__.get(
+            "_dashboard_share_expires_at", 0.0
+        ),
+    )
+
+
 def cluster_specs(controller: Any) -> list[ui_cluster.ClusterNodeSpec]:
     registry = controller.__dict__.get("_node_registry")
     return (

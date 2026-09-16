@@ -550,6 +550,9 @@ class AppWindow:
     def _nodes_manual_specs(self) -> list[ui_nodes.TrustedNodeSpec]:
         return ui_window_page_data.nodes_manual_specs(self)
 
+    def _nodes_cluster_spec(self) -> "ui_nodes.LocalClusterSpec | None":
+        return ui_window_page_data.nodes_cluster_spec(self)
+
     def _refresh_nodes_page(self) -> None:
         ui_window_pages.refresh_nodes(self)
 
@@ -789,6 +792,7 @@ class AppWindow:
                 )
                 self._nodes_status("Dashboard shared read-only for 5 minutes")
         self._refresh_cluster_page()
+        self._refresh_nodes_page()
         self._show_dashboard_page()
 
     def _expire_dashboard_share(self) -> None:
@@ -798,6 +802,7 @@ class AppWindow:
         self.__dict__["_dashboard_share_expires_at"] = 0.0
         self.__dict__["_dashboard_share_timer_id"] = None
         self._refresh_cluster_page()
+        self._refresh_nodes_page()
 
     def _set_node_color(self, node_id: str, color: str) -> None:
         ui_node_actions.set_node_color(self, node_id, color)

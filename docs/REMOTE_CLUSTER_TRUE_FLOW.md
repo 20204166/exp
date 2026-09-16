@@ -1626,11 +1626,114 @@ After `join_cluster_via_invite`:
 
 | Gap | Status |
 |---|---|
-| Bilateral trust Revoke (peer's own grant for revoker removed remotely) | **NOT YET** — `revoke_node` still calls `revoke_trusted_node` locally only; peer's `PeerGrantRecord` for the Coordinator is not removed. Phase 3 scope. |
+| Bilateral trust Revoke (peer's own grant for revoker removed remotely) | **RESOLVED — Phase 3.** `revoke_self` wire operation sends the targeted remote cleanup; `PendingTrustRevocation` provides offline durable outbox. See §58. |
 | Response-loss handling for `revoke_worker` | Operator-documented (§57.3); no automated reconciliation. |
 | Coordinator failover / epoch rollover for in-flight role RPCs | A role RPC carrying a stale fence is rejected on the target. Caller receives error; no local mutation. Operator retries with current fence. |
 | MOVABLE placement | Still dormant. |
 | `assign_job` | Still has no production caller. |
 | Coordinator role transfer via UI | Still not exposed (§30). |
+
+---
+
+## 58. 2026-09-16 — Member connection awareness and role-independent dashboard sharing
+
+### What was missing
+
+After a machine joined a cluster as Worker or Subcoordinator, the Nodes & Connections page gave it no cluster-relationship information: no local role display, no coordinator identity, no connection status, and no dashboard-sharing control. The "Share dashboard" button existed only on the All Systems page (`cluster_page.py`) for `spec.is_local` rows — functionally Coordinator-centric, because Workers navigating to All Systems had no obvious path to share their own dashboards.
+
+**FINAL PRINCIPLE:** The Coordinator does not own a Worker's dashboard. The Worker does.
+
+---
+
+### What was added
+
+**`LocalClusterSpec`** (`maintenance/ui/nodes_connections.py`) — a new frozen dataclass. Built purely from `ClusterState` + `NodeRegistry`; never fabricates trust records.
+
+| Field | Source |
+|---|---|
+| `joined` | `coordinator_epoch.coordinator_id != local_node_id` |
+| `local_role` | `local_assignment.roles` |
+| `coordinator_node_id` | `coordinator_epoch.coordinator_id` |
+| `coordinator_display_name` | `NodeRegistry.context(coordinator_id).descriptor.display_name`; falls back to `TrustedNodeRecord.display_name` |
+| `coordinator_status` | `NodeRegistry.context(coordinator_id).descriptor.status.value` |
+| `dashboard_share_active` | `_dashboard_share_expires_at > now` |
+| `dashboard_share_expires_at` | `controller._dashboard_share_expires_at` |
+| `has_peer_grants` | `bool(cluster_state.peer_grants)` |
+
+**Cluster membership section** — new section in `NodesConnectionsPage`, inserted before the trusted-node list, shown when `joined=True` (Worker/Subcoordinator) or when a Coordinator has enrolled members. Displays:
+
+- `Role: {role} · Coordinator: {name} · {status}`
+- Dashboard sharing state with countdown when active
+- "Share My Dashboard" / "Stop Sharing" button wired to the existing `_share_dashboard` handler
+
+**`on_share_dashboard`** added to `NodesConnectionsCallbacks` (optional, `None` default — backward compatible).
+
+**`local_cluster_spec()`** in `maintenance/ui/window_supports/node_specs.py` — pure projection from `ClusterState` + `NodeRegistry`.
+
+**`nodes_cluster_spec()`** in `maintenance/ui/window_page_data.py` — controller adapter.
+
+**`_nodes_cluster_spec()`** method on `AppWindow` — mirrors the existing `_nodes_trusted_specs()` pattern.
+
+**`refresh_cluster_membership(spec)`** called from `refresh_nodes()` in `window_pages.py` — updates the section on every node-page refresh.
+
+**`_expire_dashboard_share` and `_share_dashboard`** in `window.py` — both now also call `_refresh_nodes_page()` so the button label and countdown update immediately when sharing starts or expires.
+
+---
+
+### Trust direction confirmed
+
+After `Pair(Worker→Coordinator)` + `Join`:
+
+| Direction | Mechanism | Result |
+|---|---|---|
+| Worker → Coordinator (outbound) | `TrustedNodeRecord(Coordinator)` on Worker | Worker can authenticate outbound TO Coordinator |
+| Coordinator → Worker (inbound) | `PeerGrantRecord(Worker)` on Coordinator | Coordinator allows inbound requests FROM Worker |
+| Coordinator → Worker (read) | **None created by Join** | Coordinator CANNOT read Worker's dashboard |
+
+For the Coordinator to read a Worker's dashboard, a SEPARATE `Pair(Coordinator→Worker)` is required. This creates:
+- `TrustedNodeRecord(Worker)` on Coordinator (Coordinator can call outbound to Worker)
+- `PeerGrantRecord(Coordinator)` on Worker (Worker allows Coordinator to authenticate as a caller)
+
+`_apply_cluster_join` deliberately does not manufacture this reverse trust. Join is membership; Pair is trust. They remain two separate explicit user actions.
+
+When the reverse trust is absent, the cluster membership section shows:
+> "Dashboard sharing: Off · no peer can receive this share (pair in the other direction first)"
+
+---
+
+### Dashboard share scope: GLOBAL (unchanged)
+
+`_share_dashboard` iterates ALL `cluster_state.peer_grants` and calls `service.start_dashboard_share_for(NodeId(grant.caller_node_id), ...)` for each one. Sharing enables access for every currently authenticated peer simultaneously — not per-peer.
+
+Implications:
+- If `Pair(Coordinator→Worker)` was done, `peer_grants` on the Worker contains the Coordinator's entry; "Share My Dashboard" makes the Worker's dashboard accessible to the Coordinator.
+- If only `Pair(Worker→Coordinator)` was done, `peer_grants` is empty on the Worker; "Share My Dashboard" activates the timer but grants no actual access (no one is in `_dashboard_shares`).
+- Share state is runtime-only. App restart resets it to OFF.
+
+---
+
+### Security invariants preserved
+
+| Invariant | Status |
+|---|---|
+| `DASHBOARD_READ` permission still required | ✓ `RemoteService._solve` checks permission before reaching snapshot handler |
+| Active target-side share still required | ✓ `_require_dashboard_share=True` gate in `RemoteService` unchanged |
+| Cluster role does not bypass auth | ✓ Role labels are presentation-only; `RemoteService` checks `PeerGrant.permissions` |
+| No fake `PeerGrantRecord` created | ✓ `_apply_cluster_join` unchanged; no reverse-trust manufacture |
+| Share off after restart | ✓ `_dashboard_share_expires_at` is not persisted |
+| Revoke defeats share immediately | ✓ `handle_trust_revoke` calls `service.update_grants()`, removing the grant; the check in `RemoteService.handle()` fails before the share check is reached |
+| Remove Connection ≠ Revoke | ✓ `remove_connection_node` does not touch `peer_grants`; share state persists until expiry |
+
+---
+
+### "This System" local/remote label (verified correct, no change)
+
+`trusted_node_specs()` in `node_specs.py` explicitly skips rows where `descriptor.is_local`. The local machine's descriptor (`LOCAL_DISPLAY_NAME = "This System"`, `is_local=True`) never appears in the Nodes & Connections trusted-node list.
+
+---
+
+### Remaining limitation
+
+A Worker whose Coordinator has NOT done the reverse `Pair(Coordinator→Worker)` cannot grant dashboard access to the Coordinator via "Share My Dashboard" alone. The UI surfaces this clearly. No automated remedy is introduced; human-approved pairing remains the only path to granting reverse access.
 
 ---

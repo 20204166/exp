@@ -1,5 +1,6 @@
 """Pure projections from node models to the settings-page view specs."""
 
+import time
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import replace
@@ -228,3 +229,68 @@ def cluster_node_specs(
         )
         for spec in specs
     ]
+
+
+def local_cluster_spec(
+    registry: Any,
+    cluster_state: Any,
+    *,
+    dashboard_share_expires_at: float = 0.0,
+    now: float | None = None,
+) -> ui_nodes.LocalClusterSpec | None:
+    """Build the local cluster membership spec from canonical state.
+
+    Returns ``None`` for a solo bootstrap (coordinator of its own single-node
+    cluster with no enrolled members) where the section adds no value.
+    """
+    if now is None:
+        now = time.time()
+
+    local_node_id = cluster_state.local_node_id
+    epoch = cluster_state.coordinator_epoch
+    local_assignment = cluster_state.local_assignment
+    local_roles = local_assignment.roles if local_assignment else frozenset()
+
+    is_coordinator = any(r.value == "coordinator" for r in local_roles)
+    is_subcoordinator = any(r.value == "subcoordinator" for r in local_roles)
+
+    coordinator_id = epoch.coordinator_id.value if epoch is not None else local_node_id
+    joined = coordinator_id != local_node_id
+
+    if not joined and is_coordinator:
+        has_workers = any(
+            a.node_id is not None and a.node_id.value != local_node_id
+            for a in cluster_state.role_assignments
+        )
+        if not has_workers:
+            return None
+
+    if is_coordinator:
+        local_role = "coordinator"
+    elif is_subcoordinator:
+        local_role = "subcoordinator"
+    else:
+        local_role = "worker"
+
+    coordinator_display_name: str | None = None
+    coordinator_status = "unknown"
+    if joined:
+        try:
+            context = registry.context(NodeId(coordinator_id))
+            coordinator_display_name = context.descriptor.display_name
+            coordinator_status = context.descriptor.status.value
+        except (KeyError, AttributeError):
+            record = cluster_state.record(coordinator_id)
+            if record is not None:
+                coordinator_display_name = record.display_name
+
+    return ui_nodes.LocalClusterSpec(
+        joined=joined,
+        local_role=local_role,
+        coordinator_node_id=coordinator_id if joined else None,
+        coordinator_display_name=coordinator_display_name,
+        coordinator_status=coordinator_status,
+        dashboard_share_active=dashboard_share_expires_at > now,
+        dashboard_share_expires_at=dashboard_share_expires_at,
+        has_peer_grants=bool(cluster_state.peer_grants),
+    )

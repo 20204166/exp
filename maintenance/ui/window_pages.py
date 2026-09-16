@@ -187,11 +187,13 @@ def build_nodes(controller: Any, parent: Any) -> Any:
             on_open_connection=controller._open_connection_dialog,
             on_open_pairing=controller._open_pairing_dialog,
             on_details=controller._open_node_details_dialog,
+            on_share_dashboard=controller._share_dashboard,
         ),
         discovery_enabled=controller._cluster_state.discovery_enabled,
         discovered=controller._nodes_peer_specs(),
         trusted=controller._nodes_trusted_specs(),
         manual=controller._nodes_manual_specs(),
+        local_cluster=controller._nodes_cluster_spec(),
         button_coordinator=controller._button_coordinator,
     )
     return controller.nodes_frame
@@ -273,6 +275,7 @@ def refresh_nodes(controller: Any) -> None:
     page.refresh_discovered(controller._nodes_peer_specs())
     page.refresh_trusted(controller._nodes_trusted_specs())
     page.refresh_manual(controller._nodes_manual_specs())
+    page.refresh_cluster_membership(controller._nodes_cluster_spec())
 
 
 def set_nodes_status(controller: Any, message: str, *, error: bool) -> None:

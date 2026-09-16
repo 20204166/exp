@@ -63,6 +63,7 @@ class NodesConnectionsCallbacks:
     on_open_connection: Callable[[Any], None] = _noop_open_connection
     on_open_pairing: Callable[[Any], None] = _noop_open_pairing
     on_details: Callable[[Any], None] = _noop_details
+    on_share_dashboard: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +79,23 @@ class DiscoveredPeerSpec:
     identity_fingerprint: str | None = None
     transport_fingerprint: str | None = None
     pairing_state: str = "discovered"
+
+
+@dataclass(frozen=True, slots=True)
+class LocalClusterSpec:
+    """Local machine's cluster membership status and dashboard-sharing consent.
+
+    Built from ``ClusterState`` alone; never fabricates trust records.
+    """
+
+    joined: bool
+    local_role: str
+    coordinator_node_id: str | None
+    coordinator_display_name: str | None
+    coordinator_status: str
+    dashboard_share_active: bool
+    dashboard_share_expires_at: float
+    has_peer_grants: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +141,7 @@ class NodesConnectionsPage:
         discovered: list[DiscoveredPeerSpec],
         trusted: list[TrustedNodeSpec],
         manual: list[TrustedNodeSpec],
+        local_cluster: "LocalClusterSpec | None" = None,
         frame_cls: Callable[..., Any] = tk.Frame,
         label_cls: Callable[..., Any] = tk.Label,
         style_frame_cls: Callable[..., Any] = ttk.Frame,
@@ -157,6 +176,7 @@ class NodesConnectionsPage:
         self.entry_cls = entry_cls
         self._button_coordinator = button_coordinator
 
+        self._local_cluster = local_cluster
         self._discovered = {spec.node_id: spec for spec in discovered}
         self._trusted = {spec.node_id: spec for spec in trusted}
         self._manual = {spec.node_id: spec for spec in manual}
@@ -193,6 +213,7 @@ class NodesConnectionsPage:
             colors=self.colors,
         )
         self._build_discovery_section(discovery_enabled)
+        self._build_cluster_membership_section()
         self._build_discovered_section()
         self._build_trusted_section()
         self._build_manual_hosts_section()
@@ -265,6 +286,111 @@ class NodesConnectionsPage:
                 on_learn_pairing,
                 learn_pairing_button,
                 True,
+            )
+
+    def _build_cluster_membership_section(self) -> None:
+        spec = self._local_cluster
+        if spec is None or (not spec.joined and spec.local_role == "coordinator"):
+            self._cluster_membership_card: Any = None
+            return
+        card, body = ui_layout.section_card(
+            self.content,
+            "Cluster membership",
+            frame_cls=self.frame_cls,
+            label_cls=self.label_cls,
+            colors=self.colors,
+            fonts=self.fonts,
+        )
+        self._cluster_membership_card = card
+        self._cluster_membership_body = body
+        self._cluster_status_label = self.label_cls(
+            body,
+            text="",
+            bg=self.colors["card"],
+            fg=self.colors["secondary"],
+            font=self.fonts["status"],
+            anchor="w",
+        )
+        self._cluster_status_label.pack(anchor="w", pady=(0, 4))
+        self._dashboard_share_label = self.label_cls(
+            body,
+            text="",
+            bg=self.colors["card"],
+            fg=self.colors["secondary"],
+            font=self.fonts["status"],
+            anchor="w",
+        )
+        self._dashboard_share_label.pack(anchor="w", pady=(0, 4))
+        on_share = self.callbacks.on_share_dashboard
+        if on_share is not None:
+            self._share_button: Any = self.button_cls(
+                body,
+                text="Share My Dashboard",
+                command=on_share,
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+                cursor="hand2",
+            )
+            self._share_button.pack(anchor="w", pady=(0, 4))
+            self._register_button(
+                "nodes:cluster:share",
+                on_share,
+                self._share_button,
+                True,
+            )
+        else:
+            self._share_button = None
+        self._update_cluster_membership_section(spec)
+
+    def refresh_cluster_membership(self, spec: "LocalClusterSpec | None") -> None:
+        self._local_cluster = spec
+        if not hasattr(self, "_cluster_membership_card"):
+            return
+        if self._cluster_membership_card is None:
+            return
+        self._update_cluster_membership_section(spec)
+
+    def _update_cluster_membership_section(
+        self, spec: "LocalClusterSpec | None"
+    ) -> None:
+        import time as _time
+
+        if spec is None:
+            return
+        role_label = spec.local_role.title()
+        if spec.joined and spec.coordinator_display_name:
+            coordinator_part = (
+                f"  ·  Coordinator: {spec.coordinator_display_name}"
+                f" · {spec.coordinator_status.title()}"
+            )
+        elif spec.joined:
+            coordinator_part = (
+                f"  ·  Coordinator: {spec.coordinator_node_id or '—'}"
+            )
+        else:
+            coordinator_part = ""
+        self._cluster_status_label.config(
+            text=f"Role: {role_label}{coordinator_part}"
+        )
+        if spec.dashboard_share_active:
+            remaining = max(0, spec.dashboard_share_expires_at - _time.time())
+            minutes = int(remaining) // 60
+            seconds = int(remaining) % 60
+            share_text = (
+                f"Dashboard sharing: Active · expires in {minutes}:{seconds:02d}"
+            )
+        elif not spec.has_peer_grants and spec.joined:
+            share_text = (
+                "Dashboard sharing: Off · no peer can receive this share"
+                " (pair in the other direction first)"
+            )
+        else:
+            share_text = "Dashboard sharing: Off"
+        self._dashboard_share_label.config(text=share_text)
+        if self._share_button is not None:
+            self._share_button.config(
+                text="Stop Sharing"
+                if spec.dashboard_share_active
+                else "Share My Dashboard"
             )
 
     def _build_discovered_section(self) -> None:
