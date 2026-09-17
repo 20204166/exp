@@ -84,5 +84,41 @@ class ScannerErrorLoggingTests(unittest.TestCase):
         self.assertIn("sensor denied", "\n".join(log.output))
 
 
+class EntryPointArgParsingTests(unittest.TestCase):
+    """Regression for Windows finding #1: CLI flags must not launch the GUI.
+
+    Previously every flag (--help, --version, or any unknown flag) silently
+    launched the full GUI window and hung forever.  argparse must intercept
+    argv before any GUI or logging setup is reached.
+    """
+
+    def test_help_flag_exits_zero_without_launching_gui(self) -> None:
+        with self.assertRaises(SystemExit) as cm:
+            main._build_arg_parser().parse_args(["--help"])
+        self.assertEqual(cm.exception.code, 0)
+
+    def test_version_flag_exits_zero_and_prints_version(self) -> None:
+        import io
+
+        buf = io.StringIO()
+        with (
+            self.assertRaises(SystemExit) as cm,
+            patch("sys.stdout", buf),
+        ):
+            main._build_arg_parser().parse_args(["--version"])
+        self.assertEqual(cm.exception.code, 0)
+        self.assertIn("system-analyzer", buf.getvalue())
+
+    def test_unknown_flag_exits_nonzero_without_launching_gui(self) -> None:
+        with self.assertRaises(SystemExit) as cm:
+            main._build_arg_parser().parse_args(["--totally-bogus-flag-xyz"])
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_no_flags_returns_namespace_without_exiting(self) -> None:
+        # parse_args([]) must return normally — no SystemExit, no GUI.
+        ns = main._build_arg_parser().parse_args([])
+        self.assertIsNotNone(ns)
+
+
 if __name__ == "__main__":
     unittest.main()

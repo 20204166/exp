@@ -1,9 +1,11 @@
+import argparse
 import logging
 import os
 import platform
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from maintenance._version import __version__
 from window import AppWindow
 
 LOG_DIR_NAME = "system-analyzer"
@@ -70,7 +72,21 @@ def setup_logging() -> Path | None:
     return path
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="system-analyzer",
+        description="Local system dashboard and safe-cleanup tool.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"system-analyzer {__version__}",
+    )
+    return parser
+
+
 def main() -> None:
+    _build_arg_parser().parse_args()
     setup_logging()
     app = AppWindow()
     app.run()
