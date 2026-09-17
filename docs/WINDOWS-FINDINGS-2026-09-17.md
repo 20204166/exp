@@ -443,7 +443,7 @@ Single-instance guard absent.  Still independently reproducible (confirmed REPRO
 
 ### Phase 12E Linux repair (2026-09-17)
 
-**Fix commit:** _pending — see Phase 12E commit_
+**Fix commit:** `4814049`
 **Fix wheel:** `system_analyzer-1.6.1.0-py3-none-any.whl`
 **SHA-256:** `2d68d4194de5c94ea67239dc802e41dd30085b1bd4531d8b9d8fff621910aaf0`
 
