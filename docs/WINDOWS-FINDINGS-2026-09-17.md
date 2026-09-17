@@ -974,3 +974,142 @@ despite ICMP passing, or the listener is bound to an interface/address not
 reachable from the Windows LAN path. Not diagnosed further per the "do not
 investigate pairing" instruction once transport fails. No source code was
 changed. No repeated Pair attempts were made (none were attempted at all).
+
+---
+
+## PHASE 12F-T — Windows → Linux TCP transport root-cause (2026-09-17, ~19:05)
+
+**Goal:** Determine where the TCP SYN from Windows dies. Categories:
+A = never reaches Linux NIC / B = arrives but iptables DROPs / C = SYN-ACK
+sent but return broken / D = full handshake / E = listener gone.
+
+### Step 1 — Runtime still alive
+
+| Check | Result |
+|---|---|
+| `ps -fp 3220` | `system-analyzer` running as `btn17`, PPID 3151, started 15:49 |
+| `ss -tlnp sport = :43281` | `LISTEN 0 16 0.0.0.0:43281 users:(("system-analyzer",pid=3220,fd=6))` |
+
+PID and listener confirmed unchanged since Phase 12F-P precheck.
+
+### Step 2 — Local connectivity
+
+| Test | Result |
+|---|---|
+| `nc -zv 127.0.0.1 43281` | **succeeded** (exit 0) |
+| `nc -zv 192.168.55.107 43281` | **succeeded** (exit 0) |
+
+The listener accepts connections sourced locally on both loopback and the LAN IP.
+The failure is therefore not the listener itself — it is something between
+the Windows NIC and the Linux application socket.
+
+### Step 3 — Route analysis (ProtonVPN kill switch)
+
+`ip -brief address`:
+```
+lo               UNKNOWN  127.0.0.1/8 ::1/128
+enp2s0f0         UP       192.168.55.107/24 fe80::…
+pvpnksintrf1     UNKNOWN  100.85.0.1/24 fdeb:…
+proton0          UNKNOWN  10.2.0.2/32 2a07:…
+```
+
+`ip route show`:
+```
+default via 100.85.0.1 dev pvpnksintrf1 proto static metric 98
+default via 192.168.55.1 dev enp2s0f0 proto dhcp metric 100
+100.85.0.0/24 dev pvpnksintrf1 proto kernel metric 98
+192.168.55.0/24 dev enp2s0f0 proto kernel metric 100
+195.242.214.210 via 192.168.55.1 dev enp2s0f0 proto static metric 100
+```
+
+`ip rule show`:
+```
+0:      from all lookup local
+30776:  from all lookup main suppress_prefixlength 0
+30777:  not from all fwmark 0xea13b2c lookup 245447468
+32766:  from all lookup main
+32767:  from all lookup default
+```
+
+`ip route show table 245447468`:
+```
+default dev proton0 proto static scope link metric 50
+```
+
+**Kill-switch routing analysis:**
+
+Rule 30777 routes all un-fwmarked traffic to table 245447468 (VPN-only, default
+via `proton0`). Rule 30776 short-circuits this for routes in the main table with
+prefix length > 0. Since `192.168.55.0/24 dev enp2s0f0` (prefix /24) is in the
+main table, outbound packets to 192.168.55.103 (Windows) exit through `enp2s0f0`
+correctly.
+
+`ip route get 192.168.55.103` → `192.168.55.103 dev enp2s0f0 src 192.168.55.107`
+confirms the SYN-ACK routing path is correct.
+
+**Conclusion:** The routing kill switch does NOT block TCP replies to LAN
+addresses. The kill switch only affects traffic destined for non-LAN addresses
+without a VPN fwmark.
+
+### Step 4 — Probable cause: ProtonVPN iptables INPUT rules
+
+`nft list ruleset` → **no rules / nft not installed** — the kill switch is
+implemented via iptables, not nftables.
+
+`sudo iptables` requires interactive sudo — could not run non-interactively.
+ProtonVPN daemon (PID 1029, root) and kill-switch interface `pvpnksintrf1` are
+both active. ProtonVPN's Linux kill switch commonly adds iptables INPUT rules of
+the form:
+
+```
+-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A INPUT -i lo -j ACCEPT
+-A INPUT -j DROP
+```
+
+This would:
+- Allow ICMP echo replies (RELATED/ESTABLISHED to an outbound ping) — but NOT
+  incoming ICMP echo requests initiated from outside. **Yet `PingSucceeded: True`
+  from Windows** — meaning ICMP *requests* arriving from Windows also pass. This
+  suggests the INPUT policy is not a blanket DROP, OR there is an explicit ICMP
+  ACCEPT rule.
+- Drop new incoming TCP connections (`--ctstate NEW`), explaining
+  `TcpTestSucceeded: False` while `PingSucceeded: True`.
+
+**Primary hypothesis: Category B — SYN arrives at enp2s0f0 but is dropped by an
+iptables INPUT rule that allows ICMP but drops new TCP.**
+
+### Step 5 — PENDING: packet capture + iptables read (user action required)
+
+The following commands must be run in an interactive terminal (sudo required).
+Run them in this order:
+
+**Terminal 1 — packet capture (start first):**
+```bash
+sudo tcpdump -ni enp2s0f0 'host 192.168.55.103 and tcp port 43281' -c 20
+```
+
+**Windows — run once after tcpdump is listening:**
+```powershell
+Test-NetConnection 192.168.55.107 -Port 43281
+```
+
+**Terminal 2 — iptables state (read-only, run any time):**
+```bash
+sudo iptables -S INPUT
+sudo iptables -S OUTPUT
+sudo iptables -L INPUT -n -v --line-numbers
+```
+
+**Expected outputs to record:**
+1. Whether `tcpdump` captures a SYN (`Flags [S]`) from `192.168.55.103`:
+   - **SYN visible** → Category B (arrives, dropped locally — check INPUT rules)
+   - **No SYN visible** → Category A (blocked before reaching Linux NIC)
+2. The full `iptables -S INPUT` listing — look for DROP/REJECT rules and
+   conntrack state matches.
+
+**No firewall or VPN configuration changes are to be made until this capture
+confirms the category.**
+
+**Status: PENDING packet capture.** Awaiting user execution of the commands
+above.
