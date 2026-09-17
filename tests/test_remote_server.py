@@ -1,6 +1,7 @@
 """Tests for RemoteSocketServer port contract and PEER_SERVICE_DEFAULT_PORT."""
 
 import unittest
+from typing import Any
 
 
 class PeerServicePortTests(unittest.TestCase):
@@ -20,3 +21,68 @@ class PeerServicePortTests(unittest.TestCase):
     def test_default_port_value(self) -> None:
         from maintenance.remote_support.server import PEER_SERVICE_DEFAULT_PORT
         self.assertEqual(PEER_SERVICE_DEFAULT_PORT, 27321)
+
+
+class RemoteSocketServerPreferredPortTests(unittest.TestCase):
+    def _make_server(self, *, preferred_port: int = 0) -> "Any":
+        from unittest.mock import MagicMock
+
+        from maintenance.remote_support.server import RemoteSocketServer
+        service = MagicMock()
+        return RemoteSocketServer(service, host="127.0.0.1", preferred_port=preferred_port)
+
+    def test_preferred_port_honored_is_none_before_start(self) -> None:
+        server = self._make_server(preferred_port=27321)
+        self.assertIsNone(server.preferred_port_honored)
+
+    def test_server_binds_preferred_port_when_free(self) -> None:
+        import socket
+
+        from maintenance.remote_support.server import PEER_SERVICE_DEFAULT_PORT
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("127.0.0.1", PEER_SERVICE_DEFAULT_PORT))
+            except OSError:
+                self.skipTest(f"port {PEER_SERVICE_DEFAULT_PORT} already in use")
+        server = self._make_server(preferred_port=PEER_SERVICE_DEFAULT_PORT)
+        try:
+            server.start()
+            self.assertEqual(server.bound_port, PEER_SERVICE_DEFAULT_PORT)
+            self.assertTrue(server.preferred_port_honored)
+        finally:
+            server.stop()
+
+    def test_server_falls_back_to_ephemeral_when_preferred_busy(self) -> None:
+        import socket
+        from unittest.mock import MagicMock
+
+        from maintenance.remote_support.server import (
+            PEER_SERVICE_DEFAULT_PORT,
+            RemoteSocketServer,
+        )
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as blocker:
+            blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                blocker.bind(("127.0.0.1", PEER_SERVICE_DEFAULT_PORT))
+                blocker.listen(1)
+            except OSError:
+                self.skipTest("could not acquire port 27321 as blocker")
+            service = MagicMock()
+            server = RemoteSocketServer(service, host="127.0.0.1", preferred_port=PEER_SERVICE_DEFAULT_PORT)
+            try:
+                server.start()
+                self.assertIsNotNone(server.bound_port)
+                self.assertNotEqual(server.bound_port, PEER_SERVICE_DEFAULT_PORT)
+                self.assertFalse(server.preferred_port_honored)
+            finally:
+                server.stop()
+
+    def test_no_preferred_port_uses_ephemeral(self) -> None:
+        server = self._make_server(preferred_port=0)
+        try:
+            server.start()
+            self.assertIsNotNone(server.bound_port)
+            self.assertIsNone(server.preferred_port_honored)
+        finally:
+            server.stop()

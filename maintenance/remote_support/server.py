@@ -48,6 +48,7 @@ class RemoteSocketServer:
         *,
         host: str = "127.0.0.1",
         port: int = 0,
+        preferred_port: int = 0,
         timeout: float = 10.0,
         max_active_handlers: int = DEFAULT_MAX_ACTIVE_HANDLERS,
         ssl_context: ssl.SSLContext | None = None,
@@ -62,6 +63,7 @@ class RemoteSocketServer:
         self._service = service
         self._host = host
         self._port = port
+        self._preferred_port = preferred_port
         self._timeout = timeout
         self._max_active_handlers = max_active_handlers
         self._ssl_context = ssl_context
@@ -73,12 +75,18 @@ class RemoteSocketServer:
         self._server: Any = None
         self._thread: Any = None
         self._admission: threading.BoundedSemaphore | None = None
+        self._preferred_port_honored: bool | None = None
 
     @property
     def bound_port(self) -> int | None:
         if self._server is None:
             return None
         return int(self._server.server_address[1])
+
+    @property
+    def preferred_port_honored(self) -> bool | None:
+        """True if preferred_port was used; False if ephemeral fallback; None if not started or no preference."""
+        return self._preferred_port_honored
 
     def start(self) -> None:
         if self._server is not None:
@@ -172,17 +180,35 @@ class RemoteSocketServer:
 
         admission = threading.BoundedSemaphore(self._max_active_handlers)
         self._admission = admission
-        server = _Server(
-            (self._host, self._port),
-            make_handler(self._service, admission),
+        _handler = make_handler(self._service, admission)
+        _port_candidates = (
+            [self._preferred_port, self._port]
+            if self._preferred_port > 0
+            else [self._port]
         )
+        _server_instance: Any = None
+        for _candidate in _port_candidates:
+            try:
+                _server_instance = _Server((self._host, _candidate), _handler)
+                if self._preferred_port > 0:
+                    self._preferred_port_honored = (_candidate == self._preferred_port)
+                break
+            except OSError:
+                if _candidate == self._port or self._preferred_port == 0:
+                    raise
+                LOGGER.warning(
+                    "Preferred peer port %d unavailable; falling back to ephemeral",
+                    self._preferred_port,
+                )
+        if _server_instance is None:
+            raise OSError("Could not bind peer listener on any port")
         # A provider may not honour cooperative cancellation. Daemon handlers
         # and non-blocking close keep application shutdown bounded; idle and
         # malformed clients remain bounded by the socket timeout.
-        server.daemon_threads = True
-        server.block_on_close = False
-        self._server = server
-        self._thread = threading.Thread(target=server.serve_forever, daemon=True)
+        _server_instance.daemon_threads = True
+        _server_instance.block_on_close = False
+        self._server = _server_instance
+        self._thread = threading.Thread(target=_server_instance.serve_forever, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
