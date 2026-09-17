@@ -614,3 +614,84 @@ Not claiming pairing is fixed on 1.6.1.0; the clean repro simply hasn't caught t
 same failure yet. Next step, pending user direction: extend the observation window
 and/or check whether the ghost peer reappears with more elapsed time, rather than
 prematurely marking either PASS or FAIL.
+
+---
+
+## PHASE 12F — Controlled two-node discovery/listener validation (2026-09-17, both nodes 1.6.1.0)
+
+**Purpose:** replace speculative single-node evidence with a controlled two-node
+baseline.  Evidence boundary: prove each stage in order (single process per node →
+known NodeIds → actual listeners → direct TCP → mDNS discovery → identity match →
+TLS → Pair → authenticated hello) before diagnosing the next.
+
+### NODE A identity (Linux — m75-node1)
+
+| Field | Value |
+|---|---|
+| Hostname | `m75-node1` |
+| App version | `1.6.1.0` |
+| local_node_id | `node-ff37fa18b5d28f2343ab617f8773f51b` |
+| cluster_id | `local-cluster` |
+| LAN IPv4 | `192.168.55.107` (interface `enp2s0f0`) |
+| VPN adapters present | `pvpnksintrf1` at `100.85.0.1/24` (ProtonVPN, **default route**); `proton0` at `10.2.0.2` |
+| discovery_enabled | `True` |
+| Listener port | PENDING — app not running at time of this record |
+| mDNS advertised addresses | PENDING — includes all non-loopback IPs per `_local_service_addresses()`, therefore will include VPN IPs |
+
+**NOTE on the ghost peer:** The previously-seen Windows ghost peer `node-f...73f51b`
+matches Linux `local_node_id` `node-ff37fa18b5d28f2343ab617f8773f51b` — the suffix
+`f8773f51b`, displayed in the Windows UI truncated as `f...73f51b`, is an exact
+suffix match.  The ghost peer **is the Linux machine (m75-node1)**, not a
+stale/phantom process.  This explains why it survived across a wheel upgrade: it
+was a genuinely separate LAN device, discovered over mDNS while system-analyzer was
+running on Linux during those Windows test sessions.
+
+**NOTE on VPN and mDNS addresses:** `_local_service_addresses()` in
+`maintenance/components/network_discovery.py` calls `zeroconf.get_all_addresses()`
+and includes every non-loopback IPv4/IPv6 address.  With ProtonVPN active on the
+Linux node, the advertised address list will include both `192.168.55.107` (reachable
+from Windows) and `100.85.0.1` / `10.2.0.2` (VPN IPs, not reachable from Windows).
+If the Windows side resolves the mDNS advertisement and picks a VPN address first
+(i.e. `candidate.addresses[0]`), TCP connection will fail even though the LAN path
+is intact.  This is a candidate explanation for finding #3 (listener port mismatch)
+and finding #4 (pairing failure) — **not yet confirmed as root cause**.
+
+### NODE W identity (Windows — DESKTOP-0C2C5H3)
+
+| Field | Value |
+|---|---|
+| Hostname | `DESKTOP-0C2C5H3` |
+| App version | `1.6.1.0` |
+| local_node_id | `node-b31a0913e76db7c60cb7c6ec82313660` |
+| LAN IPv4 | `192.168.55.103` |
+| discovery_enabled | `True` (observed — discovery runs at startup) |
+| Listener port | PENDING — see Phase 12F controlled experiment |
+| mDNS service type | `_system-analyzer._tcp.local.` (confirmed from source) |
+
+### Phase 12F controlled experiment — PENDING
+
+The following checkpoints are established (in order, per spec):
+
+| Step | Status | Evidence |
+|---|---|---|
+| Single process — NODE A | PENDING — system-analyzer not running at record time | — |
+| Single process — NODE W | PENDING | — |
+| Listener port — NODE A | PENDING | — |
+| Listener port — NODE W | PENDING | — |
+| Advertised port == actual port — NODE A | PENDING | — |
+| Advertised port == actual port — NODE W | PENDING | — |
+| Direct TCP: Linux → Windows listener | PENDING | — |
+| Direct TCP: Windows → Linux listener | PENDING | — |
+| mDNS: NODE A sees NODE W | PENDING | — |
+| mDNS: NODE W sees NODE A | PENDING | — |
+| Discovered NodeId matches expected — both directions | PENDING | — |
+| "This System" mislabel for remote node absent | PENDING | — |
+| Controlled Pair | PENDING — do not attempt before discovery is confirmed | — |
+| Authenticated hello | PENDING | — |
+
+**VPN pre-check required before experiment:**
+Before starting the app on Linux, verify that mDNS will use the correct interface.
+If ProtonVPN's default route causes zeroconf to bind only to VPN interfaces,
+discovery may fail even though LAN TCP works.  Check by listing UDP 5353 bindings
+after app startup (`ss -ulnp | grep 5353`) and confirming `192.168.55.107` is
+among the bound addresses.
