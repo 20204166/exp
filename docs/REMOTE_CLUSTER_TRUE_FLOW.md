@@ -2558,3 +2558,45 @@ The following require physical Windows hardware to verify:
 - Packaged executable (non-source) TLS generation
 - Address selection when multiple Windows adapters present (Wi-Fi, WSL, Hyper-V, VPN)
 - IPv4/IPv6 endpoint advertisement consistency
+
+### Phase 12B — Physical Windows Validation Guide
+
+Physical test steps, exact PowerShell commands, and runbook update procedure
+documented at: `docs/WINDOWS_VALIDATION_GUIDE_2026-09-17.md`
+
+### Additional Code Audit Findings (no code changes required)
+
+**Transport layer (VERIFIED CROSS-PLATFORM):** `SocketRemoteTransport` catches
+`OSError` (parent of all Windows `WinError` socket exceptions) and wraps as
+`RemoteTransportError`. No platform-specific code needed.
+
+**WinError mapping:** `WinError 10013/10054/10060/10061` all surface as `OSError`
+in Python; the transport correctly converts them to `RemoteTransportError → OFFLINE`
+status. They never surface as `AUTHENTICATION_FAILED` unless a real authenticated
+exchange returns a credential rejection.
+
+**Server `allow_reuse_address`:** `ThreadingTCPServer.allow_reuse_address = True`
+has different security semantics on Windows (`SO_REUSEADDR` allows port sharing
+between processes). However, since the server binds to `port=0` (OS-assigned), no
+known port is exploitable. Not changed.
+
+**mDNS address selection (potential Windows issue, NOT REPRODUCED):**
+`_local_service_addresses()` calls `zeroconf.get_all_addresses()` which returns
+ALL non-loopback IPv4 addresses. On Windows with WSL2/Hyper-V active, this may
+include virtual adapter addresses (e.g., `172.x.x.x`). The connecting peer uses
+`candidate.addresses[0]` (first address). If that is unreachable, connection fails
+until endpoint updates. Physical reproduction needed before fix.
+
+**Dead catch clause (harmless):** `window_discovery.py:156` still catches
+`subprocess.SubprocessError` — a dead branch since Phase 12A removed subprocess
+from `ensure_tls_material`. Not removed: correct behavior is unchanged.
+
+**`socket.inet_pton` on Windows:** Available since Python 3.4; requires Python 3.10+;
+scoped IPv6 addresses (`fe80::1%eth0`) raise `ValueError` → caught and skipped.
+No issue.
+
+**`os.O_DIRECTORY` in `fsync_directory`:** Already guarded with
+`if not hasattr(os, "O_DIRECTORY"): return` — correctly a no-op on Windows.
+
+**Atomic persistence:** `os.replace()` wraps `MoveFileEx(MOVEFILE_REPLACE_EXISTING)`
+on Windows — atomic. No issue.
