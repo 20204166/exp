@@ -286,6 +286,22 @@ system-analyzer-snapshot
 system-analyzer-snapshot --compact
 ```
 
+### Developer diagnostics and observability
+
+The developer diagnostics page is enabled explicitly through the environment;
+there is no `--dev` command-line flag or password prompt:
+
+```sh
+SYSTEM_ANALYZER_DEVELOPER_MODE=1 system-analyzer
+# or, from the source tree
+SYSTEM_ANALYZER_DEVELOPER_MODE=1 python main.py
+```
+
+Open **Settings -> Diagnostics** to view live component, operation, node,
+rendering, cluster, and observability metrics. Use **Save performance capture**
+to write a bounded JSON capture under
+`docs/performance/observability/observability-<timestamp>.json`.
+
 ## Linux desktop launcher
 
 An optional menu entry can be installed for the current user (it uses the
