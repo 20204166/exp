@@ -2,14 +2,16 @@ from tests.support.scanner import make_scanner
 
 """Focused tests for per-user logging setup and error-path diagnostics."""
 
+import io
 import logging
 import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import main
+from maintenance._version import __version__
 
 
 class LoggingSetupTests(unittest.TestCase):
@@ -90,16 +92,16 @@ class EntryPointArgParsingTests(unittest.TestCase):
     Previously every flag (--help, --version, or any unknown flag) silently
     launched the full GUI window and hung forever.  argparse must intercept
     argv before any GUI or logging setup is reached.
+
+    Parser-isolation layer: tests _build_arg_parser() directly.
     """
 
-    def test_help_flag_exits_zero_without_launching_gui(self) -> None:
+    def test_help_flag_exits_zero(self) -> None:
         with self.assertRaises(SystemExit) as cm:
             main._build_arg_parser().parse_args(["--help"])
         self.assertEqual(cm.exception.code, 0)
 
-    def test_version_flag_exits_zero_and_prints_version(self) -> None:
-        import io
-
+    def test_version_flag_exits_zero_and_emits_canonical_version(self) -> None:
         buf = io.StringIO()
         with (
             self.assertRaises(SystemExit) as cm,
@@ -108,16 +110,74 @@ class EntryPointArgParsingTests(unittest.TestCase):
             main._build_arg_parser().parse_args(["--version"])
         self.assertEqual(cm.exception.code, 0)
         self.assertIn("system-analyzer", buf.getvalue())
+        self.assertIn(__version__, buf.getvalue())
 
-    def test_unknown_flag_exits_nonzero_without_launching_gui(self) -> None:
+    def test_unknown_flag_exits_nonzero(self) -> None:
         with self.assertRaises(SystemExit) as cm:
             main._build_arg_parser().parse_args(["--totally-bogus-flag-xyz"])
         self.assertNotEqual(cm.exception.code, 0)
 
     def test_no_flags_returns_namespace_without_exiting(self) -> None:
-        # parse_args([]) must return normally — no SystemExit, no GUI.
         ns = main._build_arg_parser().parse_args([])
         self.assertIsNotNone(ns)
+
+
+class EntryPointEndToEndTests(unittest.TestCase):
+    """End-to-end tests invoking main.main() with mocked GUI bootstrap.
+
+    These prove that argparse fires BEFORE AppWindow is constructed, so
+    --help / --version / unknown options can never start the GUI, the listener,
+    or discovery — regardless of future refactoring inside main().
+    """
+
+    def _run_main(self, argv: list[str]) -> None:
+        with patch("sys.argv", ["system-analyzer"] + argv):
+            main.main()
+
+    def test_help_exits_zero_and_never_constructs_app_window(self) -> None:
+        with (
+            patch("main.AppWindow") as mock_app,
+            patch("main.setup_logging", return_value=None),
+            self.assertRaises(SystemExit) as cm,
+        ):
+            self._run_main(["--help"])
+        self.assertEqual(cm.exception.code, 0)
+        mock_app.assert_not_called()
+
+    def test_version_exits_zero_and_never_constructs_app_window(self) -> None:
+        buf = io.StringIO()
+        with (
+            patch("main.AppWindow") as mock_app,
+            patch("main.setup_logging", return_value=None),
+            patch("sys.stdout", buf),
+            self.assertRaises(SystemExit) as cm,
+        ):
+            self._run_main(["--version"])
+        self.assertEqual(cm.exception.code, 0)
+        self.assertIn(__version__, buf.getvalue())
+        mock_app.assert_not_called()
+
+    def test_unknown_option_exits_nonzero_and_never_constructs_app_window(
+        self,
+    ) -> None:
+        with (
+            patch("main.AppWindow") as mock_app,
+            patch("main.setup_logging", return_value=None),
+            self.assertRaises(SystemExit) as cm,
+        ):
+            self._run_main(["--totally-bogus-flag-xyz"])
+        self.assertNotEqual(cm.exception.code, 0)
+        mock_app.assert_not_called()
+
+    def test_no_args_constructs_app_window_exactly_once_and_calls_run(self) -> None:
+        mock_instance = MagicMock()
+        with (
+            patch("main.AppWindow", return_value=mock_instance) as mock_app,
+            patch("main.setup_logging", return_value=None),
+        ):
+            self._run_main([])
+        mock_app.assert_called_once_with()
+        mock_instance.run.assert_called_once_with()
 
 
 if __name__ == "__main__":

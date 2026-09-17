@@ -250,3 +250,42 @@ Linux-runnable regression test (invoke the console-script entry point with
 `--help`/`--version` and assert it prints and exits — no Windows-specific
 behavior involved). Recommend starting there, since it's also what's polluting the
 network-discovery state behind #2/#4/#5.
+
+---
+
+## Finding #1 — Repair log
+
+**PHYSICAL INITIAL (wheel 1.6.0.5):** FAIL — `--help`/`--version`/any flag launched full GUI and never exited.
+
+**Root cause:** `main.main()` called `AppWindow()` unconditionally; `sys.argv` was never inspected.
+
+**Fix (commit 38e52c9 / wheel 1.6.0.7):**
+`main._build_arg_parser()` returns an `argparse.ArgumentParser` with `--version` wired to `action="version"`.
+`main.main()` calls `_build_arg_parser().parse_args()` as its first statement — before `setup_logging()`, before `AppWindow()`, before any network/state bootstrap.
+
+**Linux regression tests added (`tests/test_logging_setup.py`):**
+- `EntryPointArgParsingTests` — parser in isolation: exit codes, version string contains `__version__`
+- `EntryPointEndToEndTests` — `main.main()` with `AppWindow` mocked: asserts not-called for help/version/unknown; called-once for no-args
+
+**Linux clean-venv smoke test (wheel 1.6.0.7):**
+
+| Command | Output | Exit |
+|---|---|---|
+| `system-analyzer --help` | usage text | 0 |
+| `system-analyzer --version` | `system-analyzer 1.6.0.7` | 0 |
+| `system-analyzer --totally-bogus-flag-xyz` | `error: unrecognized arguments: ...` | 2 |
+
+**Wheel:** `system_analyzer-1.6.0.7-py3-none-any.whl`
+**SHA-256:** `b54ccb0f50b8ff0c70c8adb1986a37ba24b4cbbe250405ee6bd09ad0c5d438f5`
+
+**Windows retest:** NOT VERIFIED — install 1.6.0.7 on Windows and run the three commands above.
+
+---
+
+## Finding #2 — Pending
+
+Single-instance guard absent.  Still independently reproducible (not caused by #1 alone — two normal no-arg GUI launches can coexist).
+
+**Status:** PENDING — retest finding #2 after confirming finding #1 PASS on Windows.
+
+If two no-arg GUI instances still share the same node identity after the #1 fix, finding #2 is the next repair boundary.  Do not proceed to pairing/mDNS investigation while two processes can impersonate the same node.
