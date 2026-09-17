@@ -145,3 +145,12 @@ else
   fi
 fi
 echo "Verify: system-analyzer-snapshot --help"
+if [ "$(uname)" = "Linux" ]; then
+  echo ""
+  echo "Firewall note: to allow inbound LAN peer connections on this machine, run:"
+  echo "  sudo cp \"$here/packaging/system-analyzer\" /etc/ufw/applications.d/"
+  echo "  sudo ufw app update 'System Analyzer'"
+  echo "  sudo ufw allow 'System Analyzer'"
+  echo "This opens TCP port 27321 only."
+  echo "To remove: sudo ufw delete allow 'System Analyzer'"
+fi
