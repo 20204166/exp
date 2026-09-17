@@ -624,37 +624,168 @@ baseline.  Evidence boundary: prove each stage in order (single process per node
 known NodeIds → actual listeners → direct TCP → mDNS discovery → identity match →
 TLS → Pair → authenticated hello) before diagnosing the next.
 
-### NODE A identity (Linux — m75-node1)
+---
+
+### PHASE 12F-L — Linux identity resolution (2026-09-17)
+
+**Context:** Windows's first controlled observation found NodeId
+`node-983364764039f9e6625e687273710909`, not the previously-recorded
+`node-ff37fa18b5d28f2343ab617f8773f51b`, with TLS fingerprint
+`1a7b:7cc8:e529:c7f7:2e92:4ce7:51d8:ce0f:54bf:b526:30ca:5fe0:263d:cd5a:c340:adc7`.
+This pass resolves the discrepancy before permitting another Pair.
+
+#### LINUX RUNTIME
+
+| Field | Value |
+|---|---|
+| Version | `1.6.1.0` |
+| PID | `3220` |
+| Command | `/home/btn17/Downloads/exp/.venv/bin/python /home/btn17/.local/bin/system-analyzer` |
+| Start time | `2026-09-17 15:49:58` |
+| Resolved state root | `/home/btn17/.config/system-analyzer/` |
+| `cluster.json` `local_node_id` | `node-983364764039f9e6625e687273710909` |
+| `cluster_id` | `local-cluster` |
+| Actual listener bind | `0.0.0.0:43281` |
+| Actual listener port | **43281** |
+
+Only one System Analyzer process on Linux; no second runtime, no second profile
+directory.
+
+#### LINUX TLS
+
+| Field | Value |
+|---|---|
+| Certificate path | `/home/btn17/.config/system-analyzer/peer-tls.crt` |
+| Cert created | `2026-09-10 15:30` (unchanged since creation) |
+| Canonical TLS fingerprint (SHA-256/DER) | `1a7b:7cc8:e529:c7f7:2e92:4ce7:51d8:ce0f:54bf:b526:30ca:5fe0:263d:cd5a:c340:adc7` |
+| Matches Windows-observed fingerprint | **YES — exact match** |
+
+#### LINUX DISCOVERY
+
+| Field | Value |
+|---|---|
+| Zeroconf-visible addresses | `['100.85.0.1', '192.168.55.107', '10.2.0.2', '127.0.0.1']` |
+| UDP 5353 bindings (PID 3220) | `192.168.55.107:5353`, `10.2.0.2:5353`, `127.0.0.1:5353`, `100.85.0.1:5353` (4 IPv4 bindings); plus `*`, `::`, `[::1]`, link-locals on IPv6 |
+| Advertised service instance | `node-983364764039f9e6625e687273710909._system-analyzer._tcp.local.` |
+| Advertised `id` (NodeId) | `node-983364764039f9e6625e687273710909` |
+| Advertised hostname | `m75-node1.local.` |
+| Advertised port | **43281** |
+| Advertised addresses | `10.2.0.2` (VPN — listed **first**), `100.85.0.1` (VPN), `192.168.55.107` (LAN — listed **third**) |
+| Advertised `tls_fingerprint` | `1a7b:7cc8:e529:c7f7:2e92:4ce7:51d8:ce0f:54bf:b526:30ca:5fe0:263d:cd5a:c340:adc7` |
+| Advertised `connectable` | `true` |
+
+**VPN address ordering confirmed:** `10.2.0.2` (unreachable from Windows) is first
+in the address list.  `window_discovery.py:1234` selects `candidate.addresses[0]`
+when building the connection endpoint for a trusted-node endpoint sync — if Windows
+picks the first address for the pair attempt, the connection would target an
+unreachable VPN IP.  That said, the Windows pair attempt returned the structured
+"Target did not provision the peer grant" response (not a connection error), which
+implies the TCP connection did succeed — possibly because Windows tried multiple
+addresses or the address ordering was different on the Windows resolver side.  The
+`addresses[0]` selection is a confirmed code path, confirmed to pick a VPN address
+first here, and is recorded as a separate finding candidate for the next pass.
+
+#### PROFILE AUDIT
+
+Only one System Analyzer profile directory exists:
+`/home/btn17/.config/system-analyzer/`
+
+`node-ff37fa18b5d28f2343ab617f8773f51b` — found only in log history:
+`/home/btn17/.local/state/system-analyzer/system-analyzer.log`
+(last appearance: `2026-09-17 14:50:34`).  Not present in any cluster.json or TLS
+file.
+
+`node-983364764039f9e6625e687273710909` — appears in current cluster.json and in
+log history from `2026-09-17 15:01:48` onward.
+
+#### IDENTITY CHANGE ROOT CAUSE
+
+At `2026-09-17 15:01:45`:
+```
+WARNING maintenance.cluster: Unsupported cluster settings schema; using defaults
+```
+
+`ClusterStore._parse()` (`cluster.py:922-925`) rejects any `schema_version` not in
+`(1, 2)`.  When it rejects, it returns `ClusterState()` — the no-arg default —
+which has `local_node_id: str = "local"` (`cluster.py:661`).  The outer `load()`
+then detects `local_node_id == "local"` (`cluster.py:850`) and calls
+`generate_stable_node_id()`, producing `node-983364...`.  The TLS cert is generated
+by a separate code path (`ensure_tls_material()`) and was NOT regenerated.
+
+**The old cluster.json had a `schema_version` outside `(1, 2)` — most likely from
+an experimental/newer source build.  When this version was loaded by the current
+code, it silently discarded the `local_node_id` and generated a new one.**
+
+This is an identity-persistence bug: `ClusterStore.load()` should preserve
+`local_node_id` even when `schema_version` is unsupported.  The node's network
+identity should not be tied to schema migration success.  This is noted for future
+repair; per Phase 12F-L instructions, no production code is changed here.
+
+#### CONSISTENCY CHECK
+
+| Comparison | Result |
+|---|---|
+| `cluster.json NodeId` == `mDNS advertised NodeId` | **MATCH** — both `node-983364764039f9e6625e687273710909` |
+| `mDNS advertised NodeId` == `Windows-discovered NodeId` | **MATCH** |
+| `cluster.json NodeId` == `Windows-discovered NodeId` | **MATCH** |
+| Actual Linux listener port == mDNS advertised port | **MATCH** — both `43281` |
+| mDNS advertised port == Windows-discovered port | **MATCH** — both `43281` |
+| Linux TLS fingerprint == mDNS advertised `tls_fingerprint` | **MATCH** |
+| Linux TLS fingerprint == Windows-observed TLS fingerprint | **MATCH** |
+
+All four identity sources (cluster.json, runtime log, mDNS advertisement,
+Windows discovery) are coherent on `node-983364764039f9e6625e687273710909`.
+
+#### CONCLUSION
+
+**Windows-discovered peer IS the current m75-node1 Linux runtime — VERIFIED.**
+
+The earlier `node-ff37...` record was stale: the cluster.json was regenerated today
+at 15:01:45 due to an unsupported schema version.  The TLS cert survived
+unchanged across that event (it is the stable cross-session identity anchor).
+
+**Earlier Phase 12F doc note corrected:** the ghost-peer identification based on
+NodeId suffix truncation (`f...73f51b` ≈ `f8773f51b`) was circumstantially correct
+in attributing the peer to the Linux machine, but the specific NodeId it cited
+(`node-ff37...`) was from an already-superseded cluster state.  The current
+authoritative Linux NodeId is `node-983364764039f9e6625e687273710909`.
+
+#### FIRST BROKEN BOUNDARY
+
+No broken boundary at the identity/TLS/port layer — all consistent.  Two
+unresolved items carried forward:
+
+1. **VPN address ordering**: `addresses[0]` picks `10.2.0.2` (VPN, unreachable from
+   Windows) before `192.168.55.107` (LAN).  Whether this caused the pair failure
+   is unconfirmed — the "Target did not provision the peer grant" response suggests
+   TCP succeeded, but address-selection behaviour on the Windows resolver side is
+   not yet proven.
+
+2. **Pair failure root cause**: the pair was attempted before this identity pass
+   completed; the Linux approval dialog may have timed out (user was on Windows side,
+   not watching the Linux screen).  A new controlled pair — with a user watching
+   both screens simultaneously — is required to distinguish a human-timeout from a
+   production defect.
+
+**Production code changed: NO.**
+
+---
+
+### NODE A identity (Linux — m75-node1) — CORRECTED post Phase 12F-L
 
 | Field | Value |
 |---|---|
 | Hostname | `m75-node1` |
 | App version | `1.6.1.0` |
-| local_node_id | `node-ff37fa18b5d28f2343ab617f8773f51b` |
+| **local_node_id (current)** | **`node-983364764039f9e6625e687273710909`** |
+| local_node_id (historical, superseded) | `node-ff37fa18b5d28f2343ab617f8773f51b` (last seen 14:50:34, replaced by schema-fallback at 15:01:45) |
 | cluster_id | `local-cluster` |
 | LAN IPv4 | `192.168.55.107` (interface `enp2s0f0`) |
 | VPN adapters present | `pvpnksintrf1` at `100.85.0.1/24` (ProtonVPN, **default route**); `proton0` at `10.2.0.2` |
 | discovery_enabled | `True` |
-| Listener port | PENDING — app not running at time of this record |
-| mDNS advertised addresses | PENDING — includes all non-loopback IPs per `_local_service_addresses()`, therefore will include VPN IPs |
-
-**NOTE on the ghost peer:** The previously-seen Windows ghost peer `node-f...73f51b`
-matches Linux `local_node_id` `node-ff37fa18b5d28f2343ab617f8773f51b` — the suffix
-`f8773f51b`, displayed in the Windows UI truncated as `f...73f51b`, is an exact
-suffix match.  The ghost peer **is the Linux machine (m75-node1)**, not a
-stale/phantom process.  This explains why it survived across a wheel upgrade: it
-was a genuinely separate LAN device, discovered over mDNS while system-analyzer was
-running on Linux during those Windows test sessions.
-
-**NOTE on VPN and mDNS addresses:** `_local_service_addresses()` in
-`maintenance/components/network_discovery.py` calls `zeroconf.get_all_addresses()`
-and includes every non-loopback IPv4/IPv6 address.  With ProtonVPN active on the
-Linux node, the advertised address list will include both `192.168.55.107` (reachable
-from Windows) and `100.85.0.1` / `10.2.0.2` (VPN IPs, not reachable from Windows).
-If the Windows side resolves the mDNS advertisement and picks a VPN address first
-(i.e. `candidate.addresses[0]`), TCP connection will fail even though the LAN path
-is intact.  This is a candidate explanation for finding #3 (listener port mismatch)
-and finding #4 (pairing failure) — **not yet confirmed as root cause**.
+| Listener port | **43281** (OS-confirmed, PID 3220) |
+| mDNS advertised addresses | `10.2.0.2` (VPN, first), `100.85.0.1` (VPN, second), `192.168.55.107` (LAN, third) |
+| TLS fingerprint | `1a7b:7cc8:e529:c7f7:2e92:4ce7:51d8:ce0f:54bf:b526:30ca:5fe0:263d:cd5a:c340:adc7` |
 
 ### NODE W identity (Windows — DESKTOP-0C2C5H3)
 
@@ -664,37 +795,29 @@ and finding #4 (pairing failure) — **not yet confirmed as root cause**.
 | App version | `1.6.1.0` |
 | local_node_id | `node-b31a0913e76db7c60cb7c6ec82313660` |
 | LAN IPv4 | `192.168.55.103` |
-| discovery_enabled | `True` (observed — discovery runs at startup) |
-| Listener port | PENDING — see Phase 12F controlled experiment |
-| mDNS service type | `_system-analyzer._tcp.local.` (confirmed from source) |
+| Listener port | `0.0.0.0:50778` (OS-confirmed) |
+| discovery_enabled | `True` |
+| mDNS service type | `_system-analyzer._tcp.local.` |
 
-### Phase 12F controlled experiment — PENDING
-
-The following checkpoints are established (in order, per spec):
+### Phase 12F controlled experiment — IN PROGRESS
 
 | Step | Status | Evidence |
 |---|---|---|
-| Single process — NODE A | PENDING — system-analyzer not running at record time | — |
-| Single process — NODE W | PENDING | — |
-| Listener port — NODE A | PENDING | — |
-| Listener port — NODE W | PENDING | — |
-| Advertised port == actual port — NODE A | PENDING | — |
+| Single process — NODE A | **CONFIRMED** — PID 3220 only | `ps aux`, `ss -tlnp` |
+| Single process — NODE W | **CONFIRMED** | Windows process check |
+| Listener port — NODE A | **CONFIRMED** `43281` | `ss -tlnp` PID 3220 |
+| Listener port — NODE W | **CONFIRMED** `50778` | Windows `Get-NetTCPConnection` |
+| Advertised port == actual port — NODE A | **CONFIRMED** `43281` == `43281` | mDNS browse + `ss` |
 | Advertised port == actual port — NODE W | PENDING | — |
 | Direct TCP: Linux → Windows listener | PENDING | — |
 | Direct TCP: Windows → Linux listener | PENDING | — |
+| mDNS: NODE W sees NODE A | **CONFIRMED** — `node-983364...` seen on Windows | Windows Nodes & Connections |
 | mDNS: NODE A sees NODE W | PENDING | — |
-| mDNS: NODE W sees NODE A | PENDING | — |
-| Discovered NodeId matches expected — both directions | PENDING | — |
-| "This System" mislabel for remote node absent | PENDING | — |
-| Controlled Pair | PENDING — do not attempt before discovery is confirmed | — |
+| Discovered NodeId matches expected — Windows sees Linux | **CONFIRMED** | `node-983364...` == cluster.json |
+| Discovered NodeId matches expected — Linux sees Windows | PENDING | — |
+| "This System" mislabel for remote node absent | PENDING — reclassify after next observation | — |
+| Controlled Pair — both screens attended | PENDING — requires user watching both screens | — |
 | Authenticated hello | PENDING | — |
-
-**VPN pre-check required before experiment:**
-Before starting the app on Linux, verify that mDNS will use the correct interface.
-If ProtonVPN's default route causes zeroconf to bind only to VPN interfaces,
-discovery may fail even though LAN TCP works.  Check by listing UDP 5353 bindings
-after app startup (`ss -ulnp | grep 5353`) and confirming `192.168.55.107` is
-among the bound addresses.
 
 ---
 
