@@ -1,8 +1,7 @@
 """TLS material and pinned peer transport tests."""
 
 import json
-import os
-import subprocess
+import ssl
 import tempfile
 import threading
 import time
@@ -26,7 +25,11 @@ from maintenance.remote import (
     RemoteSocketServer,
     TLSRemoteTransport,
 )
-from maintenance.remote_security import ensure_tls_material, server_context
+from maintenance.remote_security import (
+    certificate_fingerprint,
+    ensure_tls_material,
+    server_context,
+)
 from maintenance.remote_support.protocol import (
     PairingControlRequest,
     RemoteProtocolError,
@@ -697,22 +700,53 @@ class RemoteSecurityTests(unittest.TestCase):
         )
         self.assertNotEqual(request.current_secret, request.proposed_secret)
 
-    def test_tls_generation_forwards_no_window_creation_flag(self) -> None:
-        observed: dict[str, object] = {}
-        real_run = subprocess.run
-
-        def capture_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-            observed.update(kwargs)
-            return real_run(*args, **kwargs)
-
+    def test_generation_does_not_require_openssl_on_path(self) -> None:
         with (
             tempfile.TemporaryDirectory() as directory,
-            patch("maintenance.remote_security.subprocess.run", capture_run),
+            patch(
+                "subprocess.run",
+                side_effect=FileNotFoundError("openssl not found"),
+            ),
         ):
-            ensure_tls_material(Path(directory), "peer")
+            material = ensure_tls_material(Path(directory), "peer")
+            self.assertIsNotNone(material.fingerprint)
+            self.assertTrue(material.certificate.exists())
+            self.assertTrue(material.private_key.exists())
 
-        expected = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
-        self.assertEqual(observed.get("creationflags"), expected)
+    def test_generated_certificate_is_valid_pem_loadable_by_ssl(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            material = ensure_tls_material(Path(directory), "peer")
+            pem_text = material.certificate.read_text(encoding="ascii")
+            der = ssl.PEM_cert_to_DER_cert(pem_text)
+            self.assertGreater(len(der), 0)
+
+    def test_fingerprint_computed_from_der_bytes_not_pem_text_encoding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            material = ensure_tls_material(Path(directory), "peer")
+            pem_text = material.certificate.read_text(encoding="ascii")
+            pem_crlf = pem_text.replace("\n", "\r\n")
+            der_from_crlf = ssl.PEM_cert_to_DER_cert(pem_crlf)
+            recomputed = certificate_fingerprint(der_from_crlf)
+            self.assertEqual(recomputed, material.fingerprint)
+
+    def test_partial_state_missing_key_triggers_regeneration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            ensure_tls_material(path, "peer")
+            (path / "peer-tls.key").unlink()
+            second = ensure_tls_material(path, "peer")
+            self.assertIsNotNone(second.fingerprint)
+            self.assertTrue(second.private_key.exists())
+            self.assertTrue(second.certificate.exists())
+
+    def test_partial_state_missing_cert_triggers_regeneration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            ensure_tls_material(path, "peer")
+            (path / "peer-tls.crt").unlink()
+            second = ensure_tls_material(path, "peer")
+            self.assertIsNotNone(second.fingerprint)
+            self.assertTrue(second.certificate.exists())
 
     def test_material_is_reused_with_stable_fingerprint_and_private_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

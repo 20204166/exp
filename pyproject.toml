@@ -14,6 +14,7 @@ dependencies = [
     "send2trash>=1.8",
     'nvidia-ml-py>=12.0; platform_system != "Darwin"',
     "zeroconf>=0.131",
+    "cryptography>=3.0",
 ]
 
 [project.optional-dependencies]

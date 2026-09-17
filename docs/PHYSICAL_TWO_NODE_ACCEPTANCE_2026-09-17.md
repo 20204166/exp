@@ -266,6 +266,26 @@ When a scenario does not PASS, classify the failure using one of:
 | **Evidence** | Terminal output (truncate after service name and port; no secrets present). |
 | **Result** | |
 
+---
+
+> **Phase 12A Windows Defect Note (2026-09-17, pre-fix commit):**
+> SC-06 through SC-55 were blocked on Windows by a failure at Boundary B
+> (TLS credential generation). `ensure_tls_material` called
+> `subprocess.run(["openssl", ...], check=True, stderr=DEVNULL)`. On Windows,
+> `openssl.exe` is not on PATH, raising a silent `FileNotFoundError` before
+> the TLS server could start. Fixed in Phase 12A by replacing subprocess with
+> the `cryptography` Python library. Existing Linux/macOS certs are unaffected.
+> Windows physical validation is pending real hardware. Update this table after
+> the Windows run.
+>
+> | Scenario | Pre-fix (Windows) | Post-fix (Windows physical) |
+> |---|---|---|
+> | SC-06 Pairing | FAIL (Boundary B) | NOT VERIFIED — run needed |
+> | SC-17 Join | FAIL (depends on SC-06) | NOT VERIFIED |
+> | SC-43 Failover | NOT VERIFIED | NOT VERIFIED |
+
+---
+
 ### SC-06 — Real Pairing: NODE A Initiates, NODE B Accepts
 
 | Field | Content |
