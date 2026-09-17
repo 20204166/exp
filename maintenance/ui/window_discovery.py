@@ -42,6 +42,7 @@ from maintenance.remote import (
 )
 from maintenance.remote_security import ensure_tls_material, server_context
 from maintenance.remote_support.protocol import PairingControlRequest
+from maintenance.remote_support.server import PEER_SERVICE_DEFAULT_PORT
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui.window_supports.timer_delivery import deadline_delay_ms
@@ -160,6 +161,7 @@ def start_peer_listener(controller: Any) -> None:
         service,
         host="0.0.0.0",
         ssl_context=tls_context,
+        preferred_port=PEER_SERVICE_DEFAULT_PORT,
         pairing_handler=lambda request: handle_pairing_request(controller, request),
         pair_confirm_handler=lambda request: handle_pairing_confirm(
             controller, request

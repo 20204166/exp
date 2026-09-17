@@ -86,3 +86,15 @@ class RemoteSocketServerPreferredPortTests(unittest.TestCase):
             self.assertIsNone(server.preferred_port_honored)
         finally:
             server.stop()
+
+
+class StartPeerListenerPortTests(unittest.TestCase):
+    def test_start_peer_listener_passes_preferred_port(self) -> None:
+        import inspect
+
+        from maintenance.ui import window_discovery
+        src = inspect.getsource(window_discovery.start_peer_listener)
+        self.assertIn("PEER_SERVICE_DEFAULT_PORT", src,
+            "start_peer_listener must pass PEER_SERVICE_DEFAULT_PORT as preferred_port")
+        self.assertIn("preferred_port", src,
+            "start_peer_listener must use preferred_port keyword")
