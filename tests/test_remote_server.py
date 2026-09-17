@@ -115,3 +115,64 @@ class ListenerEndpointDiagnosticsTests(unittest.TestCase):
         result = listener_endpoint(controller)
         self.assertFalse(result[0])
         self.assertIsNone(result[1])
+
+
+class PortContractIntegrityTests(unittest.TestCase):
+    """bound_port == preferred when honored; port constant not duplicated as literal."""
+
+    def test_bound_port_equals_preferred_when_honored(self) -> None:
+        import socket
+        from unittest.mock import MagicMock
+
+        from maintenance.remote_support.server import (
+            PEER_SERVICE_DEFAULT_PORT,
+            RemoteSocketServer,
+        )
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("127.0.0.1", PEER_SERVICE_DEFAULT_PORT))
+            except OSError:
+                self.skipTest(f"port {PEER_SERVICE_DEFAULT_PORT} already in use")
+
+        service = MagicMock()
+        server = RemoteSocketServer(
+            service, host="127.0.0.1", preferred_port=PEER_SERVICE_DEFAULT_PORT
+        )
+        try:
+            server.start()
+            self.assertEqual(server.bound_port, PEER_SERVICE_DEFAULT_PORT)
+            self.assertTrue(server.preferred_port_honored)
+        finally:
+            server.stop()
+
+    def test_no_duplicate_port_literal_outside_canonical_owner(self) -> None:
+        import pathlib
+        py_files = list(pathlib.Path("maintenance").rglob("*.py"))
+        py_files += list(pathlib.Path("tests").rglob("*.py"))
+        if pathlib.Path("window.py").exists():
+            py_files.append(pathlib.Path("window.py"))
+        matches = [
+            str(f) for f in py_files
+            if "27321" in f.read_text()
+            and "remote_support/server.py" not in str(f)
+            and "test_remote_server.py" not in str(f)
+        ]
+        self.assertEqual(
+            matches, [],
+            f"Literal 27321 found outside canonical owner: {matches}. "
+            "Import PEER_SERVICE_DEFAULT_PORT instead.",
+        )
+
+    def test_window_discovery_imports_constant_not_literal(self) -> None:
+        import pathlib
+        src = pathlib.Path("maintenance/ui/window_discovery.py").read_text()
+        self.assertIn(
+            "PEER_SERVICE_DEFAULT_PORT", src,
+            "window_discovery.py must import PEER_SERVICE_DEFAULT_PORT",
+        )
+        self.assertNotIn(
+            "27321", src,
+            "window_discovery.py must not contain the literal 27321 — import the constant",
+        )
