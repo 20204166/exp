@@ -1,21 +1,75 @@
-# Windows Physical Validation Guide — Phase 12B
+# Windows Physical Validation Guide — Phase 12B / 12C
 
 **Date:** 2026-09-17  
-**Version:** 1.6.0.5  
+**Version:** 1.6.0.6  
 **Status:** NOT STARTED — requires physical Windows hardware
 
-> This guide translates Phase 12B requirements into exact commands and record
-> fields for the person holding the Windows machine. Fill in every Observed/
-> Result field. Do not mark a scenario PASS based on unit test evidence.
+> This guide translates Phase 12B/12C requirements into exact commands and
+> record fields for the person holding the Windows machine.  Fill in every
+> Observed/Result field.  Do not mark a scenario PASS based on unit test
+> evidence.
+
+---
+
+## IMPORTANT: Windows test machine does NOT require the source repository
+
+**The Windows machine is a black-box runtime node, not a development workstation.**
+
+The workflow is:
+
+```
+LINUX  →  build wheel  →  WINDOWS: install wheel  →  run app  →  report results
+LINUX  →  investigate + fix  →  build new wheel  →  WINDOWS: install updated wheel
+```
+
+**Do NOT install on Windows:**
+- Git
+- The source repository
+- pytest, ruff, pyright, mypy, or any development tools
+- IDE or compiler
+
+**The only artifact Windows needs is the built wheel file.**
+
+---
+
+## Wheel Install (Phase 12C — do this first)
+
+Obtain the wheel from the Linux build machine:
+
+```
+system_analyzer-1.6.0.6-py3-none-any.whl
+SHA-256: 1cd944a67d0f6e3b60a41f2853f1043a16d1fd93bf8e829a55e5561797e70c72
+```
+
+On Windows PowerShell:
+
+```powershell
+# Verify SHA-256 matches the above before installing
+Get-FileHash system_analyzer-1.6.0.6-py3-none-any.whl -Algorithm SHA256
+
+# Install
+pip install system_analyzer-1.6.0.6-py3-none-any.whl
+
+# Verify cryptography was installed (required for TLS generation)
+python -c "import cryptography; print('cryptography', cryptography.__version__)"
+
+# Verify the installed package version
+python -c "from maintenance._version import __version__; print(__version__)"
+```
+
+Expected output of last command: `1.6.0.6`
+
+**If pip tries to compile a C extension:** that is a packaging defect — report it
+to the Linux side before continuing.  Do not install a compiler.
 
 ---
 
 ## Prerequisites
 
 - One physical Windows machine (NODE W) on the same LAN as the Linux NODE A
-- System Analyzer source checked out at commit `3ce15ea` or later
-- Python 3.10+ installed on NODE W
+- Python 3.10+ installed on NODE W (from python.org or Microsoft Store)
 - Both machines on the same subnet (mDNS multicast must reach both)
+- The wheel file transferred to NODE W (USB, share, or download)
 
 ---
 

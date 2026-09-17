@@ -2600,3 +2600,61 @@ No issue.
 
 **Atomic persistence:** `os.replace()` wraps `MoveFileEx(MOVEFILE_REPLACE_EXISTING)`
 on Windows — atomic. No issue.
+
+---
+
+## §66 Phase 12C: Linux-developed / Windows-wheel validation (2026-09-17)
+
+### Workflow clarification
+
+All development, testing, and wheel builds happen on Linux.  The Windows
+machine is a black-box runtime node that receives the built wheel and reports
+observed behavior.  It does not need the source repository, Git, pytest, or
+any development tools.
+
+### New Linux-runnable Windows-branch tests (`tests/test_cross_platform_branches.py`)
+
+16 new tests covering every emulatable Windows-specific production branch:
+
+| Test class | Branch targeted | Production file |
+|---|---|---|
+| `ChmodBestEffortTests` | `OSError` from `os.chmod` silenced | `remote_security.py:36` |
+| `FsyncDirectoryWindowsBranchTests` | `O_DIRECTORY` absent → no-op | `persistence.py:94` |
+| `CreationFlagsTests` | `os.name == "nt"` / `CREATE_NO_WINDOW` | `temperature_platform.py:39` |
+| `WindowsSocketErrorMappingTests` | WinError 10013/10054/10060/10061 → `RemoteTransportError` | `transport.py:162` |
+| `AppDataConfigPathTests` | `APPDATA` env / Windows fallback path | `preferences.py:184` |
+
+Evidence label: **UNIT / EMULATED WINDOWS BRANCH (Linux host)**
+
+These tests prove the branch logic without a Windows runtime.  They do NOT
+constitute physical Windows evidence.
+
+### Wheel v1.6.0.6
+
+Built from commit containing Phase 12C tests.
+
+```
+system_analyzer-1.6.0.6-py3-none-any.whl
+SHA-256: 1cd944a67d0f6e3b60a41f2853f1043a16d1fd93bf8e829a55e5561797e70c72
+Requires-Dist: cryptography>=3.0  ✓
+```
+
+Wheel smoke-tested in clean Linux venv: `ensure_tls_material` generates cert
+and fingerprint with no external `openssl`.
+
+### Platform compatibility matrix (updated)
+
+| Layer | Linux | Windows | macOS |
+|---|---|---|---|
+| TLS generation (no openssl) | VERIFIED AUTOMATED | EMULATED BRANCH + NOT VERIFIED PHYSICAL | PORTABLE CODE |
+| `fsync_directory` noop on Windows | VERIFIED AUTOMATED | EMULATED BRANCH | N/A (O_DIRECTORY present) |
+| `_chmod_best_effort` OSError | VERIFIED AUTOMATED | EMULATED BRANCH | PORTABLE CODE |
+| `CREATE_NO_WINDOW` flags | VERIFIED AUTOMATED | EMULATED BRANCH | N/A |
+| WinError → `RemoteTransportError` | VERIFIED AUTOMATED | EMULATED BRANCH | PORTABLE CODE |
+| APPDATA config path | VERIFIED AUTOMATED | EMULATED BRANCH | N/A |
+| Real TLS socket pair | VERIFIED AUTOMATED (Linux host) | NOT VERIFIED PHYSICAL | NOT VERIFIED PHYSICAL |
+| mDNS discovery | VERIFIED AUTOMATED | NOT VERIFIED PHYSICAL | NOT VERIFIED PHYSICAL |
+| Pairing ceremony | VERIFIED AUTOMATED | NOT VERIFIED PHYSICAL | NOT VERIFIED PHYSICAL |
+| Join cluster | VERIFIED AUTOMATED | NOT VERIFIED PHYSICAL | NOT VERIFIED PHYSICAL |
+
+Physical Windows evidence is still required for all NOT VERIFIED PHYSICAL rows.
