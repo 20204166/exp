@@ -9,7 +9,7 @@ class PeerServicePortTests(unittest.TestCase):
         from maintenance.remote_support.server import PEER_SERVICE_DEFAULT_PORT
         self.assertIsInstance(PEER_SERVICE_DEFAULT_PORT, int)
         self.assertGreater(PEER_SERVICE_DEFAULT_PORT, 1023)
-        self.assertLess(PEER_SERVICE_DEFAULT_PORT, 32768)  # below Linux ephemeral range
+        self.assertLess(PEER_SERVICE_DEFAULT_PORT, 32768)  # below ephemeral range on all major platforms
 
     def test_default_port_re_exported_from_remote(self) -> None:
         from maintenance import remote

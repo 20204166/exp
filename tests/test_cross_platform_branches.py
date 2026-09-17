@@ -1,10 +1,10 @@
-"""Linux-runnable regression tests for Windows-specific production branches.
+"""Host-runnable regression tests for platform-specific production branches.
 
-Each test targets a branch that executes differently on Windows versus Linux/macOS
-but can be exercised on Linux via environment manipulation, monkeypatching, or
+Each test targets a branch that executes differently on Windows versus other platforms
+but can be exercised on any host via environment manipulation, monkeypatching, or
 injected exceptions.
 
-Evidence label: UNIT / EMULATED WINDOWS BRANCH (Linux host)
+Evidence label: UNIT / EMULATED WINDOWS BRANCH
 These tests DO NOT constitute physical Windows evidence.
 """
 
