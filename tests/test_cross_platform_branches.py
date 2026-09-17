@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import typing
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -323,6 +324,51 @@ class WindowsInstanceLockBranchTests(unittest.TestCase):
         fcntl_stub.flock.assert_not_called()
         if lock:
             lock.release()
+
+
+class NoFirewallMutationTests(unittest.TestCase):
+    """AppWindow/RemoteService startup must never invoke privileged firewall tools."""
+
+    _FIREWALL_LITERALS: typing.ClassVar[list[str]] = [
+        "sudo",
+        "ufw",
+        "iptables",
+        "nft ",
+        "netsh",
+    ]
+
+    def test_window_discovery_contains_no_firewall_literals(self) -> None:
+        import ast
+        import pathlib
+        src = pathlib.Path("maintenance/ui/window_discovery.py").read_text()
+        tree = ast.parse(src)
+        literals = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        for pattern in self._FIREWALL_LITERALS:
+            with self.subTest(pattern=pattern):
+                matches = [s for s in literals if pattern in s]
+                self.assertEqual(
+                    matches, [],
+                    f"window_discovery.py must not contain firewall literal '{pattern}': {matches}",
+                )
+
+    def test_remote_support_server_does_not_import_subprocess(self) -> None:
+        import ast
+        import pathlib
+        src = pathlib.Path("maintenance/remote_support/server.py").read_text()
+        tree = ast.parse(src)
+        imported = [
+            node.names[0].name if isinstance(node, ast.Import) else node.module
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+        ]
+        self.assertNotIn(
+            "subprocess", imported,
+            "remote_support/server.py must not import subprocess",
+        )
 
 
 if __name__ == "__main__":
