@@ -90,6 +90,7 @@ from maintenance.remote_support.protocol import (
     verify_response,
 )
 from maintenance.remote_support.server import (
+    PEER_SERVICE_DEFAULT_PORT,
     RemoteSocketServer,
 )
 from maintenance.remote_support.transport import (
@@ -125,6 +126,7 @@ __all__ = [
     "OP_REQUIRED_CAPABILITY",
     "OP_REQUIRED_PERMISSION",
     "PAIRING_MODE_TRANSACTIONAL",
+    "PEER_SERVICE_DEFAULT_PORT",
     "READ_CAPABILITIES",
     "REMOTE_PROTOCOL_VERSION",
     "ROLE_OPERATIONS",

@@ -31,6 +31,8 @@ from maintenance.remote_support.transport import _recv_frame, _send_frame
 
 LOGGER = logging.getLogger(__name__)
 
+PEER_SERVICE_DEFAULT_PORT = 27321
+
 
 class RemoteSocketServer:
     """One optional loopback/listening TCP server fronting a ``RemoteService``.
