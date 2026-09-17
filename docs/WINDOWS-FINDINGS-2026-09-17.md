@@ -11,10 +11,14 @@ wheel only — no source was cloned or edited.
 
 **2026-09-17, PHASE 12D-W retest:** wheel `system_analyzer-1.6.0.7-py3-none-any.whl`
 (SHA-256 `b54ccb0f50b8ff0c70c8adb1986a37ba24b4cbbe250405ee6bd09ad0c5d438f5`), built from
-Linux repair commit `723840c`, installed via the same online installer and confirmed
-via `pip show system-analyzer` → `Version: 1.6.0.7`. Findings #1 and #2 below now
-carry a **Retest — 1.6.0.7** subsection each; the original 1.6.0.5 failure text is
-left unchanged as historical evidence.
+Linux fix commit `38e52c9` (argparse) + test commit `723840c`, installed via the same
+online installer and confirmed via `pip show system-analyzer` → `Version: 1.6.0.7`.
+Findings #1 and #2 below now carry a **Retest — 1.6.0.7** subsection each; the original
+1.6.0.5 failure text is left unchanged as historical evidence.
+
+**2026-09-17, PHASE 12E Linux repair:** wheel `system_analyzer-1.6.1.0-py3-none-any.whl`
+(SHA-256 `2d68d4194de5c94ea67239dc802e41dd30085b1bd4531d8b9d8fff621910aaf0`), single-instance
+guard for finding #2.  Windows retest pending.
 
 ---
 
@@ -60,7 +64,7 @@ returned **empty** every time — no launcher stub, no python child, no window.
 
 - Initial physical wheel: `1.6.0.5`
 - Initial result: **FAIL** (argv ignored entirely, GUI launched and hung on all three commands — see above)
-- Linux fix: commit `723840c`
+- Linux fix: commit `38e52c9`
 - Retest wheel: `system_analyzer-1.6.0.7-py3-none-any.whl`
 - Retest SHA-256: `b54ccb0f50b8ff0c70c8adb1986a37ba24b4cbbe250405ee6bd09ad0c5d438f5`
 - Physical result: **PASS**
@@ -433,10 +437,46 @@ network-discovery state behind #2/#4/#5.
 
 ---
 
-## Finding #2 — Pending
+## Finding #2 — Linux fix in progress (Phase 12E)
 
-Single-instance guard absent.  Still independently reproducible (not caused by #1 alone — two normal no-arg GUI launches can coexist).
+Single-instance guard absent.  Still independently reproducible (confirmed REPRODUCED on 1.6.0.7 — see retest in the Finding #2 section above).
 
-**Status:** PENDING — retest finding #2 after confirming finding #1 PASS on Windows.
+### Phase 12E Linux repair (2026-09-17)
 
-If two no-arg GUI instances still share the same node identity after the #1 fix, finding #2 is the next repair boundary.  Do not proceed to pairing/mDNS investigation while two processes can impersonate the same node.
+**Fix commit:** _pending — see Phase 12E commit_
+**Fix wheel:** `system_analyzer-1.6.1.0-py3-none-any.whl`
+**SHA-256:** `2d68d4194de5c94ea67239dc802e41dd30085b1bd4531d8b9d8fff621910aaf0`
+
+**Mechanism:** `maintenance/instance_lock.py` (new module) — OS-held exclusive
+advisory lock on the profile state directory (`%APPDATA%\system-analyzer\system-analyzer.lock`
+on Windows).  POSIX uses `fcntl.flock`; Windows uses `msvcrt.locking`.  Both
+paths release automatically on process termination including crashes (OS holds
+the lock on the file descriptor; fd closed on death → lock released).
+
+**Lock acquisition point:** `main.main()` — after `argparse.parse_args()` (so
+`--help`/`--version` still work while a runtime instance holds the lock), before
+`AppWindow()` construction (so no mutable state is touched by the second launch).
+
+**Second launch behavior:** prints `System Analyzer is already running.` to
+stderr, exits with code 1.  `AppWindow` is never constructed; `cluster.json`
+is never written; mDNS and the listener are never started.
+
+**Linux automated evidence:**
+
+| Test class | Label | Count |
+|---|---|---|
+| `InstanceLockAcquireTests` | UNIT | 5 |
+| `InstanceLockSubprocessTests` | REAL OS LOCK — Linux | 2 |
+| `WindowsLockBranchTests` (test_instance_lock.py) | UNIT / EMULATED WINDOWS BRANCH | 3 |
+| `WindowsInstanceLockBranchTests` (test_cross_platform_branches.py) | UNIT / EMULATED WINDOWS BRANCH | 3 |
+| `EntryPointEndToEndTests` additions | UNIT | 4 |
+
+Subprocess tests (`InstanceLockSubprocessTests`) spawn real child processes and
+exercise the OS-level flock exclusion and crash-recovery path.  These are
+`REAL OS LOCK ON LINUX`, not physical Windows evidence.
+
+**Windows retest required:** install `system_analyzer-1.6.1.0-py3-none-any.whl`
+on DESKTOP-0C2C5H3, launch two no-arg GUI instances, confirm second launch prints
+`System Analyzer is already running.` and exits immediately, confirm first instance
+remains alive.  Then kill the first instance forcefully and confirm a fresh launch
+succeeds (crash-recovery).

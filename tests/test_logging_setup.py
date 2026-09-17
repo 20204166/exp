@@ -170,14 +170,69 @@ class EntryPointEndToEndTests(unittest.TestCase):
         mock_app.assert_not_called()
 
     def test_no_args_constructs_app_window_exactly_once_and_calls_run(self) -> None:
+        mock_lock = MagicMock()
         mock_instance = MagicMock()
         with (
+            patch("main.instance_lock.acquire", return_value=mock_lock),
             patch("main.AppWindow", return_value=mock_instance) as mock_app,
             patch("main.setup_logging", return_value=None),
         ):
             self._run_main([])
         mock_app.assert_called_once_with()
         mock_instance.run.assert_called_once_with()
+        mock_lock.release.assert_called_once_with()
+
+    def test_second_launch_exits_nonzero_and_never_constructs_app_window(self) -> None:
+        with (
+            patch("main.instance_lock.acquire", return_value=None),
+            patch("main.AppWindow") as mock_app,
+            patch("main.setup_logging", return_value=None),
+            self.assertRaises(SystemExit) as cm,
+        ):
+            self._run_main([])
+        self.assertEqual(cm.exception.code, 1)
+        mock_app.assert_not_called()
+
+    def test_help_exits_before_lock_is_attempted(self) -> None:
+        with (
+            patch("main.instance_lock.acquire") as mock_acquire,
+            patch("main.AppWindow") as mock_app,
+            patch("main.setup_logging", return_value=None),
+            self.assertRaises(SystemExit) as cm,
+        ):
+            self._run_main(["--help"])
+        self.assertEqual(cm.exception.code, 0)
+        mock_acquire.assert_not_called()
+        mock_app.assert_not_called()
+
+    def test_version_exits_before_lock_is_attempted(self) -> None:
+        buf = io.StringIO()
+        with (
+            patch("main.instance_lock.acquire") as mock_acquire,
+            patch("main.AppWindow") as mock_app,
+            patch("main.setup_logging", return_value=None),
+            patch("sys.stdout", buf),
+            self.assertRaises(SystemExit) as cm,
+        ):
+            self._run_main(["--version"])
+        self.assertEqual(cm.exception.code, 0)
+        self.assertIn(__version__, buf.getvalue())
+        mock_acquire.assert_not_called()
+        mock_app.assert_not_called()
+
+    def test_lock_released_after_app_run_completes(self) -> None:
+        mock_lock = MagicMock()
+        mock_instance = MagicMock()
+        call_order: list[str] = []
+        mock_instance.run.side_effect = lambda: call_order.append("run")
+        mock_lock.release.side_effect = lambda: call_order.append("release")
+        with (
+            patch("main.instance_lock.acquire", return_value=mock_lock),
+            patch("main.AppWindow", return_value=mock_instance),
+            patch("main.setup_logging", return_value=None),
+        ):
+            self._run_main([])
+        self.assertEqual(call_order, ["run", "release"])
 
 
 if __name__ == "__main__":

@@ -257,5 +257,73 @@ class AppDataConfigPathTests(unittest.TestCase):
         self.assertEqual(os.environ.get("APPDATA"), original)
 
 
+class WindowsInstanceLockBranchTests(unittest.TestCase):
+    """UNIT / EMULATED WINDOWS BRANCH: instance lock msvcrt path on Linux.
+
+    The single-instance lock has a POSIX path (fcntl.flock) and a Windows
+    path (msvcrt.locking).  These tests prove that the Windows branch is
+    correctly isolated behind the sys.platform == "win32" guard and that
+    msvcrt.locking is called with the expected arguments when that branch
+    executes.
+    """
+
+    _LK_NBLCK = 2  # msvcrt.LK_NBLCK constant value
+
+    def _msvcrt_stub(self, locking_raises: BaseException | None = None) -> MagicMock:
+        stub = MagicMock()
+        stub.LK_NBLCK = self._LK_NBLCK
+        if locking_raises is not None:
+            stub.locking.side_effect = locking_raises
+        return stub
+
+    def test_windows_branch_calls_msvcrt_locking_with_correct_args(self) -> None:
+        from maintenance import instance_lock
+
+        stub = self._msvcrt_stub()
+        with (
+            tempfile.TemporaryDirectory() as d,
+            patch("sys.platform", "win32"),
+            patch.dict("sys.modules", {"msvcrt": stub}),
+        ):
+            lock = instance_lock.acquire(Path(d) / "test.lock")
+
+        self.assertIsNotNone(lock)
+        stub.locking.assert_called_once()
+        _, args, _ = stub.locking.mock_calls[0]
+        self.assertEqual(args[1], self._LK_NBLCK)  # mode
+        self.assertEqual(args[2], 1)  # nbytes
+        if lock:
+            lock.release()
+
+    def test_windows_branch_returns_none_when_already_locked(self) -> None:
+        from maintenance import instance_lock
+
+        stub = self._msvcrt_stub(locking_raises=OSError("already locked"))
+        with (
+            tempfile.TemporaryDirectory() as d,
+            patch("sys.platform", "win32"),
+            patch.dict("sys.modules", {"msvcrt": stub}),
+        ):
+            result = instance_lock.acquire(Path(d) / "test.lock")
+
+        self.assertIsNone(result)
+
+    def test_windows_lock_guard_does_not_call_fcntl(self) -> None:
+        from maintenance import instance_lock
+
+        stub = self._msvcrt_stub()
+        fcntl_stub = MagicMock()
+        with (
+            tempfile.TemporaryDirectory() as d,
+            patch("sys.platform", "win32"),
+            patch.dict("sys.modules", {"msvcrt": stub, "fcntl": fcntl_stub}),
+        ):
+            lock = instance_lock.acquire(Path(d) / "test.lock")
+
+        fcntl_stub.flock.assert_not_called()
+        if lock:
+            lock.release()
+
+
 if __name__ == "__main__":
     unittest.main()

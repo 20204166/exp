@@ -2,10 +2,13 @@ import argparse
 import logging
 import os
 import platform
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from maintenance import instance_lock
 from maintenance._version import __version__
+from maintenance.cluster import default_cluster_path
 from window import AppWindow
 
 LOG_DIR_NAME = "system-analyzer"
@@ -87,9 +90,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     _build_arg_parser().parse_args()
-    setup_logging()
-    app = AppWindow()
-    app.run()
+
+    lock_path = default_cluster_path().parent / "system-analyzer.lock"
+    lock = instance_lock.acquire(lock_path)
+    if lock is None:
+        print("System Analyzer is already running.", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        setup_logging()
+        app = AppWindow()
+        app.run()
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":
