@@ -98,3 +98,20 @@ class StartPeerListenerPortTests(unittest.TestCase):
             "start_peer_listener must pass PEER_SERVICE_DEFAULT_PORT as preferred_port")
         self.assertIn("preferred_port", src,
             "start_peer_listener must use preferred_port keyword")
+
+
+class ListenerEndpointDiagnosticsTests(unittest.TestCase):
+    def test_listener_endpoint_includes_preferred_honored(self) -> None:
+        import inspect
+
+        from maintenance.ui import window_discovery
+        src = inspect.getsource(window_discovery.listener_endpoint)
+        self.assertIn("preferred_port_honored", src,
+            "listener_endpoint must include preferred_port_honored in its return value")
+
+    def test_listener_endpoint_not_connectable_when_no_server(self) -> None:
+        from maintenance.ui.window_discovery import listener_endpoint
+        controller = type("C", (), {"__dict__": {}})()
+        result = listener_endpoint(controller)
+        self.assertFalse(result[0])
+        self.assertIsNone(result[1])

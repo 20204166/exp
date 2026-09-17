@@ -96,11 +96,18 @@ def get_discovery_session(controller: Any) -> DiscoverySession:
     return session
 
 
-def listener_endpoint(controller: Any) -> tuple[bool, int | None, str | None]:
+def listener_endpoint(
+    controller: Any,
+) -> tuple[bool, int | None, str | None, bool | None]:
     server = controller.__dict__.get("_peer_server")
     if server is None or server.bound_port is None:
-        return False, None, None
-    return True, server.bound_port, controller.__dict__.get("_tls_fingerprint")
+        return False, None, None, None
+    return (
+        True,
+        server.bound_port,
+        controller.__dict__.get("_tls_fingerprint"),
+        server.preferred_port_honored,
+    )
 
 
 def start_peer_listener(controller: Any) -> None:
