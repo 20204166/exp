@@ -1,0 +1,1760 @@
+{
+  "cluster": {
+    "coordinator_id": "node-3b786ad11e500df78af9ebd04bdd8342",
+    "database_bytes": 0,
+    "database_cap_bytes": 2147483648,
+    "epoch": 1,
+    "failure": null,
+    "heartbeat_age_seconds": 219449.70674538612,
+    "history_writes_paused": false,
+    "last_snapshot_at": null,
+    "retention_pressure": "normal",
+    "role": "coordinator, worker",
+    "standby_bytes": 0,
+    "standby_cap_bytes": 0
+  },
+  "components": [
+    {
+      "capability": "supported",
+      "in_flight": false,
+      "key": "cpu",
+      "last_error": null,
+      "last_error_category": null,
+      "last_success": 1789344631.5519462,
+      "state": "idle"
+    },
+    {
+      "capability": "supported",
+      "in_flight": false,
+      "key": "network",
+      "last_error": null,
+      "last_error_category": null,
+      "last_success": 1789344631.5518157,
+      "state": "idle"
+    },
+    {
+      "capability": "supported",
+      "in_flight": false,
+      "key": "memory",
+      "last_error": null,
+      "last_error_category": null,
+      "last_success": 1789344631.2451994,
+      "state": "idle"
+    },
+    {
+      "capability": "supported",
+      "in_flight": false,
+      "key": "gpu",
+      "last_error": null,
+      "last_error_category": null,
+      "last_success": 1789344631.2449253,
+      "state": "idle"
+    },
+    {
+      "capability": "supported",
+      "in_flight": false,
+      "key": "storage",
+      "last_error": null,
+      "last_error_category": null,
+      "last_success": null,
+      "state": "idle"
+    },
+    {
+      "capability": "unsupported",
+      "in_flight": false,
+      "key": "battery",
+      "last_error": null,
+      "last_error_category": null,
+      "last_success": null,
+      "state": "idle"
+    }
+  ],
+  "most_recent_failure": null,
+  "nodes": [
+    {
+      "capabilities": [
+        "cleanup",
+        "component_read",
+        "dashboard_read",
+        "process_force_termination",
+        "process_review",
+        "process_termination",
+        "remote_management",
+        "storage_review"
+      ],
+      "connection": "unknown",
+      "display_name": "This System",
+      "node_id": "node-3b786ad11e500df78af9ebd04bdd8342",
+      "pairing": "trusted",
+      "reason": null,
+      "trust": "local"
+    },
+    {
+      "capabilities": [
+        "cleanup",
+        "component_read",
+        "dashboard_read",
+        "process_force_termination",
+        "process_review",
+        "process_termination",
+        "remote_management",
+        "storage_review"
+      ],
+      "connection": "online",
+      "display_name": "This System",
+      "node_id": "node-bcfb1670aaadad959e018226f9fbe52f",
+      "pairing": "trusted",
+      "reason": null,
+      "trust": "trusted"
+    }
+  ],
+  "observability": {
+    "captured_at": 1789344659.8510594,
+    "duration_seconds": 106.82388854026794,
+    "metrics": [
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 25,
+        "distribution": {
+          "maximum": 0.07521286403061822,
+          "median": 0.005418621993158013,
+          "minimum": 0.0027734270552173257,
+          "outliers": 6,
+          "p25": 0.003929355996660888,
+          "p50": 0.005418621993158013,
+          "p75": 0.014965553011279553,
+          "p95": 0.05526078677503392,
+          "p99": 0.070478531375993,
+          "spread": 0.0724394369754009
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.002933487994596362,
+          0.005667852004989982,
+          0.05435802199644968,
+          0.0028509930125437677,
+          0.07521286403061822,
+          0.0042458310490474105,
+          0.014965553011279553,
+          0.003929355996660888,
+          0.005852498987223953,
+          0.03286278201267123,
+          0.00557937502162531,
+          0.0039962209993973374,
+          0.0037133480072952807,
+          0.005418621993158013,
+          0.04783867602236569,
+          0.0027734270552173257,
+          0.008338315004948527,
+          0.004480604024138302,
+          0.004521149967331439,
+          0.05352644500089809,
+          0.0034457030124031007,
+          0.05548647796967998,
+          0.0028761199791915715,
+          0.0056900730123743415,
+          0.004561657027807087
+        ],
+        "stale": 0,
+        "successes": 25,
+        "target": "app:node:node-3b786ad11e500df78af9ebd04bdd8342:component:cpu"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 9,
+        "distribution": {
+          "maximum": 0.07434350502444431,
+          "median": 0.003025562036782503,
+          "minimum": 0.001203948981128633,
+          "outliers": 0,
+          "p25": 0.0018258009804412723,
+          "p50": 0.003025562036782503,
+          "p75": 0.05291660502552986,
+          "p95": 0.06602989780949428,
+          "p99": 0.0726807835814543,
+          "spread": 0.07313955604331568
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.05355948698706925,
+          0.07434350502444431,
+          0.0013075540191493928,
+          0.0023877599742263556,
+          0.001203948981128633,
+          0.003025562036782503,
+          0.05291660502552986,
+          0.04553457297151908,
+          0.0018258009804412723
+        ],
+        "stale": 0,
+        "successes": 9,
+        "target": "app:node:node-3b786ad11e500df78af9ebd04bdd8342:component:gpu"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 13,
+        "distribution": {
+          "maximum": 0.007324784004595131,
+          "median": 0.002882922999560833,
+          "minimum": 0.0013693110086023808,
+          "outliers": 2,
+          "p25": 0.0027176220319233835,
+          "p50": 0.002882922999560833,
+          "p75": 0.0038813650025986135,
+          "p95": 0.006544459413271395,
+          "p99": 0.0071687190863303826,
+          "spread": 0.00595547299599275
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.0027176220319233835,
+          0.0038813650025986135,
+          0.006024243019055575,
+          0.002861763001419604,
+          0.0030842520063742995,
+          0.0027929439675062895,
+          0.002882922999560833,
+          0.0013693110086023808,
+          0.007324784004595131,
+          0.0023610799689777195,
+          0.0023562610149383545,
+          0.004723923048004508,
+          0.003161669010296464
+        ],
+        "stale": 0,
+        "successes": 13,
+        "target": "app:node:node-3b786ad11e500df78af9ebd04bdd8342:component:memory"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 25,
+        "distribution": {
+          "maximum": 0.00469309400068596,
+          "median": 0.0022555209579877555,
+          "minimum": 0.0012244080426171422,
+          "outliers": 0,
+          "p25": 0.001845547987613827,
+          "p50": 0.0022555209579877555,
+          "p75": 0.0036474739899858832,
+          "p95": 0.004619784443639218,
+          "p99": 0.00468729681102559,
+          "spread": 0.003468685958068818
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.0014858599752187729,
+          0.0038008230039849877,
+          0.00466893904376775,
+          0.0015247040428221226,
+          0.004232256032992154,
+          0.0021862099529244006,
+          0.0036474739899858832,
+          0.0020062210387550294,
+          0.0028544189990498126,
+          0.001758563972543925,
+          0.003617997979745269,
+          0.001845547987613827,
+          0.001750038005411625,
+          0.00287176197161898,
+          0.0032885170076042414,
+          0.0012244080426171422,
+          0.00469309400068596,
+          0.001969592005480081,
+          0.0022555209579877555,
+          0.0018746230052784085,
+          0.002182052005082369,
+          0.003650099039077759,
+          0.0013322099694050848,
+          0.004423166043125093,
+          0.0023464219993911684
+        ],
+        "stale": 0,
+        "successes": 25,
+        "target": "app:node:node-3b786ad11e500df78af9ebd04bdd8342:component:network"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 3,
+        "distribution": {
+          "maximum": 0.4090088559896685,
+          "median": 0.3896874430356547,
+          "minimum": 0.373792317986954,
+          "outliers": 0,
+          "p25": 0.38173988051130436,
+          "p50": 0.3896874430356547,
+          "p75": 0.3993481495126616,
+          "p95": 0.40707671469426715,
+          "p99": 0.40862242773058827,
+          "spread": 0.035216538002714515
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.4090088559896685,
+          0.373792317986954,
+          0.3896874430356547
+        ],
+        "stale": 0,
+        "successes": 3,
+        "target": "app:node:node-3b786ad11e500df78af9ebd04bdd8342:process_candidates"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.1023433530353941,
+          "median": 0.1023433530353941,
+          "minimum": 0.1023433530353941,
+          "outliers": 0,
+          "p25": 0.1023433530353941,
+          "p50": 0.1023433530353941,
+          "p75": 0.1023433530353941,
+          "p95": 0.1023433530353941,
+          "p99": 0.1023433530353941,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.1023433530353941
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "app:node:node-3b786ad11e500df78af9ebd04bdd8342:storage"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 12,
+        "distribution": {
+          "maximum": 0.18328280001878738,
+          "median": 0.05321745699620806,
+          "minimum": 0.01863766403403133,
+          "outliers": 0,
+          "p25": 0.032965876249363646,
+          "p50": 0.05321745699620806,
+          "p75": 0.10044571977050509,
+          "p95": 0.1642330357484752,
+          "p99": 0.17947284716472497,
+          "spread": 0.16464513598475605
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.18328280001878738,
+          0.1486468649818562,
+          0.03428811801131815,
+          0.020934331987518817,
+          0.0355853529763408,
+          0.07084956101607531,
+          0.09204277099343017,
+          0.11461875698296353,
+          0.03557657601777464,
+          0.09572137403301895,
+          0.01863766403403133,
+          0.028999150963500142
+        ],
+        "stale": 0,
+        "successes": 12,
+        "target": "app:node:node-bcfb1670aaadad959e018226f9fbe52f:component:cpu"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 4,
+        "distribution": {
+          "maximum": 0.1948015179950744,
+          "median": 0.0973637989955023,
+          "minimum": 0.021916062978561968,
+          "outliers": 0,
+          "p25": 0.07461271596548613,
+          "p50": 0.0973637989955023,
+          "p75": 0.1256123777711764,
+          "p95": 0.18096368995029477,
+          "p99": 0.19203395238611845,
+          "spread": 0.17288545501651242
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.1948015179950744,
+          0.021916062978561968,
+          0.09217826696112752,
+          0.10254933102987707
+        ],
+        "stale": 0,
+        "successes": 4,
+        "target": "app:node:node-bcfb1670aaadad959e018226f9fbe52f:component:gpu"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 7,
+        "distribution": {
+          "maximum": 0.18184854602441192,
+          "median": 0.10158520401455462,
+          "minimum": 0.018065155018121004,
+          "outliers": 0,
+          "p25": 0.04703510052058846,
+          "p50": 0.10158520401455462,
+          "p75": 0.13515230448683724,
+          "p95": 0.17410789050627498,
+          "p99": 0.18030041492078452,
+          "spread": 0.1637833910062909
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.18184854602441192,
+          0.15604636096395552,
+          0.018065155018121004,
+          0.06544185901293531,
+          0.11425824800971895,
+          0.10158520401455462,
+          0.028628342028241605
+        ],
+        "stale": 0,
+        "successes": 7,
+        "target": "app:node:node-bcfb1670aaadad959e018226f9fbe52f:component:memory"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 12,
+        "distribution": {
+          "maximum": 0.16075186798116192,
+          "median": 0.053690373490098864,
+          "minimum": 0.0217555399867706,
+          "outliers": 0,
+          "p25": 0.029728375520789996,
+          "p50": 0.053690373490098864,
+          "p75": 0.10409403250378091,
+          "p95": 0.15396612142503727,
+          "p99": 0.15939471866993699,
+          "spread": 0.13899632799439132
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.16075186798116192,
+          0.1484141469700262,
+          0.030768536031246185,
+          0.0217555399867706,
+          0.035778847988694906,
+          0.07160189899150282,
+          0.09065473498776555,
+          0.11099392600590363,
+          0.033512495981995016,
+          0.10179406800307333,
+          0.026607893989421427,
+          0.02347211498999968
+        ],
+        "stale": 0,
+        "successes": 12,
+        "target": "app:node:node-bcfb1670aaadad959e018226f9fbe52f:component:network"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.06363303097896278,
+          "median": 0.06363303097896278,
+          "minimum": 0.06363303097896278,
+          "outliers": 0,
+          "p25": 0.06363303097896278,
+          "p50": 0.06363303097896278,
+          "p75": 0.06363303097896278,
+          "p95": 0.06363303097896278,
+          "p99": 0.06363303097896278,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.06363303097896278
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "app:node:node-bcfb1670aaadad959e018226f9fbe52f:connect"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 2,
+        "distribution": {
+          "maximum": 2.4356006179004908e-05,
+          "median": 2.1871004719287157e-05,
+          "minimum": 1.9386003259569407e-05,
+          "outliers": 0,
+          "p25": 2.0628503989428282e-05,
+          "p50": 2.1871004719287157e-05,
+          "p75": 2.3113505449146032e-05,
+          "p95": 2.4107506033033132e-05,
+          "p99": 2.4306306149810554e-05,
+          "spread": 4.970002919435501e-06
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          1.9386003259569407e-05,
+          2.4356006179004908e-05
+        ],
+        "stale": 0,
+        "successes": 2,
+        "target": "thermal:battery"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 26,
+        "distribution": {
+          "maximum": 0.00011544703738763928,
+          "median": 7.013700087554753e-05,
+          "minimum": 3.6820012610405684e-05,
+          "outliers": 1,
+          "p25": 5.732571298722178e-05,
+          "p50": 7.013700087554753e-05,
+          "p75": 7.944474054966122e-05,
+          "p95": 0.00010314652172382921,
+          "p99": 0.00011238378647249192,
+          "spread": 7.86270247772336e-05
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          6.99620577506721e-05,
+          5.794898606836796e-05,
+          7.33479973860085e-05,
+          8.950801566243172e-05,
+          5.3149997256696224e-05,
+          6.066501373425126e-05,
+          5.806999979540706e-05,
+          8.210400119423866e-05,
+          7.015198934823275e-05,
+          0.00010300398571416736,
+          7.87990284152329e-05,
+          7.47410231269896e-05,
+          5.188799696043134e-05,
+          0.00011544703738763928,
+          5.312002031132579e-05,
+          7.9659977927804e-05,
+          7.012201240286231e-05,
+          7.183500565588474e-05,
+          6.406998727470636e-05,
+          7.47509766370058e-05,
+          5.12970145791769e-05,
+          0.00010319403372704983,
+          3.6820012610405684e-05,
+          4.441296914592385e-05,
+          0.00010175199713557959,
+          5.7117955293506384e-05
+        ],
+        "stale": 0,
+        "successes": 26,
+        "target": "thermal:cpu"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 10,
+        "distribution": {
+          "maximum": 0.0002203949843533337,
+          "median": 6.132101407274604e-05,
+          "minimum": 2.751202555373311e-05,
+          "outliers": 1,
+          "p25": 4.30682412115857e-05,
+          "p50": 6.132101407274604e-05,
+          "p75": 7.809723319951445e-05,
+          "p95": 0.00015966571227181688,
+          "p99": 0.0002082491299370304,
+          "spread": 0.0001928829587996006
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          2.751202555373311e-05,
+          8.544104639440775e-05,
+          3.151997225359082e-05,
+          5.3400988690555096e-05,
+          5.590601358562708e-05,
+          8.062197593972087e-05,
+          0.0002203949843533337,
+          3.9623992051929235e-05,
+          6.6736014559865e-05,
+          7.052300497889519e-05
+        ],
+        "stale": 0,
+        "successes": 10,
+        "target": "thermal:gpu"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 15,
+        "distribution": {
+          "maximum": 4.435400478541851e-05,
+          "median": 3.275199560448527e-05,
+          "minimum": 2.3244007024914026e-05,
+          "outliers": 0,
+          "p25": 2.9345479561015964e-05,
+          "p50": 3.275199560448527e-05,
+          "p75": 3.563248901627958e-05,
+          "p95": 3.990689292550086e-05,
+          "p99": 4.346458241343498e-05,
+          "spread": 2.1109997760504484e-05
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          3.478600410744548e-05,
+          2.992700319737196e-05,
+          3.647897392511368e-05,
+          3.8000987842679024e-05,
+          2.3313972633332014e-05,
+          3.419496351853013e-05,
+          3.0055991373956203e-05,
+          2.7282047085464e-05,
+          3.413402009755373e-05,
+          2.8823968023061752e-05,
+          3.275199560448527e-05,
+          2.9866991098970175e-05,
+          2.3244007024914026e-05,
+          4.435400478541851e-05,
+          3.686896525323391e-05
+        ],
+        "stale": 0,
+        "successes": 15,
+        "target": "thermal:memory"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 27,
+        "distribution": {
+          "maximum": 5.796999903395772e-05,
+          "median": 2.6991008780896664e-05,
+          "minimum": 1.4176999684423208e-05,
+          "outliers": 2,
+          "p25": 2.1616026060655713e-05,
+          "p50": 2.6991008780896664e-05,
+          "p75": 3.42845160048455e-05,
+          "p95": 5.3703138837590815e-05,
+          "p99": 5.696693318895995e-05,
+          "spread": 4.379299934953451e-05
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          2.335401950404048e-05,
+          2.180103911086917e-05,
+          2.950499765574932e-05,
+          2.40050139836967e-05,
+          2.1130021195858717e-05,
+          2.317404141649604e-05,
+          1.6591046005487442e-05,
+          2.1431013010442257e-05,
+          3.3262011129409075e-05,
+          2.7270987629890442e-05,
+          4.104699473828077e-05,
+          5.796999903395772e-05,
+          2.9666000045835972e-05,
+          2.3083994165062904e-05,
+          2.9015005566179752e-05,
+          3.6327983252704144e-05,
+          1.82250514626503e-05,
+          1.4176999684423208e-05,
+          2.6991008780896664e-05,
+          5.274900468066335e-05,
+          2.985598985105753e-05,
+          5.4112053476274014e-05,
+          2.6340014301240444e-05,
+          3.561703488230705e-05,
+          1.5649013221263885e-05,
+          3.5307020880281925e-05,
+          2.069899346679449e-05
+        ],
+        "stale": 0,
+        "successes": 27,
+        "target": "thermal:network"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 2,
+        "distribution": {
+          "maximum": 3.667897544801235e-05,
+          "median": 3.639847273007035e-05,
+          "minimum": 3.611797001212835e-05,
+          "outliers": 0,
+          "p25": 3.625822137109935e-05,
+          "p50": 3.639847273007035e-05,
+          "p75": 3.653872408904135e-05,
+          "p95": 3.665092517621815e-05,
+          "p99": 3.667336539365351e-05,
+          "spread": 5.610054358839989e-07
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          3.611797001212835e-05,
+          3.667897544801235e-05
+        ],
+        "stale": 0,
+        "successes": 2,
+        "target": "thermal:storage"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.0004309319774620235,
+          "median": 0.0004309319774620235,
+          "minimum": 0.0004309319774620235,
+          "outliers": 0,
+          "p25": 0.0004309319774620235,
+          "p50": 0.0004309319774620235,
+          "p75": 0.0004309319774620235,
+          "p95": 0.0004309319774620235,
+          "p99": 0.0004309319774620235,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.0004309319774620235
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:cluster:node:node-bcfb1670aaadad959e018226f9fbe52f:open"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 3,
+        "distribution": {
+          "maximum": 0.0011079779942519963,
+          "median": 0.0011019270168617368,
+          "minimum": 0.000932446972001344,
+          "outliers": 0,
+          "p25": 0.0010171869944315404,
+          "p50": 0.0011019270168617368,
+          "p75": 0.0011049525055568665,
+          "p95": 0.0011073728965129703,
+          "p99": 0.001107856974704191,
+          "spread": 0.0001755310222506523
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.0011019270168617368,
+          0.0011079779942519963,
+          0.000932446972001344
+        ],
+        "stale": 0,
+        "successes": 3,
+        "target": "ui:action:dashboard:cluster"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 0,
+        "distribution": {},
+        "events": [
+          [
+            "rejected",
+            2
+          ]
+        ],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 0,
+        "rejected": 2,
+        "samples": [],
+        "stale": 0,
+        "successes": 0,
+        "target": "ui:action:dashboard:resource:battery"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.009068209968972951,
+          "median": 0.009068209968972951,
+          "minimum": 0.009068209968972951,
+          "outliers": 0,
+          "p25": 0.009068209968972951,
+          "p50": 0.009068209968972951,
+          "p75": 0.009068209968972951,
+          "p95": 0.009068209968972951,
+          "p99": 0.009068209968972951,
+          "spread": 0.0
+        },
+        "events": [
+          [
+            "rejected",
+            2
+          ]
+        ],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 2,
+        "samples": [
+          0.009068209968972951
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:dashboard:resource:cpu"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.006981035985518247,
+          "median": 0.006981035985518247,
+          "minimum": 0.006981035985518247,
+          "outliers": 0,
+          "p25": 0.006981035985518247,
+          "p50": 0.006981035985518247,
+          "p75": 0.006981035985518247,
+          "p95": 0.006981035985518247,
+          "p99": 0.006981035985518247,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.006981035985518247
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:dashboard:resource:gpu"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.006539012945722789,
+          "median": 0.006539012945722789,
+          "minimum": 0.006539012945722789,
+          "outliers": 0,
+          "p25": 0.006539012945722789,
+          "p50": 0.006539012945722789,
+          "p75": 0.006539012945722789,
+          "p95": 0.006539012945722789,
+          "p99": 0.006539012945722789,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.006539012945722789
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:dashboard:resource:memory"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.008852904022205621,
+          "median": 0.008852904022205621,
+          "minimum": 0.008852904022205621,
+          "outliers": 0,
+          "p25": 0.008852904022205621,
+          "p50": 0.008852904022205621,
+          "p75": 0.008852904022205621,
+          "p95": 0.008852904022205621,
+          "p99": 0.008852904022205621,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.008852904022205621
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:dashboard:resource:network"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.004317516984883696,
+          "median": 0.004317516984883696,
+          "minimum": 0.004317516984883696,
+          "outliers": 0,
+          "p25": 0.004317516984883696,
+          "p50": 0.004317516984883696,
+          "p75": 0.004317516984883696,
+          "p95": 0.004317516984883696,
+          "p99": 0.004317516984883696,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.004317516984883696
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:dashboard:resource:storage"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.0004724200116470456,
+          "median": 0.0004724200116470456,
+          "minimum": 0.0004724200116470456,
+          "outliers": 0,
+          "p25": 0.0004724200116470456,
+          "p50": 0.0004724200116470456,
+          "p75": 0.0004724200116470456,
+          "p95": 0.0004724200116470456,
+          "p99": 0.0004724200116470456,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.0004724200116470456
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:dashboard:settings"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.008225221012253314,
+          "median": 0.008225221012253314,
+          "minimum": 0.008225221012253314,
+          "outliers": 0,
+          "p25": 0.008225221012253314,
+          "p50": 0.008225221012253314,
+          "p75": 0.008225221012253314,
+          "p95": 0.008225221012253314,
+          "p99": 0.008225221012253314,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.008225221012253314
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:dashboard:thermals"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 0,
+        "distribution": {},
+        "events": [],
+        "failures": 0,
+        "in_flight": 1,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [],
+        "stale": 0,
+        "successes": 0,
+        "target": "ui:action:diagnostics:save_capture"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.014331428043078631,
+          "median": 0.014331428043078631,
+          "minimum": 0.014331428043078631,
+          "outliers": 0,
+          "p25": 0.014331428043078631,
+          "p50": 0.014331428043078631,
+          "p75": 0.014331428043078631,
+          "p95": 0.014331428043078631,
+          "p99": 0.014331428043078631,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.014331428043078631
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:settings:category:diagnostics"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.00016686500748619437,
+          "median": 0.00016686500748619437,
+          "minimum": 0.00016686500748619437,
+          "outliers": 0,
+          "p25": 0.00016686500748619437,
+          "p50": 0.00016686500748619437,
+          "p75": 0.00016686500748619437,
+          "p95": 0.00016686500748619437,
+          "p99": 0.00016686500748619437,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.00016686500748619437
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:settings:category:help"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.0017283380148001015,
+          "median": 0.0017283380148001015,
+          "minimum": 0.0017283380148001015,
+          "outliers": 0,
+          "p25": 0.0017283380148001015,
+          "p50": 0.0017283380148001015,
+          "p75": 0.0017283380148001015,
+          "p95": 0.0017283380148001015,
+          "p99": 0.0017283380148001015,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.0017283380148001015
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:settings:category:nodes"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.00016869697719812393,
+          "median": 0.00016869697719812393,
+          "minimum": 0.00016869697719812393,
+          "outliers": 0,
+          "p25": 0.00016869697719812393,
+          "p50": 0.00016869697719812393,
+          "p75": 0.00016869697719812393,
+          "p95": 0.00016869697719812393,
+          "p99": 0.00016869697719812393,
+          "spread": 0.0
+        },
+        "events": [],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.00016869697719812393
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:action:settings:category:preferences"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 37,
+        "distribution": {
+          "maximum": 0.0014609030331484973,
+          "median": 0.0008842060342431068,
+          "minimum": 7.522199302911758e-05,
+          "outliers": 1,
+          "p25": 0.0007427490199916065,
+          "p50": 0.0008842060342431068,
+          "p75": 0.0010204929858446121,
+          "p95": 0.0013709796359762548,
+          "p99": 0.001441177544184029,
+          "spread": 0.0013856810401193798
+        },
+        "events": [
+          [
+            "commit",
+            37
+          ],
+          [
+            "request",
+            37
+          ]
+        ],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.0008842060342431068,
+          0.0009844449814409018,
+          0.0009548389934934676,
+          0.0007624870049767196,
+          0.000504129973705858,
+          0.0006804520380683243,
+          0.0006066840142011642,
+          0.0010685839806683362,
+          0.0008523860014975071,
+          0.0009529159869998693,
+          0.000568591000046581,
+          0.0009234710014425218,
+          0.0007624669815413654,
+          0.0009552699630148709,
+          0.0007838970050215721,
+          0.0008359960047528148,
+          7.522199302911758e-05,
+          0.0010791639797389507,
+          0.0014609030331484973,
+          0.0009712100145407021,
+          0.0010452300193719566,
+          0.0009872509981505573,
+          0.001043155963998288,
+          0.000752688036300242,
+          0.0012035479885526001,
+          0.0006854220409877598,
+          0.0014061100082471967,
+          0.0006437529809772968,
+          0.0010204929858446121,
+          0.0007478899788111448,
+          0.0009698380017653108,
+          0.0007427490199916065,
+          0.0010803159675560892,
+          0.0005585419712588191,
+          0.0006240960210561752,
+          0.0013621970429085195,
+          0.0008107480243779719
+        ],
+        "stale": 0,
+        "successes": 37,
+        "target": "ui:render:component:cpu"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 13,
+        "distribution": {
+          "maximum": 0.0013152890023775399,
+          "median": 0.00068535195896402,
+          "minimum": 6.223696982488036e-05,
+          "outliers": 0,
+          "p25": 0.00045300397323444486,
+          "p50": 0.00068535195896402,
+          "p75": 0.0008808200364001095,
+          "p95": 0.0012628940050490199,
+          "p99": 0.001304810002911836,
+          "spread": 0.0012530520325526595
+        },
+        "events": [
+          [
+            "commit",
+            13
+          ],
+          [
+            "request",
+            13
+          ]
+        ],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.0008160279830917716,
+          0.000246835988946259,
+          0.00045300397323444486,
+          0.000294966041110456,
+          0.0005163229652680457,
+          6.223696982488036e-05,
+          0.0007473989971913397,
+          0.00068535195896402,
+          0.0013152890023775399,
+          0.0012279640068300068,
+          0.0005440760287456214,
+          0.0008808200364001095,
+          0.0008859389927238226
+        ],
+        "stale": 0,
+        "successes": 13,
+        "target": "ui:render:component:gpu"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 20,
+        "distribution": {
+          "maximum": 0.0026687089703045785,
+          "median": 0.0009453115344513208,
+          "minimum": 0.0002940540434792638,
+          "outliers": 2,
+          "p25": 0.0007602100376971066,
+          "p50": 0.0009453115344513208,
+          "p75": 0.0010356317652622238,
+          "p95": 0.002086373281781562,
+          "p99": 0.0025522418325999744,
+          "spread": 0.0023746549268253148
+        },
+        "events": [
+          [
+            "commit",
+            20
+          ],
+          [
+            "request",
+            20
+          ]
+        ],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.000974335998762399,
+          0.0013202080153860152,
+          0.0002940540434792638,
+          0.0005856030038557947,
+          0.0020557240350171924,
+          0.0008745589875616133,
+          0.0007625670405104756,
+          0.0004997620126232505,
+          0.0007061599753797054,
+          0.0008318580221384764,
+          0.0009596690069884062,
+          0.0010894930455833673,
+          0.0009470850345678627,
+          0.001017678005155176,
+          0.0007531390292569995,
+          0.0009435380343347788,
+          0.0010152130271308124,
+          0.0007947169942781329,
+          0.0026687089703045785,
+          0.0011519209947437048
+        ],
+        "stale": 0,
+        "successes": 20,
+        "target": "ui:render:component:memory"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 37,
+        "distribution": {
+          "maximum": 0.0028657509828917682,
+          "median": 0.0008764509693719447,
+          "minimum": 0.0003573040012270212,
+          "outliers": 2,
+          "p25": 0.0006570980185642838,
+          "p50": 0.0008764509693719447,
+          "p75": 0.0011205319897271693,
+          "p95": 0.0019484805874526458,
+          "p99": 0.0028164136968553068,
+          "spread": 0.002508446981664747
+        },
+        "events": [
+          [
+            "commit",
+            37
+          ],
+          [
+            "request",
+            37
+          ]
+        ],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.000731840031221509,
+          0.0013277629623189569,
+          0.0028657509828917682,
+          0.0007899189949966967,
+          0.0003573040012270212,
+          0.000647950975690037,
+          0.0005469309980981052,
+          0.00084781798068434,
+          0.0010371450334787369,
+          0.0006466190097853541,
+          0.0004868669784627855,
+          0.0009280790109187365,
+          0.0013440829934552312,
+          0.0006712949834764004,
+          0.0009033329552039504,
+          0.0007519770297221839,
+          0.0006597530446015298,
+          0.0006570980185642838,
+          0.0027287029661238194,
+          0.0009221679647453129,
+          0.000983122969046235,
+          0.0014746389933861792,
+          0.0009307340369559824,
+          0.000784559000749141,
+          0.0011205319897271693,
+          0.0011055239592678845,
+          0.0006151690031401813,
+          0.0004517720080912113,
+          0.0008764509693719447,
+          0.0013574789627455175,
+          0.0008752190042287111,
+          0.0011602270533330739,
+          0.0009067890350706875,
+          0.0017534249927848577,
+          0.0005778390332125127,
+          0.0012480220175348222,
+          0.0006306080031208694
+        ],
+        "stale": 0,
+        "successes": 37,
+        "target": "ui:render:component:network"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 3,
+        "distribution": {
+          "maximum": 0.015389352978672832,
+          "median": 0.014932470978237689,
+          "minimum": 0.004880296997725964,
+          "outliers": 0,
+          "p25": 0.009906383987981826,
+          "p50": 0.014932470978237689,
+          "p75": 0.01516091197845526,
+          "p95": 0.015343664778629317,
+          "p99": 0.015380215338664129,
+          "spread": 0.010509055980946869
+        },
+        "events": [
+          [
+            "commit",
+            3
+          ],
+          [
+            "request",
+            3
+          ]
+        ],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.014932470978237689,
+          0.015389352978672832,
+          0.004880296997725964
+        ],
+        "stale": 0,
+        "successes": 3,
+        "target": "ui:render:dashboard-snapshot"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 2,
+        "count": 2,
+        "distribution": {
+          "maximum": 0.0010400399914942682,
+          "median": 0.0005611524975392967,
+          "minimum": 8.226500358432531e-05,
+          "outliers": 0,
+          "p25": 0.00032170875056181103,
+          "p50": 0.0005611524975392967,
+          "p75": 0.0008005962445167825,
+          "p95": 0.0009921512420987709,
+          "p99": 0.0010304622416151686,
+          "spread": 0.0009577749879099429
+        },
+        "events": [
+          [
+            "coalesced",
+            2
+          ],
+          [
+            "commit",
+            2
+          ],
+          [
+            "request",
+            4
+          ]
+        ],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.0010400399914942682,
+          8.226500358432531e-05
+        ],
+        "stale": 0,
+        "successes": 2,
+        "target": "ui:render:nodes-status"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 0,
+        "count": 4,
+        "distribution": {
+          "maximum": 0.0004396889708004892,
+          "median": 0.00018120152526535094,
+          "minimum": 9.228399721905589e-05,
+          "outliers": 0,
+          "p25": 0.00011019027442671359,
+          "p50": 0.00018120152526535094,
+          "p75": 0.0002946052554761991,
+          "p95": 0.0004106722277356311,
+          "p99": 0.0004338856221875175,
+          "spread": 0.0003474049735814333
+        },
+        "events": [
+          [
+            "commit",
+            4
+          ],
+          [
+            "request",
+            4
+          ]
+        ],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.0004396889708004892,
+          0.00024624401703476906,
+          9.228399721905589e-05,
+          0.00011615903349593282
+        ],
+        "stale": 0,
+        "successes": 4,
+        "target": "ui:render:scan-status"
+      },
+      {
+        "cancellations": 0,
+        "coalesced": 104,
+        "count": 1,
+        "distribution": {
+          "maximum": 0.002194466011133045,
+          "median": 0.002194466011133045,
+          "minimum": 0.002194466011133045,
+          "outliers": 0,
+          "p25": 0.002194466011133045,
+          "p50": 0.002194466011133045,
+          "p75": 0.002194466011133045,
+          "p95": 0.002194466011133045,
+          "p99": 0.002194466011133045,
+          "spread": 0.0
+        },
+        "events": [
+          [
+            "coalesced",
+            104
+          ],
+          [
+            "commit",
+            1
+          ],
+          [
+            "request",
+            108
+          ]
+        ],
+        "failures": 0,
+        "in_flight": 0,
+        "last_error": null,
+        "peak_in_flight": 1,
+        "rejected": 0,
+        "samples": [
+          0.002194466011133045
+        ],
+        "stale": 0,
+        "successes": 1,
+        "target": "ui:render:thermals"
+      }
+    ],
+    "session_started_at": 1789344553.027171
+  },
+  "operations": [
+    {
+      "generation": 1,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-bcfb1670aaadad959e018226f9fbe52f:connect",
+      "last_error": null,
+      "last_success": 1789344583.728252
+    },
+    {
+      "generation": 0,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-3b786ad11e500df78af9ebd04bdd8342:snapshot:dashboard",
+      "last_error": null,
+      "last_success": null
+    },
+    {
+      "generation": 0,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-3b786ad11e500df78af9ebd04bdd8342:node_snapshot",
+      "last_error": null,
+      "last_success": null
+    },
+    {
+      "generation": 25,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-3b786ad11e500df78af9ebd04bdd8342:component:cpu",
+      "last_error": null,
+      "last_success": 1789344631.5519435
+    },
+    {
+      "generation": 25,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-3b786ad11e500df78af9ebd04bdd8342:component:network",
+      "last_error": null,
+      "last_success": 1789344631.551812
+    },
+    {
+      "generation": 13,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-3b786ad11e500df78af9ebd04bdd8342:component:memory",
+      "last_error": null,
+      "last_success": 1789344631.245195
+    },
+    {
+      "generation": 9,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-3b786ad11e500df78af9ebd04bdd8342:component:gpu",
+      "last_error": null,
+      "last_success": 1789344631.2449162
+    },
+    {
+      "generation": 0,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-bcfb1670aaadad959e018226f9fbe52f:snapshot:dashboard",
+      "last_error": null,
+      "last_success": null
+    },
+    {
+      "generation": 0,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-bcfb1670aaadad959e018226f9fbe52f:node_snapshot",
+      "last_error": null,
+      "last_success": null
+    },
+    {
+      "generation": 12,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-bcfb1670aaadad959e018226f9fbe52f:component:cpu",
+      "last_error": null,
+      "last_success": 1789344605.5994606
+    },
+    {
+      "generation": 12,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-bcfb1670aaadad959e018226f9fbe52f:component:network",
+      "last_error": null,
+      "last_success": 1789344605.5880952
+    },
+    {
+      "generation": 7,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-bcfb1670aaadad959e018226f9fbe52f:component:memory",
+      "last_error": null,
+      "last_success": 1789344605.599267
+    },
+    {
+      "generation": 4,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-bcfb1670aaadad959e018226f9fbe52f:component:gpu",
+      "last_error": null,
+      "last_success": 1789344604.4462233
+    },
+    {
+      "generation": 3,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-3b786ad11e500df78af9ebd04bdd8342:process_candidates",
+      "last_error": null,
+      "last_success": 1789344612.2555802
+    },
+    {
+      "generation": 1,
+      "has_result": true,
+      "in_flight": false,
+      "key": "node:node-3b786ad11e500df78af9ebd04bdd8342:storage",
+      "last_error": null,
+      "last_success": 1789344609.0514355
+    }
+  ],
+  "placement": null,
+  "render": {
+    "coalesced": 106,
+    "commits": 117,
+    "pending": 1,
+    "requests": 226,
+    "stale_rejections": 0
+  }
+}
