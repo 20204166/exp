@@ -434,9 +434,19 @@ PAIRING_PENDING_TTL_SECONDS = 300.0
 
 def handle_pairing_request(controller: Any, request: PairingRequest) -> dict[str, Any]:
     """Ask the target's local user before persisting a pending pairing."""
+    LOGGER.info(
+        "Pair request received from %s (identity: %s, transport: %s)",
+        request.caller_node_id.value,
+        request.identity_fingerprint,
+        request.transport_fingerprint,
+    )
 
     pairing_lock = controller.__dict__.setdefault("_pairing_lock", threading.Lock())
     if not pairing_lock.acquire(blocking=False):
+        LOGGER.warning(
+            "Pair request from %s rejected: another pairing already in progress",
+            request.caller_node_id.value,
+        )
         return {"approved": False}
     result: dict[str, Any] = {"approved": False}
     completed = threading.Event()
@@ -446,6 +456,11 @@ def handle_pairing_request(controller: Any, request: PairingRequest) -> dict[str
     def ask_on_ui() -> None:
         try:
             window = _window_symbols()
+            LOGGER.info("Showing pairing dialog for %s", request.caller_node_id.value)
+            try:
+                controller.master.lift()
+            except Exception:
+                pass
             approved = window.messagebox.askyesno(
                 "Approve peer pairing",
                 (
@@ -455,6 +470,11 @@ def handle_pairing_request(controller: Any, request: PairingRequest) -> dict[str
                     f"Requested permissions: {', '.join(sorted(p.value for p in request.permissions))}"
                 ),
                 parent=controller.master,
+            )
+            LOGGER.info(
+                "Pairing dialog answered for %s: approved=%s",
+                request.caller_node_id.value,
+                approved,
             )
             if not approved:
                 return
@@ -510,14 +530,27 @@ def handle_pairing_request(controller: Any, request: PairingRequest) -> dict[str
                             "expires_at": pending.expires_at,
                         }
                     )
+        except Exception:
+            LOGGER.exception(
+                "Pairing dialog error for %s", request.caller_node_id.value
+            )
         finally:
             completed.set()
 
     try:
         controller._submit_ui(ask_on_ui)
         if not completed.wait(60.0):
+            LOGGER.warning(
+                "Pair request from %s timed out waiting for user approval",
+                request.caller_node_id.value,
+            )
             with token_lock:
                 request_active = False
+        LOGGER.info(
+            "Pair request from %s complete: approved=%s",
+            request.caller_node_id.value,
+            result.get("approved"),
+        )
         return result
     finally:
         pairing_lock.release()
