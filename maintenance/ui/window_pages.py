@@ -270,11 +270,20 @@ def refresh_nodes(controller: Any) -> None:
     page = getattr(controller, "nodes_page", None)
     if page is None:
         return
-    page.set_discovery_enabled(controller._cluster_state.discovery_enabled)
-    page.refresh_discovered(controller._nodes_peer_specs())
-    page.refresh_trusted(controller._nodes_trusted_specs())
-    page.refresh_manual(controller._nodes_manual_specs())
-    page.refresh_cluster_membership(controller._nodes_cluster_spec())
+
+    def _apply(_intent: ui_render.RenderIntent) -> None:
+        page.set_discovery_enabled(controller._cluster_state.discovery_enabled)
+        page.refresh_discovered(controller._nodes_peer_specs())
+        page.refresh_trusted(controller._nodes_trusted_specs())
+        page.refresh_manual(controller._nodes_manual_specs())
+        page.refresh_cluster_membership(controller._nodes_cluster_spec())
+
+    controller._request_render(
+        ui_render.RenderIntent(
+            target="nodes-page", payload=True, payload_set=True, priority=1
+        ),
+        _apply,
+    )
 
 
 def set_nodes_status(controller: Any, message: str, *, error: bool) -> None:
@@ -292,5 +301,15 @@ def set_nodes_status(controller: Any, message: str, *, error: bool) -> None:
 
 def refresh_cluster(controller: Any) -> None:
     page = getattr(controller, "cluster_page", None)
-    if page is not None:
+    if page is None:
+        return
+
+    def _apply(_intent: ui_render.RenderIntent) -> None:
         page.refresh_nodes(controller._cluster_specs())
+
+    controller._request_render(
+        ui_render.RenderIntent(
+            target="cluster-page", payload=True, payload_set=True, priority=1
+        ),
+        _apply,
+    )

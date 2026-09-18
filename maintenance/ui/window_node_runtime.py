@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from maintenance.components import NodeSelection
 from maintenance.nodes import NodeContext, NodeId, node_operation_key
+from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui.target_state import render_target_state, target_status_text
 
 DASHBOARD_PAGE = "dashboard"
@@ -75,6 +76,18 @@ def schedule_selected_node_scan(controller: Any) -> None:
 
 
 def rebuild_node_selector(controller: Any) -> None:
+    render = controller._render_coordinator()
+    if render is not None:
+        render.schedule_transition(
+            "rebuild-node-selector",
+            150,
+            lambda: _apply_rebuild_node_selector(controller),
+        )
+    else:
+        _apply_rebuild_node_selector(controller)
+
+
+def _apply_rebuild_node_selector(controller: Any) -> None:
     frame = getattr(controller, "_node_selector_frame", None)
     if frame is not None:
         try:
@@ -239,6 +252,22 @@ def sync_selected_context_mirrors(controller: Any, context: NodeContext) -> None
 
 
 def render_selected_node(controller: Any, context: NodeContext) -> None:
+    def _apply(_intent: ui_render.RenderIntent) -> None:
+        _do_render_selected_node(controller, context)
+
+    controller._request_render(
+        ui_render.RenderIntent(
+            target="selected-node",
+            node_id=context.node_id,
+            payload=True,
+            payload_set=True,
+            priority=2,
+        ),
+        _apply,
+    )
+
+
+def _do_render_selected_node(controller: Any, context: NodeContext) -> None:
     snapshot = context.snapshot
     node_title_label = getattr(controller, "node_title_label", None)
     if node_title_label is not None:

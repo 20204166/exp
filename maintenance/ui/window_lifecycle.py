@@ -83,6 +83,7 @@ def sync_render_visibility(controller: Any, active_page: str | None) -> None:
     if render is None:
         return
     dashboard_visible = active_page == window.DASHBOARD_PAGE
+    render.set_visible("selected-node", dashboard_visible)
     render.set_visible("dashboard-snapshot", dashboard_visible)
     render.set_visible(
         "scan-status", active_page in {window.DASHBOARD_PAGE, window.PREFERENCES_PAGE}
@@ -90,6 +91,8 @@ def sync_render_visibility(controller: Any, active_page: str | None) -> None:
     render.set_visible("dashboard-discovery", dashboard_visible)
     render.set_visible(window.THERMALS_PAGE, active_page == window.THERMALS_PAGE)
     render.set_visible("discovery-pages", discovery_pages_visible)
+    render.set_visible("nodes-page", active_page == window.NODES_PAGE)
+    render.set_visible("cluster-page", active_page == window.CLUSTER_PAGE)
     render.set_visible("nodes-status", active_page == window.NODES_PAGE)
     for feature in controller._feature_catalog.all():
         render.set_visible(f"component:{feature.key}", dashboard_visible)
