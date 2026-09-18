@@ -62,9 +62,7 @@ class ButtonCoordinator:
             return
         if widget not in record.widgets:
             record.widgets.append(widget)
-        config = getattr(widget, "config", None)
-        if config is None:
-            config = getattr(widget, "configure", None)
+        config = self._widget_config(widget)
         if config is not None:
             try:
                 config(command=self.command(action_id))
@@ -90,16 +88,15 @@ class ButtonCoordinator:
             if self._observer is not None
             else None
         )
-        observer = self._observer
         try:
             record.callback()
         except Exception as error:
-            if token is not None and observer is not None:
-                observer.finish(token, outcome="failure", detail=type(error).__name__)
+            if token is not None:
+                self._observer.finish(token, outcome="failure", detail=type(error).__name__)
             raise
         else:
-            if token is not None and observer is not None:
-                observer.finish(token)
+            if token is not None:
+                self._observer.finish(token)
         return True
 
     def set_enabled(self, action_id: str, enabled: bool) -> None:
@@ -124,13 +121,23 @@ class ButtonCoordinator:
                 del self._actions[action_id]
 
     @staticmethod
+    def _widget_config(widget: Any) -> Any:
+        """Return the tkinter config callable for *widget*, trying both names.
+
+        Tkinter exposes both ``.config`` and ``.configure``; test doubles may
+        provide only one.  Returns ``None`` when neither is present.
+        """
+        config = getattr(widget, "config", None)
+        if config is None:
+            config = getattr(widget, "configure", None)
+        return config
+
+    @staticmethod
     def _apply_state(widget: Any, enabled: bool) -> bool:
         if not ButtonCoordinator._widget_exists(widget):
             return False
         state = "normal" if enabled else "disabled"
-        config = getattr(widget, "config", None)
-        if config is None:
-            config = getattr(widget, "configure", None)
+        config = ButtonCoordinator._widget_config(widget)
         if config is None:
             return True
         try:
