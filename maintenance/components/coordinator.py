@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from maintenance.observability import ObservabilityWatcher, ObservationToken
+from maintenance.observability import EventKind, ObservabilityWatcher, ObservationToken
 
 from .placement import (
     PlacementDecision,
@@ -420,6 +420,7 @@ class AppCoordinator:
         state = self.state(key)
         if state.in_flight:
             state.rerun_requested = True
+            self._record_observer_event(key, "coalesced")
             return state.generation, False
         generation = self._claim_run(state)
         return generation, True
@@ -541,9 +542,9 @@ class AppCoordinator:
         if self._on_activity is not None:
             self._on_activity()
 
-    def _record_observer_event(self, key: str, event: str) -> None:
+    def _record_observer_event(self, key: str, event: EventKind) -> None:
         if self._observer is not None:
-            self._observer.record_event(f"app:{key}", event)  # type: ignore[arg-type]
+            self._observer.record_event(f"app:{key}", event)
 
     def _invoke_progress(self, key: str, generation: int, message: str) -> None:
         state = self._states.get(key)
@@ -654,6 +655,7 @@ class AppCoordinator:
 
         state = self._states.get(key)
         if state is None or generation != state.generation or not state.in_flight:
+            self._record_observer_event(key, "stale")
             return False, False
         rerun_requested = self._settle_run(state)
         if state.cancelled:

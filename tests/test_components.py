@@ -1417,6 +1417,30 @@ class AppCoordinatorTests(unittest.TestCase):
         metric = observer.snapshot().metrics[0]
         self.assertEqual(metric.coalesced, 1)
 
+    def test_manual_begin_coalescing_is_observed(self) -> None:
+        observer = ObservabilityWatcher()
+        coordinator = AppCoordinator(observer=observer)
+
+        coordinator.begin("scan")
+        generation, started = coordinator.begin("scan")
+
+        self.assertFalse(started)
+        self.assertEqual(generation, 1)
+        metric = observer.snapshot().metrics[0]
+        self.assertEqual(metric.target, "app:scan")
+        self.assertEqual(metric.coalesced, 1)
+
+    def test_manual_finish_stale_generation_is_observed(self) -> None:
+        observer = ObservabilityWatcher()
+        coordinator = AppCoordinator(observer=observer)
+        generation, started = coordinator.begin("scan")
+
+        self.assertTrue(started)
+        self.assertFalse(coordinator.finish("scan", generation + 1, result="late")[0])
+        metric = observer.snapshot().metrics[0]
+        self.assertEqual(metric.target, "app:scan")
+        self.assertEqual(metric.stale, 1)
+
     def test_late_operation_completion_is_observed_as_stale(self) -> None:
         observer = ObservabilityWatcher()
         coordinator = AppCoordinator(observer=observer)
