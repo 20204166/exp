@@ -1069,9 +1069,11 @@ class AppWindowTests(unittest.TestCase):
     def test_busy_start_resets_progress_and_cancels_hold(self) -> None:
         window = self.make_window()
         window._show_progress("Scanning CPU...")
-        transition = window._completion_transition()
-        transition.start(500, lambda: None)
-        pending_id = transition.pending_id
+
+        render = window._render_coordinator()
+        assert render is not None
+        render.schedule_transition("completion", 500, lambda: None)
+        pending_id = render._transitions["completion"].pending_id
         self.assertIsNotNone(pending_id)
 
         window._set_busy(True)

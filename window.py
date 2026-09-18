@@ -110,7 +110,6 @@ from maintenance.ui import preferences_page as ui_preferences
 from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui import settings_home as ui_settings_home
 from maintenance.ui import styles as ui_styles
-from maintenance.ui import transition as ui_transition
 from maintenance.ui import window_components as ui_window_components
 from maintenance.ui import window_context as ui_window_context
 from maintenance.ui import window_discovery as ui_window_discovery
@@ -998,9 +997,6 @@ class AppWindow:
 
     def _set_busy(self, is_busy: bool) -> None:
         ui_window_lifecycle.set_busy(self, is_busy)
-
-    def _completion_transition(self) -> ui_transition.PendingTransition:
-        return ui_window_lifecycle.completion_transition(self)
 
     def _cancel_analysis(self) -> None:
         ui_window_lifecycle.cancel_analysis(self)

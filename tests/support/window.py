@@ -15,6 +15,7 @@ from maintenance.components.coordinator import (
     AppCoordinator,
     ComponentRefreshScheduler,
 )
+from maintenance.ui.render_coordinator import UICoordinator
 from tests.support.scheduling import TimerMaster
 from window import AppWindow
 
@@ -28,6 +29,10 @@ def make_window(master: Any | None = None, **overrides: Any) -> Any:
 
     window: Any = object.__new__(AppWindow)
     window.master = master if master is not None else TimerMaster()
+    window._ui_coordinator = UICoordinator(
+        schedule=lambda delay, cb: window.master.after(delay, cb),
+        cancel=lambda identifier: window.master.after_cancel(identifier) or True,
+    )
     window._is_closing = False
     window._pending_after_ids = set()
     window._background_poll_id = None

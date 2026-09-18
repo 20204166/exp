@@ -55,10 +55,13 @@ def show_snapshot(controller: Any, snapshot: Any, *, node_snapshot: Any = None) 
             )
         )
     )
-    controller._completion_transition().start(
-        controller.COMPLETION_HOLD_MILLISECONDS,
-        controller._show_ready_after_completion_hold,
-    )
+    render = controller._render_coordinator()
+    if render is not None:
+        render.schedule_transition(
+            "completion",
+            controller.COMPLETION_HOLD_MILLISECONDS,
+            controller._show_ready_after_completion_hold,
+        )
     controller._refresh_health()
     controller._refresh_thermals_page(
         controller._thermal_render_state(context) if context is not None else None

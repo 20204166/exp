@@ -14,7 +14,6 @@ from maintenance.components.background_orchestration import (
 from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui import scan_status
 from maintenance.ui import styles as ui_styles
-from maintenance.ui import transition as ui_transition
 from maintenance.ui.window_supports.timer_delivery import TimerDelivery
 
 LOGGER = logging.getLogger(__name__)
@@ -148,7 +147,9 @@ def set_busy(controller: Any, is_busy: bool) -> None:
             coordinator.set_enabled("preferences:cancel-scan", is_busy)
     if is_busy:
         controller.__dict__["_scan_progress_count"] = 0
-        controller._completion_transition().cancel()
+        render = controller._render_coordinator()
+        if render is not None:
+            render.cancel_transition("completion")
 
         def apply_scanning_state(label: Any, bar: Any) -> None:
             if bar is not None:
@@ -164,15 +165,6 @@ def set_busy(controller: Any, is_busy: bool) -> None:
                 bar.stop()
 
         controller._for_each_presentation_target(apply_ready_state)
-
-
-def completion_transition(controller: Any) -> ui_transition.PendingTransition:
-    return controller.__dict__.setdefault(
-        "_completion_transition_obj",
-        ui_transition.PendingTransition(
-            controller._schedule_timer, controller._cancel_timer
-        ),
-    )
 
 
 def cancel_analysis(controller: Any) -> None:
@@ -338,7 +330,9 @@ def close(controller: Any) -> None:
 
 
 def reset_progress_bar(controller: Any) -> None:
-    controller._completion_transition().cancel()
+    render = controller._render_coordinator()
+    if render is not None:
+        render.cancel_transition("completion")
     controller._for_each_presentation_target(
         lambda _label, bar: scan_status.apply_reset(bar) if bar is not None else None
     )
