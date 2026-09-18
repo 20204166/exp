@@ -45,7 +45,13 @@ except ImportError:
 SERVICE_TYPE = "_system-analyzer._tcp.local."
 PROTOCOL_VERSION = "1"
 SUPPORTED_PROTOCOL_VERSIONS = frozenset({"1"})
-DEFAULT_TTL_SECONDS = 120.0
+# mDNS SRV/TXT records have a protocol TTL of 4500 s (RFC 6762 §11.3).
+# python-zeroconf's ServiceBrowser only fires update_service when a record
+# CHANGES, not on routine re-announcements of the same data.  Setting this
+# below the protocol TTL turns expire_stale() into a premature-eviction trap
+# rather than a dead-peer safety net.  4800 s = 4500 s + 6.7 % margin so our
+# safety net fires slightly after the protocol-level expiry, never before.
+DEFAULT_TTL_SECONDS = 4800.0
 REAP_TICK_SECONDS = 10.0
 
 EventKind = str
@@ -418,6 +424,13 @@ class NetworkDiscovery:
                 if now - record.last_seen > self._ttl_seconds
             ]
             for node_id in stale:
+                age = now - self._peers[node_id].last_seen
+                LOGGER.info(
+                    "Dropping stale peer %s (last_seen %.0f s ago, ttl %.0f s)",
+                    node_id,
+                    age,
+                    self._ttl_seconds,
+                )
                 self._drop_peer(node_id)
 
     def _emit(self, kind: EventKind, payload: Any) -> None:

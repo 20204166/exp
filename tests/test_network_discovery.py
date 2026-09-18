@@ -648,5 +648,96 @@ class NetworkDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(discovery.peers()), 1)
 
 
+class DiscoveryContinuityTtlTests(unittest.TestCase):
+    """DEFAULT_TTL_SECONDS must not evict peers before mDNS protocol TTL.
+
+    python-zeroconf's ServiceBrowser fires update_service only when a record
+    CHANGES, not on routine re-announcements.  The application TTL must exceed
+    the mDNS SRV/TXT protocol TTL (RFC 6762 §11.3: 4500 s) so that
+    expire_stale() is a dead-peer safety net, not a premature-eviction trap.
+
+    Evidence label: UNIT / DISCOVERY CONTINUITY REGRESSION
+    These tests document the Phase 12I root-cause fix (2026-09-18).
+    """
+
+    _MDNS_SERVICE_RECORD_TTL = 4500.0  # RFC 6762 §11.3 SRV/TXT default
+
+    def test_default_ttl_exceeds_mdns_protocol_record_ttl(self) -> None:
+        from maintenance.components.network_discovery import DEFAULT_TTL_SECONDS
+
+        self.assertGreater(
+            DEFAULT_TTL_SECONDS,
+            self._MDNS_SERVICE_RECORD_TTL,
+            "DEFAULT_TTL_SECONDS must exceed the mDNS SRV/TXT protocol TTL "
+            "(4500 s) so expire_stale() never fires while Zeroconf's records "
+            "are still live.",
+        )
+
+    def test_peer_not_dropped_at_120_seconds_without_update(self) -> None:
+        """Regression: peer must survive 120 s with no update_service callback."""
+        discovery, backend, events, clock = _discovery()
+        discovery.start()
+        backend.add(f"peer.{SERVICE_TYPE}", _info("peer"))
+        # Simulate 120 s of silence from Zeroconf (no update_service fired)
+        clock.now = 120.1
+        discovery.expire_stale()
+        self.assertEqual(
+            len(discovery.peers()),
+            1,
+            "Peer must not be evicted at 120 s — that was the Phase 12I bug.",
+        )
+        self.assertFalse(
+            any(kind == "lost" for kind, _ in events),
+            "No lost event must fire at 120 s.",
+        )
+
+    def test_peer_not_dropped_within_mdns_protocol_ttl(self) -> None:
+        """Peer must survive the full mDNS protocol TTL without any event."""
+        from maintenance.components.network_discovery import DEFAULT_TTL_SECONDS
+
+        # Use the real DEFAULT_TTL_SECONDS so the test is pinned to the constant.
+        discovery, backend, _events, clock = _discovery(ttl=DEFAULT_TTL_SECONDS)
+        discovery.start()
+        backend.add(f"peer.{SERVICE_TYPE}", _info("peer"))
+        # Advance exactly to the mDNS protocol TTL boundary (4500 s after first seen)
+        clock.now = clock.now + self._MDNS_SERVICE_RECORD_TTL
+        discovery.expire_stale()
+        self.assertEqual(
+            len(discovery.peers()),
+            1,
+            "Peer must still be present at the mDNS protocol TTL boundary.",
+        )
+
+    def test_safety_net_drops_peer_beyond_app_ttl(self) -> None:
+        """expire_stale() must still fire for genuinely absent peers."""
+        from maintenance.components.network_discovery import DEFAULT_TTL_SECONDS
+
+        discovery, backend, events, clock = _discovery()
+        discovery.start()
+        backend.add(f"peer.{SERVICE_TYPE}", _info("peer"))
+        clock.now = DEFAULT_TTL_SECONDS + 1.0
+        discovery.expire_stale()
+        self.assertEqual(
+            discovery.peers(),
+            (),
+            "Safety net must drop peer after DEFAULT_TTL_SECONDS.",
+        )
+        self.assertTrue(any(kind == "lost" for kind, _ in events))
+
+    def test_remove_event_immediately_drops_peer_independent_of_ttl(self) -> None:
+        """remove_service fires immediately and must not wait for TTL."""
+        discovery, backend, events, _clock = _discovery()
+        discovery.start()
+        backend.add(f"peer.{SERVICE_TYPE}", _info("peer"))
+        self.assertEqual(len(discovery.peers()), 1)
+        backend.remove(f"peer.{SERVICE_TYPE}")
+        self.assertEqual(
+            discovery.peers(),
+            (),
+            "remove_service must drop peer immediately without waiting for TTL.",
+        )
+        self.assertTrue(any(kind == "lost" for kind, _ in events))
+
+
 if __name__ == "__main__":
     unittest.main()

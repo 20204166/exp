@@ -1286,22 +1286,24 @@ Get-Content "$env:LOCALAPPDATA\system-analyzer\system-analyzer.log" -Tail 50
 | `1.6.1.2` | Stable port 27321, UFW profile |
 | `1.6.1.3` | `_lan_address_key` — LAN address preference over VPN |
 | `1.6.1.4` | Pairing diagnostic logging + `lift()` before dialogue |
+| `1.6.1.5` | Phase 12I: mDNS discovery continuity — peer stale TTL 120 s → 4800 s |
 
 All wheels are in `dist/`. Install with:
 ```bash
 # Linux
-pip install dist/system_analyzer-1.6.1.4-py3-none-any.whl --force-reinstall --break-system-packages
+pip install dist/system_analyzer-1.6.1.5-py3-none-any.whl --force-reinstall --break-system-packages
 
 # Windows (PowerShell)
-pip install system_analyzer-1.6.1.4-py3-none-any.whl --force-reinstall
+pip install system_analyzer-1.6.1.5-py3-none-any.whl --force-reinstall
 ```
 
-### Current status (2026-09-18 ~13:30)
+### Current status (2026-09-18 ~15:16)
 
 - Linux listener: `0.0.0.0:27321` (check with `ss -tlnp 'sport = :27321'`)
-- Linux version: `1.6.1.4`
-- Windows version needed: `1.6.1.3` or `1.6.1.4`
-- Next action: controlled pair with both screens attended; click YES on Linux
+- Linux version: `1.6.1.5`
+- Windows version needed: `1.6.1.5`
+- Phase 12I fix deployed; observe ≥10 min after Windows installs 1.6.1.5 to confirm peer stays visible
+- Next action (after 12I confirmed): controlled pair with both screens attended; click YES on Linux
 
 ---
 
@@ -1535,3 +1537,70 @@ finding.
 
 No source code was changed on Windows during this pass. No Pair attempts were
 made — this was pure read-only retesting while waiting on Linux-side discovery.
+
+---
+
+## Phase 12I — mDNS Discovery Continuity (2026-09-18)
+
+**Observation:** Linux peer appears on Windows Nodes & Connections, then disappears after ~2 minutes
+despite TCP connectivity remaining healthy and Linux still advertising.
+
+**Root cause (proven before code change):**
+
+`NetworkDiscovery.DEFAULT_TTL_SECONDS = 120.0` was shorter than the mDNS protocol record
+re-announcement interval.
+
+Chain:
+1. Zeroconf 0.151.3 `ServiceBrowser.async_update_records()` fires `update_service` only when
+   a record is **new or changed** — the guard is `if old_record is not None: continue`, which
+   skips re-announcements of unchanged data.
+2. mDNS A/AAAA records have a default TTL of 1200 s; SRV/TXT records default to 4500 s
+   (RFC 6762 §11.3). Zeroconf refreshes them in its cache at 80% of the TTL (960 s and 3600 s
+   respectively). Under normal operation the cached records never expire, so `update_service`
+   never fires.
+3. `last_seen` in `NetworkDiscovery._peers` is set only when `add_service` or `update_service`
+   arrives. With no `update_service` callbacks, `last_seen` is frozen at initial discovery time.
+4. `expire_stale()` is called every 10 s by `DiscoverySession.tick()` via
+   `coordinator.discovery_tick()`. At `now - last_seen > 120.0` → peer silently dropped.
+5. Result: Linux peer disappears from Windows UI at T ≈ 130 s even though TCP on port 27321
+   is healthy, Linux is still advertising, and Zeroconf has never fired `remove_service`.
+
+**Fix (1.6.1.5 — `maintenance/components/network_discovery.py`):**
+
+`DEFAULT_TTL_SECONDS` changed from `120.0` to `4800.0` (4500 s mDNS max TTL + 6.7% margin).
+
+Semantics after fix:
+- Peer expiry is driven by Zeroconf's own `remove_service` event (fired on graceful shutdown or
+  protocol-level TTL expiry after prolonged absence).
+- `expire_stale()` is a dead-peer safety net that only activates after the protocol-level TTL
+  has elapsed — i.e., only when Zeroconf itself has failed to deliver `remove_service`.
+- A clean shutdown (`zc.close()` or OS shutdown) still produces immediate removal via
+  `remove_service` (goodnight packet at TTL=1).
+- An abrupt disconnect (process killed, network cable) is caught by Zeroconf within 4500 s
+  (protocol TTL expiry) and then by `expire_stale()` at 4800 s as a final safety net.
+
+**Diagnostic logging added:**
+`expire_stale()` now logs at INFO level when it drops a peer:
+```
+Dropping stale peer <id> (last_seen N s ago, ttl 4800 s)
+```
+This makes safety-net activations observable in the log.
+
+**Tests added (`tests/test_network_discovery.py`, class `DiscoveryContinuityTtlTests`):**
+- `test_default_ttl_exceeds_mdns_protocol_record_ttl` — constant > 4500 s
+- `test_peer_not_dropped_at_120_seconds_without_update` — regression for the Phase 12I bug
+- `test_peer_not_dropped_within_mdns_protocol_ttl` — peer survives full mDNS TTL
+- `test_safety_net_drops_peer_beyond_app_ttl` — safety net still works
+- `test_remove_event_immediately_drops_peer_independent_of_ttl` — remove_service still immediate
+
+**Physical retest protocol:**
+1. Install `1.6.1.5` on **both** Linux and Windows.
+2. Start Linux app first; confirm `ss -tlnp 'sport = :27321'` shows listener.
+3. Start Windows app; confirm Linux peer appears in Nodes & Connections.
+4. Wait ≥10 minutes without touching either machine.
+5. Confirm Linux peer is **still visible** on Windows after 10 minutes.
+6. If confirmed: proceed to Phase 12H controlled pair (both screens attended).
+7. If still disappearing: the removal is coming from a different source — collect logs.
+
+**Scope boundary:** this fix touches ONLY `maintenance/components/network_discovery.py`.
+No changes to pairing, TLS, trust, roles, cluster, or UI.
