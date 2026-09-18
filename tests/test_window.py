@@ -78,6 +78,36 @@ class AppWindowTests(unittest.TestCase):
             self.assertTrue(path.is_file())
             self.assertEqual(path.read_text(encoding="utf-8"), '{"ok": true}')
 
+    def test_dashboard_share_paths_use_one_service_start_mechanism(self) -> None:
+        window = self.make_window()
+        service = Mock()
+        window._peer_service = service
+        window._reschedule_dashboard_share_timer = Mock()
+        window._nodes_status = Mock()
+        window._refresh_cluster_page = Mock()
+        window._refresh_nodes_page = Mock()
+        window._show_dashboard_page = Mock()
+        window._cluster_state = Mock(
+            peer_grants=[
+                Mock(caller_node_id="caller-a"),
+                Mock(caller_node_id="caller-b"),
+            ]
+        )
+
+        window._share_dashboard()
+        window._share_dashboard_with("caller-c")
+
+        self.assertEqual(
+            set(window._peer_dashboard_shares),
+            {
+                "caller-a",
+                "caller-b",
+                "caller-c",
+            },
+        )
+        self.assertEqual(service.start_dashboard_share_for.call_count, 3)
+        self.assertEqual(window._reschedule_dashboard_share_timer.call_count, 2)
+
     def test_background_queue_delivers_payload_on_main_thread_poll(self) -> None:
         window = self.make_window()
         callback = Mock()

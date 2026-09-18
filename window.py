@@ -4,7 +4,7 @@ import os
 import threading
 import time
 import tkinter as tk
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue
@@ -774,38 +774,37 @@ class AppWindow:
             self.__dict__["_dashboard_share_timer_id"] = None
             self._nodes_status("Dashboard sharing stopped")
         else:
-            if service is None:
-                self._start_peer_listener()
-                service = self.__dict__.get("_peer_service")
-            if service is not None:
-                expires_at = now + 300.0
-                shares = self.__dict__.setdefault("_peer_dashboard_shares", {})
-                for grant in self._cluster_state.peer_grants:
-                    shares[grant.caller_node_id] = expires_at
-                    service.start_dashboard_share_for(
-                        NodeId(grant.caller_node_id), expires_at=expires_at
-                    )
-                self._reschedule_dashboard_share_timer()
+            if self._start_dashboard_shares(
+                grant.caller_node_id for grant in self._cluster_state.peer_grants
+            ):
                 self._nodes_status("Dashboard shared read-only for 5 minutes")
         self._refresh_cluster_page()
         self._refresh_nodes_page()
         self._show_dashboard_page()
 
     def _share_dashboard_with(self, caller_node_id: str) -> None:
+        if not self._start_dashboard_shares((caller_node_id,)):
+            return
+        self._nodes_status("Dashboard shared read-only for 5 minutes")
+        self._refresh_cluster_page()
+        self._refresh_nodes_page()
+
+    def _start_dashboard_shares(self, caller_node_ids: Iterable[str]) -> bool:
         service = self.__dict__.get("_peer_service")
         if service is None:
             self._start_peer_listener()
             service = self.__dict__.get("_peer_service")
         if service is None:
-            return
+            return False
         expires_at = time.time() + 300.0
         shares = self.__dict__.setdefault("_peer_dashboard_shares", {})
-        shares[caller_node_id] = expires_at
-        service.start_dashboard_share_for(NodeId(caller_node_id), expires_at=expires_at)
+        for caller_node_id in caller_node_ids:
+            shares[caller_node_id] = expires_at
+            service.start_dashboard_share_for(
+                NodeId(caller_node_id), expires_at=expires_at
+            )
         self._reschedule_dashboard_share_timer()
-        self._nodes_status("Dashboard shared read-only for 5 minutes")
-        self._refresh_cluster_page()
-        self._refresh_nodes_page()
+        return True
 
     def _stop_sharing_with(self, caller_node_id: str) -> None:
         service = self.__dict__.get("_peer_service")
