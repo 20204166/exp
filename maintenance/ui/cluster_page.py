@@ -72,6 +72,7 @@ class ClusterNodeSpec:
     role_editable: bool = False
     has_active_job: bool = False
     share_active: bool = False
+    is_cluster_member: bool = False
 
 
 class ClusterPage:
@@ -359,6 +360,7 @@ class ClusterPage:
         if (
             not spec.is_local
             and spec.trust in ("trusted", "authorised")
+            and not spec.is_cluster_member
             and on_join_cluster is not None
         ):
             join_cluster = self.button_cls(
@@ -409,7 +411,10 @@ class ClusterPage:
         trust_text = node_presentation.trust_label(spec.trust, is_local=spec.is_local)
         pairing_text = _PAIRING_TEXT.get(spec.pairing_state, spec.pairing_state)
         meta = f"{trust_text} · {node_presentation.status_label(spec.status)}"
-        meta += f" · {spec.role.title()}"
+        if not spec.is_local and not spec.is_cluster_member:
+            meta += " · Not in cluster"
+        else:
+            meta += f" · {spec.role.title()}"
         if spec.paused:
             meta += " · Paused"
         if spec.hostname and spec.hostname != spec.display_name:

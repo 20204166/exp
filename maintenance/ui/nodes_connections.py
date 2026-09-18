@@ -126,6 +126,7 @@ class TrustedNodeSpec:
     connection_status: str = "unknown"
     manual_disconnected: bool = False
     retry_automatic: bool = True
+    is_cluster_member: bool = False
 
 
 class NodesConnectionsPage:
@@ -704,7 +705,8 @@ class NodesConnectionsPage:
             manual_disconnected=spec.manual_disconnected,
             retry_automatic=spec.retry_automatic,
         )
-        role_status = f"{node_presentation.trust_label('trusted')} · {conn_label}"
+        membership = spec.role.title() if spec.is_cluster_member else "Not in cluster"
+        role_status = f"{node_presentation.trust_label('trusted')} · {membership} · {conn_label}"
         if spec.target_state != "Unknown":
             role_status += f" · {spec.target_state}"
         if spec.identity_status == "mismatch":

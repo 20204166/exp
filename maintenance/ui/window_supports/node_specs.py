@@ -108,6 +108,9 @@ def trusted_node_specs(
                 connection_status=context.connection.status.value,
                 manual_disconnected=descriptor.id in disconnected,
                 retry_automatic=context.retry.automatic_retry,
+                is_cluster_member=(
+                    assignment is not None and not assignment.revoked
+                ),
             )
         )
     return specs
@@ -206,10 +209,25 @@ def cluster_node_specs(
                 ),
                 target_state=presentation.label,
                 share_active=dashboard_share_active if descriptor.is_local else False,
-                role=descriptor.role,
+                role=(
+                    "coordinator"
+                    if assignment is not None
+                    and not assignment.revoked
+                    and any(r.value == "coordinator" for r in assignment.roles)
+                    else "subcoordinator"
+                    if assignment is not None
+                    and not assignment.revoked
+                    and any(r.value == "subcoordinator" for r in assignment.roles)
+                    else "worker"
+                    if assignment is not None and not assignment.revoked
+                    else descriptor.role
+                ),
                 role_editable=role_editable,
                 has_active_job=(
                     assignment.has_active_job if assignment is not None else False
+                ),
+                is_cluster_member=(
+                    assignment is not None and not assignment.revoked
                 ),
             )
         )
