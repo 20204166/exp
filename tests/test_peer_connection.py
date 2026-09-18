@@ -15,6 +15,7 @@ from maintenance.nodes import (
     PeerFailure,
     RetryState,
 )
+from maintenance.remote_support.protocol import RemoteAuthError, RemoteTransportError
 from tests.support.nodes import make_local_context, make_remote_context
 
 
@@ -207,6 +208,104 @@ class PeerConnectionTests(unittest.TestCase):
         self.assertTrue(self.manager.is_manual_disconnected(self.peer.node_id))
         self.assertIsNone(self.manager.reconcile(0.0))
         self.assertEqual(self.connect.call_count, 0)
+
+
+class TrustSurvivalTests(unittest.TestCase):
+    """TRUST != CONNECTION.
+
+    A transient inability to reach a previously trusted peer MUST NOT destroy
+    trust.  These tests lock in that invariant so it cannot regress silently.
+    """
+
+    def setUp(self) -> None:
+        self.registry = NodeRegistry(
+            make_local_context(
+                provider=Mock(),
+                process_manager=Mock(),
+                file_manager=Mock(),
+                scheduler=Mock(),
+                coordinator=Mock(),
+            )
+        )
+        self.peer = make_remote_context("trusted-peer")
+        self.registry.register_context(self.peer)
+        self.revoke_calls: list[tuple[NodeContext, PeerFailure]] = []
+        self.coordinator = AppCoordinator(
+            runner=lambda worker: worker(),
+            deliver=lambda callback: callback(),
+        )
+        self.manager = PeerConnectionManager(
+            registry=self.registry,
+            coordinator=self.coordinator,
+            connect=Mock(return_value=object()),
+            on_failed=lambda context, failure: self.revoke_calls.append(
+                (context, failure)
+            ),
+        )
+
+    def _initial_trust(self) -> NodeTrustState:
+        return self.peer.descriptor.trust
+
+    def test_remote_transport_error_does_not_revoke_trust(self) -> None:
+        self.manager._connect = Mock(  # type: ignore[attr-defined]
+            side_effect=RemoteTransportError("remote transport failed: TimeoutError: timed out")
+        )
+        initial_trust = self._initial_trust()
+
+        self.manager.reconcile(0.0)
+
+        self.assertEqual(self.peer.descriptor.trust, initial_trust)
+        self.assertEqual(self.peer.connection.status, NodeConnectionStatus.OFFLINE)
+        self.assertEqual(len(self.revoke_calls), 1)
+        self.assertEqual(self.revoke_calls[0][1], PeerFailure.TIMEOUT)
+
+    def test_remote_auth_error_does_not_revoke_trust(self) -> None:
+        # "certificate fingerprint" now classifies as AUTHENTICATION_FAILED
+        # (matches the "certificate" marker added to classify_peer_failure).
+        self.manager._connect = Mock(  # type: ignore[attr-defined]
+            side_effect=RemoteAuthError("peer certificate fingerprint changed")
+        )
+        initial_trust = self._initial_trust()
+
+        self.manager.reconcile(0.0)
+
+        self.assertEqual(self.peer.descriptor.trust, initial_trust)
+        self.assertEqual(
+            self.peer.connection.status, NodeConnectionStatus.AUTHENTICATION_FAILED
+        )
+        self.assertFalse(
+            self.peer.retry.automatic_retry,
+            "auth failure should stop automatic retry to avoid hammering the peer",
+        )
+        self.assertEqual(len(self.revoke_calls), 1)
+        self.assertEqual(self.revoke_calls[0][1], PeerFailure.AUTHENTICATION_FAILED)
+
+    def test_on_failed_callback_receives_failure_but_trust_state_is_unchanged(
+        self,
+    ) -> None:
+        """on_failed signals the caller (e.g. detach_peer) but MUST NOT revoke trust."""
+        self.manager._connect = Mock(  # type: ignore[attr-defined]
+            side_effect=RemoteTransportError("remote transport failed: ConnectionRefusedError: [Errno 111] Connection refused")
+        )
+        self.manager.reconcile(0.0)
+
+        failure_context, failure_reason = self.revoke_calls[0]
+        self.assertIs(failure_context, self.peer)
+        self.assertIn(
+            failure_reason,
+            {PeerFailure.CONNECTION_REFUSED, PeerFailure.ROUTE_FAILURE, PeerFailure.TIMEOUT},
+        )
+        self.assertEqual(failure_context.descriptor.trust, NodeTrustState.TRUSTED)
+
+    def test_multiple_transport_failures_do_not_revoke_trust(self) -> None:
+        self.manager._connect = Mock(  # type: ignore[attr-defined]
+            side_effect=RemoteTransportError("remote transport failed: TimeoutError: timed out")
+        )
+
+        for tick in (0.0, 2.0, 4.0, 8.0, 16.0):
+            self.manager.reconcile(tick)
+
+        self.assertEqual(self.peer.descriptor.trust, NodeTrustState.TRUSTED)
 
 
 if __name__ == "__main__":

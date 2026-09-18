@@ -23,6 +23,35 @@ from maintenance.remote import (
 )
 
 
+def _preferred_candidate_address(addresses: list[str]) -> str:
+    """Select the physical LAN address when a peer advertises multiple IPs.
+
+    Prefers 192.168/16 over 172.16/12 over 10/8 over shared-address-space /
+    VPN ranges (100.64/10), so a VPN tunnel IP does not shadow the local
+    Ethernet address.  Mirrors window_discovery._lan_address_key — keep in
+    sync if the ranking changes.
+    """
+
+    def _rank(addr: str) -> int:
+        parts = addr.split(".")
+        if len(parts) == 4:
+            try:
+                first, second = int(parts[0]), int(parts[1])
+                if first == 192 and second == 168:
+                    return 0
+                if first == 172 and 16 <= second <= 31:
+                    return 1
+                if first == 10:
+                    return 2
+                if first == 100 and 64 <= second <= 127:
+                    return 3
+            except ValueError:
+                pass
+        return 4
+
+    return min(addresses, key=_rank)
+
+
 @dataclass(slots=True)
 class _PairingAttempt:
     node: NodeId
@@ -114,7 +143,11 @@ def _prepare_pairing(
         assert descriptor is not None
         descriptor = replace(descriptor, permissions=READ_PERMISSIONS)
         registry.context(node).descriptor = descriptor
-    host = candidate.addresses[0] if candidate.addresses else candidate.hostname
+    host = (
+        _preferred_candidate_address(candidate.addresses)
+        if candidate.addresses
+        else candidate.hostname
+    )
     record = trusted_node_record(
         node_id=node_id,
         display_name=candidate.hostname
@@ -152,10 +185,11 @@ def _finish_pairing(
     provisioned: bool,
     *,
     role_state: Callable[[Any], Any],
+    error_message: str = "Target did not provision the peer grant",
 ) -> bool:
     if not provisioned:
         _restore_pairing(controller, attempt)
-        controller._nodes_error("Target did not provision the peer grant")
+        controller._nodes_error(error_message)
         return False
     if attempt.descriptor is None:
         try:
@@ -361,13 +395,18 @@ def pair_discovered_node_async(
                 else "Cluster settings could not be saved"
             )
 
-    def on_error(_key: str, _message: str) -> None:
+    def on_error(_key: str, message: str) -> None:
         if not is_current():
             return
+        transport_error = (
+            f"Could not reach target: {message}" if message else "Could not reach target"
+        )
         attempts.pop(attempt.node, None)
-        _finish_pairing(controller, attempt, False, role_state=role_state)
+        _finish_pairing(
+            controller, attempt, False, role_state=role_state, error_message=transport_error
+        )
         if dialog is not None:
-            dialog.show_error("Target did not provision the peer grant")
+            dialog.show_error(transport_error)
 
     controller._coordinator.run(
         key,
@@ -419,7 +458,9 @@ def request_target_grant(
         controller._node_registry.local_id() or NodeId("local")
     ).descriptor
     transport = TLSRemoteTransport(
-        candidate.addresses[0] if candidate.addresses else candidate.hostname,
+        _preferred_candidate_address(candidate.addresses)
+        if candidate.addresses
+        else candidate.hostname,
         candidate.port,
         expected_fingerprint=candidate.transport_fingerprint,
     )

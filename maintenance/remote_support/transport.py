@@ -123,11 +123,8 @@ class SocketRemoteTransport:
         try:
             if cancel_event is not None and cancel_event.is_set():
                 raise RemoteExecutionError("cancelled")
-            connect_timeout = (
-                min(self._timeout, 0.25) if cancel_event else self._timeout
-            )
             with socket_module.create_connection(
-                (self._host, self._port), timeout=connect_timeout
+                (self._host, self._port), timeout=self._timeout
             ) as sock:
                 if self._ssl_context is not None:
                     sock = self._ssl_context.wrap_socket(
@@ -145,9 +142,7 @@ class SocketRemoteTransport:
                         )
                     ):
                         raise RemoteAuthError("peer certificate fingerprint changed")
-                sock.settimeout(
-                    min(self._timeout, 0.25) if cancel_event else self._timeout
-                )
+                sock.settimeout(self._timeout)
                 _send_frame(sock, data, max_bytes=MAX_ENVELOPE_BYTES)
                 body = _recv_frame(
                     sock,
@@ -162,7 +157,9 @@ class SocketRemoteTransport:
         except OSError as error:
             if cancel_event is not None and cancel_event.is_set():
                 raise RemoteExecutionError("cancelled") from error
-            raise RemoteTransportError(f"remote transport failed: {error}") from error
+            raise RemoteTransportError(
+                f"remote transport failed: {type(error).__name__}: {error}"
+            ) from error
         finally:
             if wrapped_socket is not None:
                 wrapped_socket.close()

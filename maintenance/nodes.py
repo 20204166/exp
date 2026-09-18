@@ -99,6 +99,8 @@ def classify_peer_failure(error: BaseException | str) -> PeerFailure:
             "wrong node",
             "caller",
             "target identity",
+            "certificate",
+            "fingerprint",
         )
     ):
         return PeerFailure.AUTHENTICATION_FAILED
