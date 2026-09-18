@@ -1293,6 +1293,15 @@ class SourceIntegrationTests(unittest.TestCase):
         self.assertEqual(analyzer._call_with_cancel(func, cancel_event), "ok")
         func.assert_called_with(cancel_event=cancel_event)
 
+    def test_reset_component_sample_ignores_non_network_components(self) -> None:
+        from algo import Analyzer
+
+        analyzer = Analyzer()
+        with patch.object(analyzer.scanner, "_reset_network_sample") as reset:
+            analyzer.reset_component_sample("cpu")
+
+        reset.assert_not_called()
+
     def test_analyzer_constructor_rejects_removed_compatibility_args(self) -> None:
         from algo import Analyzer
 

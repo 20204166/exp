@@ -82,8 +82,9 @@ class Analyzer:
         Components without persistent sample state are unaffected.
         """
 
-        if key == "network":
-            self.scanner._reset_network_sample()
+        if key != "network":
+            return
+        self.scanner._reset_network_sample()
 
     def process_candidates(
         self,
