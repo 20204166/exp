@@ -12,6 +12,7 @@ import hmac
 import socket as socket_module
 import ssl
 import struct
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from typing import Any
@@ -49,12 +50,15 @@ def _recv_exact(
     *,
     closed_message: str = "connection closed before response",
     cancel_event: Any | None = None,
+    deadline: float | None = None,
 ) -> bytes:
     chunks: list[bytes] = []
     remaining = length
     while remaining:
         if cancel_event is not None and cancel_event.is_set():
             raise RemoteExecutionError("cancelled")
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("operation timed out")
         try:
             chunk = sock.recv(remaining)
         except TimeoutError:
@@ -74,12 +78,14 @@ def _recv_frame(
     max_bytes: int,
     closed_message: str,
     cancel_event: Any | None = None,
+    deadline: float | None = None,
 ) -> bytes:
     header = _recv_exact(
         sock,
         4,
         closed_message=closed_message,
         cancel_event=cancel_event,
+        deadline=deadline,
     )
     length = struct.unpack(">I", header)[0]
     if length > max_bytes:
@@ -89,6 +95,7 @@ def _recv_frame(
         length,
         closed_message=closed_message,
         cancel_event=cancel_event,
+        deadline=deadline,
     )
 
 
@@ -121,6 +128,7 @@ class SocketRemoteTransport:
         if len(data) > MAX_ENVELOPE_BYTES:
             raise RemoteTransportError("request envelope is too large")
         wrapped_socket: Any | None = None
+        deadline = time.monotonic() + self._timeout
         try:
             if cancel_event is not None and cancel_event.is_set():
                 raise RemoteExecutionError("cancelled")
@@ -143,13 +151,17 @@ class SocketRemoteTransport:
                         )
                     ):
                         raise RemoteAuthError("peer certificate fingerprint changed")
-                sock.settimeout(self._timeout)
+                # When a cancel_event is supplied, poll every 0.25 s so
+                # cancellation is responsive; deadline enforces the total budget.
+                recv_timeout = 0.25 if cancel_event is not None else self._timeout
+                sock.settimeout(recv_timeout)
                 _send_frame(sock, data, max_bytes=MAX_ENVELOPE_BYTES)
                 body = _recv_frame(
                     sock,
                     max_bytes=MAX_ENVELOPE_BYTES,
                     closed_message="connection closed before response",
                     cancel_event=cancel_event,
+                    deadline=deadline if cancel_event is not None else None,
                 )
         except RemoteTransportError:
             raise

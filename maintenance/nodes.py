@@ -808,6 +808,12 @@ class NodeRegistry:
         action capabilities here; a future pairing flow promotes it.
         """
 
+        if not candidate.stable_id or candidate.stable_id == LOCAL_NODE_ID:
+            return None
+        if candidate.port is not None and (
+            candidate.port <= 0 or candidate.port > 65535
+        ):
+            return None
         if candidate.stable_id == (
             self._local_id.value if self._local_id else LOCAL_NODE_ID
         ):
