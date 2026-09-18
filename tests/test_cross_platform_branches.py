@@ -371,5 +371,44 @@ class NoFirewallMutationTests(unittest.TestCase):
         )
 
 
+class LanAddressPreferenceTests(unittest.TestCase):
+    """_lan_address_key must rank physical LAN addresses before VPN tunnel IPs."""
+
+    def _key(self, addr: str) -> int:
+        from maintenance.ui.window_discovery import _lan_address_key
+        return _lan_address_key(addr)
+
+    def test_192_168_ranks_best(self) -> None:
+        self.assertEqual(self._key("192.168.55.107"), 0)
+
+    def test_172_16_ranks_second(self) -> None:
+        self.assertEqual(self._key("172.16.0.1"), 1)
+
+    def test_172_31_ranks_second(self) -> None:
+        self.assertEqual(self._key("172.31.255.1"), 1)
+
+    def test_10_ranks_third(self) -> None:
+        self.assertEqual(self._key("10.2.0.2"), 2)
+
+    def test_shared_address_space_ranks_fourth(self) -> None:
+        # 100.64/10 covers Tailscale and other VPN overlay addresses
+        self.assertEqual(self._key("100.85.0.1"), 3)
+
+    def test_public_address_ranks_last(self) -> None:
+        self.assertEqual(self._key("8.8.8.8"), 4)
+
+    def test_lan_address_wins_over_vpn_when_mixed(self) -> None:
+        addresses = ["10.2.0.2", "100.85.0.1", "192.168.55.107"]
+        from maintenance.ui.window_discovery import _lan_address_key
+        chosen = min(addresses, key=_lan_address_key)
+        self.assertEqual(chosen, "192.168.55.107")
+
+    def test_window_discovery_uses_lan_address_key_not_index_zero(self) -> None:
+        import pathlib
+        src = pathlib.Path("maintenance/ui/window_discovery.py").read_text()
+        self.assertIn("_lan_address_key", src, "_lan_address_key must be used in window_discovery.py")
+        self.assertNotIn("addresses[0]", src, "addresses[0] must not appear — use min(..., key=_lan_address_key)")
+
+
 if __name__ == "__main__":
     unittest.main()

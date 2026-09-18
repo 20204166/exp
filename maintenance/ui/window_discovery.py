@@ -67,6 +67,31 @@ def _window_symbols() -> Any:
     return window
 
 
+def _lan_address_key(addr: str) -> int:
+    """Preference rank for mDNS candidate addresses — lower rank wins.
+
+    Typical LAN ranges (192.168/16, 172.16/12) rank before ambiguous private
+    ranges (10/8) and shared-address-space / VPN ranges (100.64/10), so the
+    physical LAN address is selected when a host advertises multiple addresses
+    including VPN tunnel IPs.
+    """
+    parts = addr.split(".")
+    if len(parts) == 4:
+        try:
+            first, second = int(parts[0]), int(parts[1])
+            if first == 192 and second == 168:
+                return 0
+            if first == 172 and 16 <= second <= 31:
+                return 1
+            if first == 10:
+                return 2
+            if first == 100 and 64 <= second <= 127:
+                return 3
+        except ValueError:
+            pass
+    return 4
+
+
 def get_discovery_session(controller: Any) -> DiscoverySession:
     session = controller.__dict__.get("_discovery_session")
     if session is None:
@@ -1240,7 +1265,14 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
         and record.identity_fingerprint is not None
         and candidate.identity_fingerprint == record.identity_fingerprint
     )
-    address = candidate.addresses[0] if candidate.addresses else record.host
+    address = (
+        min(candidate.addresses, key=_lan_address_key)
+        if candidate.addresses
+        else record.host
+    )
+    LOGGER.debug(
+        "Peer endpoint selected: %s (candidates: %s)", address, candidate.addresses
+    )
     port = candidate.port if candidate.port is not None else record.port
     endpoint_changed = address != record.host or port != record.port
     if not endpoint_changed and not (
