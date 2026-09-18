@@ -111,11 +111,38 @@ class SnapshotCliTests(unittest.TestCase):
         payload = _snapshot_payload(snapshot)
 
         self.assertEqual(payload["system_label"], snapshot.system_label)
-        self.assertEqual(payload["resources"][0]["key"], "cpu")
-        self.assertEqual(payload["resources"][0]["capability"], "supported")
+        resource = payload["resources"][0]
+        self.assertEqual(resource["key"], "cpu")
+        self.assertEqual(resource["capability"], "supported")
+        # SUPPORTED / non-failed resources produce no secondary status label.
+        self.assertIsNone(resource["status"])
+        # Temperature fields are present even when empty.
+        self.assertEqual(resource["temperatures"], [])
+        self.assertIsNone(resource["temperature_unavailable_reason"])
         import json
 
         json.dumps(payload)  # must be JSON-serializable without error
+
+    def test_snapshot_payload_status_reflects_resource_status(self) -> None:
+        from maintenance.models import CapabilityState
+        from maintenance.snapshot import _snapshot_payload
+
+        failed = make_summary(
+            "battery",
+            "Battery",
+            failed=True,
+            capability=CapabilityState.UNKNOWN,
+        )
+        unavailable = make_summary(
+            "gpu",
+            "GPU",
+            capability=CapabilityState.PERMISSION_LIMITED,
+        )
+        payload = _snapshot_payload(make_snapshot(failed, unavailable))
+
+        # resource_status must be threaded through correctly, not reconstructed.
+        self.assertEqual(payload["resources"][0]["status"], "Failed")
+        self.assertEqual(payload["resources"][1]["status"], "Permission required")
 
 
 class BuildScriptReliabilityTests(unittest.TestCase):
