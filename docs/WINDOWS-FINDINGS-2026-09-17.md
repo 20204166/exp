@@ -1113,3 +1113,192 @@ confirms the category.**
 
 **Status: PENDING packet capture.** Awaiting user execution of the commands
 above.
+
+---
+
+## PHASE 12G — LAN Transport Repair (2026-09-18, wheel 1.6.1.2)
+
+**Goal:** Replace ephemeral `port=0` listener with a stable configured port so
+Windows can reach the Linux peer listener consistently. Physical TCP proof
+required before code changes.
+
+### What was implemented
+
+**`PEER_SERVICE_DEFAULT_PORT = 27321`** — canonical constant in
+`maintenance/remote_support/server.py`. Below Linux ephemeral range (32768–60999).
+Not a well-known IANA port. Single owner: that file only.
+
+**`RemoteSocketServer.preferred_port`** — tries the configured port first; on
+`OSError` falls back to `port=0` (ephemeral) with `LOGGER.warning`. Property
+`preferred_port_honored: bool | None` tracks the outcome.
+
+**UFW application profile** — `packaging/system-analyzer`:
+```ini
+[System Analyzer]
+title=System Analyzer Peer Service
+description=Inbound TCP for System Analyzer LAN peer connections (port 27321)
+ports=27321/tcp
+```
+
+Install steps (Linux, interactive sudo):
+```bash
+sudo cp packaging/system-analyzer /etc/ufw/applications.d/
+sudo ufw app update "System Analyzer"
+sudo ufw allow "System Analyzer"
+```
+
+**Port contract tests** — `tests/test_remote_server.py` and
+`tests/test_cross_platform_branches.py`: constant exists, re-exported, value=27321;
+preferred_port_honored lifecycle; no duplicate 27321 literals outside canonical owner;
+window_discovery uses constant not literal; no firewall mutations.
+
+### Physical result (2026-09-18)
+
+```
+ss -tlnp 'sport = :27321'
+→ LISTEN 0 16 0.0.0.0:27321  (PID 44237)
+
+Test-NetConnection 192.168.55.107 -Port 27321
+TcpTestSucceeded : True
+```
+
+**PHASE 12G PHYSICAL PASS — Windows → Linux TCP on port 27321 confirmed.**
+
+Port: `27321` (stable, not ephemeral). UFW rule applied by user. VPN remains
+enabled throughout.
+
+---
+
+## PHASE 12H — Controlled Pairing Boundary Capture (2026-09-18, wheels 1.6.1.3 / 1.6.1.4)
+
+**Goal:** With TCP now proven, determine the first broken boundary in the pairing
+handshake. Mac → Linux pairing works; Windows → Linux pairing fails.
+
+### Confirmed baselines going in
+
+| Node | NodeId | LAN | Port | TLS fingerprint |
+|---|---|---|---|---|
+| Linux (m75-node1) | `node-983364764039f9e6625e687273710909` | `192.168.55.107` | `27321` | `1a7b:7cc8:...` |
+| Windows (DESKTOP-0C2C5H3) | `node-b31a0913e76db7c60cb7c6ec82313660` | `192.168.55.103` | varies (ephemeral) | — |
+
+### Boundary A — Endpoint selection defect (CONFIRMED, FIXED in 1.6.1.3)
+
+**Evidence:** Pair attempt from Windows failed with "Target did not provision the
+peer grant." Linux log showed **zero incoming connection entries** — the TCP
+connection never reached the Linux application. Direct TCP
+(`Test-NetConnection 192.168.55.107 -Port 27321 → TcpTestSucceeded: True`) works,
+proving the path is open.
+
+**Root cause:** `window_discovery.py:1243` (pre-fix):
+```python
+address = candidate.addresses[0] if candidate.addresses else record.host
+```
+Linux advertises addresses in order: `10.2.0.2` (VPN), `100.85.0.1` (VPN),
+`192.168.55.107` (LAN). Windows picked `10.2.0.2` first — unreachable from
+Windows since the ProtonVPN tunnel does not bridge to Windows.
+
+Mac → Linux pairing works because macOS resolves/orders the mDNS address list
+differently, placing the LAN address first.
+
+**Fix (wheel 1.6.1.3):** `_lan_address_key(addr)` helper added to
+`window_discovery.py` — ranks `192.168/16` (0), `172.16/12` (1), `10/8` (2),
+`100.64/10` (3), other (4). Selection changed to:
+```python
+address = min(candidate.addresses, key=_lan_address_key) if candidate.addresses else record.host
+```
+DEBUG log added showing which address was selected and what candidates were.
+
+**The fix runs on the INITIATOR side (Windows).** Linux needs the fix only when
+Linux initiates (reverse direction). Install 1.6.1.3 on Windows to pick up the fix.
+
+### Boundary B — Pairing approval dialogue (PENDING physical confirmation)
+
+After installing 1.6.1.3 on Windows and retrying, Windows now shows "Target did
+not provision the peer grant" but via a **different code path** — the connection
+reaches Linux (TCP+TLS succeed) but the pair_request is rejected or the approval
+dialogue is not seen/approved.
+
+**Linux log shows no "Pair request received" entry** — meaning `handle_pairing_request`
+was never called. Two possible explanations:
+
+1. **TLS handshake fails silently** — `server.py` catches all exceptions in the
+   handler; if `ssl_context.wrap_socket()` fails, no response is sent and Windows'
+   `on_error` shows "Target did not provision the peer grant."
+
+2. **`_handle_pairing_request` field validation fails** — returns
+   `{"approved": false, "error": "pairing_unavailable"}` before calling the
+   application handler; this produces no log entry in `handle_pairing_request`.
+
+**Diagnostic logging added (wheel 1.6.1.4):** `handle_pairing_request` now logs:
+- `INFO Pair request received from <NodeId>` — at function entry
+- `WARNING` — if pairing lock already held
+- `INFO Showing pairing dialog for <NodeId>` — when messagebox is about to open
+- `EXCEPTION` — if `messagebox.askyesno` raises (e.g. TclError on invalid parent)
+- `INFO Pairing dialog answered: approved=<bool>` — after user responds
+- `WARNING Pair request timed out` — if no answer in 60s
+- `INFO Pair request complete: approved=<bool>` — final result
+
+**Window lift added (wheel 1.6.1.4):** `controller.master.lift()` is called just
+before `messagebox.askyesno` so the System Analyzer window comes to the front.
+Any TclError from `lift()` is swallowed — it never blocks the dialogue itself.
+
+### How to run the next controlled pairing test
+
+**Pre-conditions:**
+- Linux: `system-analyzer 1.6.1.4` running, `ss -tlnp 'sport = :27321'` confirms listener
+- Windows: `system-analyzer 1.6.1.3` or `1.6.1.4` installed, app running
+- **Both screens must be attended simultaneously**
+
+**Procedure:**
+1. On Linux, confirm listener: `ss -tlnp 'sport = :27321'`
+2. On Windows, open Settings → Nodes & Connections
+3. Find Linux peer (NodeId `node-983364...710909`, port `27321`)
+4. Press **Pair** once
+5. **Immediately look at Linux screen** — the app window will come to the front
+   with a YES/NO dialogue: **"Allow node-b31a... to read this system?"**
+6. Click **YES** on Linux promptly (dialogue times out after 60s)
+7. Note what Windows shows after you approve
+
+**After the attempt — capture evidence:**
+
+Linux:
+```bash
+tail -50 /home/btn17/.local/state/system-analyzer/system-analyzer.log
+```
+
+Windows:
+```powershell
+Get-Content "$env:LOCALAPPDATA\system-analyzer\system-analyzer.log" -Tail 50
+```
+
+**What to look for in the Linux log:**
+- `Pair request received from node-b31a...` → request reached handler ✓
+- `Showing pairing dialog for node-b31a...` → dialogue was displayed ✓
+- `Pairing dialog answered: approved=True` → user approved ✓
+- `Pair request complete: approved=True` → success path
+- `EXCEPTION` line → TclError or other crash in dialogue
+- **Nothing** → TLS is still failing (connection never reached handler)
+
+### Wheel inventory
+
+| Wheel | Key change |
+|---|---|
+| `1.6.1.2` | Stable port 27321, UFW profile |
+| `1.6.1.3` | `_lan_address_key` — LAN address preference over VPN |
+| `1.6.1.4` | Pairing diagnostic logging + `lift()` before dialogue |
+
+All wheels are in `dist/`. Install with:
+```bash
+# Linux
+pip install dist/system_analyzer-1.6.1.4-py3-none-any.whl --force-reinstall --break-system-packages
+
+# Windows (PowerShell)
+pip install system_analyzer-1.6.1.4-py3-none-any.whl --force-reinstall
+```
+
+### Current status (2026-09-18 ~13:30)
+
+- Linux listener: `0.0.0.0:27321` (check with `ss -tlnp 'sport = :27321'`)
+- Linux version: `1.6.1.4`
+- Windows version needed: `1.6.1.3` or `1.6.1.4`
+- Next action: controlled pair with both screens attended; click YES on Linux
