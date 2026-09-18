@@ -600,5 +600,110 @@ class ConnectionStateMatrixTests(unittest.TestCase):
         self.assertIsInstance(color, str)
 
 
+class MembershipMetaTextTests(unittest.TestCase):
+    """§8 N&C state matrix — membership label in _trusted_meta_text().
+
+    CASE B  paired, connected, not joined  -> Not in cluster · Online
+    CASE C  paired, joined, connected      -> Worker · Online
+    CASE D  paired, joined, offline        -> Worker · Offline
+    CASE E  paired, not joined, offline    -> Not in cluster · Offline
+    CASE F  Coordinator peer               -> Coordinator · Online/Offline
+    """
+
+    def _meta(self, spec: TrustedNodeSpec) -> str:
+        page, _, _ = make_page()
+        return page._trusted_meta_text(spec)
+
+    # CASE B — paired, connected, NOT joined
+    def test_case_b_paired_not_joined_online_shows_not_in_cluster(self) -> None:
+        spec = replace(
+            _trusted_spec("n1"),
+            is_cluster_member=False,
+            connection_status="online",
+        )
+        text = self._meta(spec)
+        self.assertIn("Not in cluster", text)
+        self.assertIn("Online", text)
+        self.assertNotIn("Worker", text)
+
+    # CASE C — paired, joined, connected
+    def test_case_c_paired_joined_online_shows_worker(self) -> None:
+        spec = replace(
+            _trusted_spec("n1"),
+            is_cluster_member=True,
+            role="worker",
+            connection_status="online",
+        )
+        text = self._meta(spec)
+        self.assertIn("Worker", text)
+        self.assertIn("Online", text)
+        self.assertNotIn("Not in cluster", text)
+
+    # CASE D — paired, joined, offline
+    def test_case_d_paired_joined_offline_shows_worker_offline(self) -> None:
+        spec = replace(
+            _trusted_spec("n1"),
+            is_cluster_member=True,
+            role="worker",
+            connection_status="offline",
+            retry_automatic=False,
+        )
+        text = self._meta(spec)
+        self.assertIn("Worker", text)
+        self.assertIn("Offline", text)
+        self.assertNotIn("Not in cluster", text)
+
+    # CASE E — paired, not joined, offline
+    def test_case_e_paired_not_joined_offline_shows_not_in_cluster(self) -> None:
+        spec = replace(
+            _trusted_spec("n1"),
+            is_cluster_member=False,
+            connection_status="offline",
+            retry_automatic=False,
+        )
+        text = self._meta(spec)
+        self.assertIn("Not in cluster", text)
+        self.assertIn("Offline", text)
+
+    # CASE F — Coordinator peer, online
+    def test_case_f_coordinator_peer_online_shows_coordinator(self) -> None:
+        spec = replace(
+            _trusted_spec("n1"),
+            is_cluster_member=True,
+            role="coordinator",
+            connection_status="online",
+        )
+        text = self._meta(spec)
+        self.assertIn("Coordinator", text)
+        self.assertNotIn("Worker", text)
+        self.assertNotIn("Not in cluster", text)
+
+    # CASE F — Coordinator peer, offline
+    def test_case_f_coordinator_peer_offline_shows_coordinator(self) -> None:
+        spec = replace(
+            _trusted_spec("n1"),
+            is_cluster_member=True,
+            role="coordinator",
+            connection_status="offline",
+            retry_automatic=False,
+        )
+        text = self._meta(spec)
+        self.assertIn("Coordinator", text)
+        self.assertNotIn("Not in cluster", text)
+
+    def test_membership_label_precedes_connection_label(self) -> None:
+        """Membership is the second segment after 'Trusted ·'."""
+        spec = replace(
+            _trusted_spec("n1"),
+            is_cluster_member=True,
+            role="worker",
+            connection_status="online",
+        )
+        text = self._meta(spec)
+        worker_pos = text.index("Worker")
+        online_pos = text.index("Online")
+        self.assertLess(worker_pos, online_pos)
+
+
 if __name__ == "__main__":
     unittest.main()

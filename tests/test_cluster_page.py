@@ -303,6 +303,86 @@ class ClusterPageTests(unittest.TestCase):
         with self.assertRaises(StopIteration):
             recorder.button_with_text("Join Cluster")
 
+    def test_no_join_cluster_button_for_already_joined_member(self) -> None:
+        """§9 Join Cluster must be hidden when is_cluster_member=True."""
+        callbacks = make_remove_callbacks(on_join_cluster=Mock())
+        member = replace(
+            _coordinator_spec("peer-a", role_editable=False),
+            is_cluster_member=True,
+        )
+        _page, _parent, recorder = make_page(callbacks, nodes=[member])
+        with self.assertRaises(StopIteration):
+            recorder.button_with_text("Join Cluster")
+
+    def test_join_cluster_button_visible_for_trusted_non_member(self) -> None:
+        """§9 Join Cluster must be shown for a trusted peer not in the cluster."""
+        callbacks = make_remove_callbacks(on_join_cluster=Mock())
+        non_member = replace(
+            _coordinator_spec("peer-a", role_editable=False),
+            is_cluster_member=False,
+        )
+        _page, _parent, recorder = make_page(callbacks, nodes=[non_member])
+        self.assertTrue(recorder.button_with_text("Join Cluster"))
+
+
+class AllSystemsMetaTextMembershipTests(unittest.TestCase):
+    """§6 All Systems _meta_text() must distinguish members from non-members."""
+
+    def _meta(self, spec: ClusterNodeSpec) -> str:
+        page, _, _ = make_page(nodes=[spec])
+        return page._meta_text(spec)
+
+    def test_trusted_non_member_shows_not_in_cluster(self) -> None:
+        spec = replace(
+            _spec("peer-a", selectable=True),
+            is_cluster_member=False,
+            role="worker",
+        )
+        text = self._meta(spec)
+        self.assertIn("Not in cluster", text)
+        self.assertNotIn("Worker", text)
+
+    def test_active_worker_member_shows_worker(self) -> None:
+        spec = replace(
+            _spec("peer-a", selectable=True),
+            is_cluster_member=True,
+            role="worker",
+        )
+        text = self._meta(spec)
+        self.assertIn("Worker", text)
+        self.assertNotIn("Not in cluster", text)
+
+    def test_coordinator_member_shows_coordinator(self) -> None:
+        spec = replace(
+            _spec("coord", selectable=True),
+            is_cluster_member=True,
+            role="coordinator",
+        )
+        text = self._meta(spec)
+        self.assertIn("Coordinator", text)
+        self.assertNotIn("Not in cluster", text)
+
+    def test_local_node_always_shows_role_not_not_in_cluster(self) -> None:
+        """Local node is always in its own cluster; 'Not in cluster' must never appear."""
+        local = replace(
+            _spec("local", selectable=True, is_local=True),
+            is_cluster_member=True,
+            role="coordinator",
+        )
+        text = self._meta(local)
+        self.assertNotIn("Not in cluster", text)
+        self.assertIn("Coordinator", text)
+
+    def test_local_non_member_shows_role_not_not_in_cluster(self) -> None:
+        """Even if is_cluster_member=False for local, do not show Not in cluster."""
+        local = replace(
+            _spec("local", selectable=True, is_local=True),
+            is_cluster_member=False,
+            role="worker",
+        )
+        text = self._meta(local)
+        self.assertNotIn("Not in cluster", text)
+
 
 if __name__ == "__main__":
     unittest.main()
