@@ -245,7 +245,11 @@ class AppWindow:
             self._preferences.refresh_intervals.as_dict(), observer=self._observer
         )
         self._button_coordinator = ButtonCoordinator(observer=self._observer)
-        self._ui_coordinator = ui_render.UICoordinator(observer=self._observer)
+        self._ui_coordinator = ui_render.UICoordinator(
+            schedule=lambda delay, callback: self._schedule_timer(delay, callback),
+            cancel=lambda identifier: self._cancel_timer(identifier),
+            observer=self._observer,
+        )
         self._background_orchestrator = self._make_background_orchestrator()
         self._feature_catalog = ResourceFeatureCatalog()
         self._component_poll_id: str | None = None
