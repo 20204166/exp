@@ -263,6 +263,15 @@ READ_PERMISSIONS = frozenset(
     }
 )
 
+READ_CAPABILITIES = frozenset(
+    {
+        NodeCapability.DASHBOARD_READ,
+        NodeCapability.COMPONENT_READ,
+        NodeCapability.PROCESS_REVIEW,
+        NodeCapability.STORAGE_REVIEW,
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class NodeId:
@@ -838,18 +847,16 @@ class NodeRegistry:
             if display_name == descriptor.hostname:
                 display_name = candidate.hostname
             connection_status = known_context.connection.status
-            runtime_status = (
-                NodeStatus.ONLINE
-                if connection_status is NodeConnectionStatus.ONLINE
-                else NodeStatus.OFFLINE
-                if connection_status
-                in {
-                    NodeConnectionStatus.OFFLINE,
-                    NodeConnectionStatus.AUTHENTICATION_FAILED,
-                    NodeConnectionStatus.IDENTITY_CHANGED,
-                }
-                else NodeStatus.UNKNOWN
-            )
+            if connection_status is NodeConnectionStatus.ONLINE:
+                runtime_status = NodeStatus.ONLINE
+            elif connection_status in {
+                NodeConnectionStatus.OFFLINE,
+                NodeConnectionStatus.AUTHENTICATION_FAILED,
+                NodeConnectionStatus.IDENTITY_CHANGED,
+            }:
+                runtime_status = NodeStatus.OFFLINE
+            else:
+                runtime_status = NodeStatus.UNKNOWN
             known_context.descriptor = replace(
                 descriptor,
                 display_name=display_name,
@@ -928,12 +935,8 @@ class NodeRegistry:
         if not candidate.compatible:
             self._pairing_states[node_id] = NodePairingState.PAIRING_FAILED
             raise ValueError("Peer protocol version is incompatible")
-        state = self._pairing_states.get(node_id, NodePairingState.DISCOVERED)
-        if state is NodePairingState.IDENTITY_CHANGED:
-            # A replacement identity may only recover through a fresh,
-            # deliberate pairing confirmation; it is never restored silently.
-            self._pairing_states[node_id] = NodePairingState.PAIRING
-            return NodePairingState.PAIRING
+        # An IDENTITY_CHANGED state recovers only through explicit re-pairing,
+        # never silently — the transition is the same regardless of prior state.
         self._pairing_states[node_id] = NodePairingState.PAIRING
         return NodePairingState.PAIRING
 
@@ -978,15 +981,7 @@ class NodeRegistry:
         if self._pairing_states.get(node_id) is not NodePairingState.PAIRING:
             raise ValueError("Pairing must be deliberately initiated first")
         identity_fingerprint = candidate.identity_fingerprint
-        read_capabilities = frozenset(
-            {
-                NodeCapability.DASHBOARD_READ,
-                NodeCapability.COMPONENT_READ,
-                NodeCapability.PROCESS_REVIEW,
-                NodeCapability.STORAGE_REVIEW,
-            }
-        )
-        if not requested_capabilities <= read_capabilities:
+        if not requested_capabilities <= READ_CAPABILITIES:
             raise ValueError(
                 "Trusted nodes may only receive read capabilities; "
                 "authorisation is required for destructive capabilities"

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from maintenance.nodes import (
+    READ_CAPABILITIES,
     READ_PERMISSIONS,
     NodeCapability,
     NodeId,
@@ -33,15 +34,6 @@ DEFAULT_FRESHNESS_SECONDS = 60.0
 DEFAULT_REPLAY_TTL_SECONDS = 300.0
 DEFAULT_REPLAY_MAX_ENTRIES = 4096
 DEFAULT_MAX_ACTIVE_HANDLERS = 8
-
-READ_CAPABILITIES = frozenset(
-    {
-        NodeCapability.DASHBOARD_READ,
-        NodeCapability.COMPONENT_READ,
-        NodeCapability.PROCESS_REVIEW,
-        NodeCapability.STORAGE_REVIEW,
-    }
-)
 
 OP_REQUIRED_CAPABILITY: dict[str, NodeCapability] = {
     "hello": NodeCapability.DASHBOARD_READ,
