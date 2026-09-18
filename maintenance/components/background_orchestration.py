@@ -12,12 +12,6 @@ from typing import Any, cast
 BackgroundItem = tuple[Callable[..., None], tuple[object, ...]] | None | tuple[str, Any]
 
 
-def _invoke_legacy_callback(
-    callback: Callable[..., None], args: tuple[object, ...]
-) -> None:
-    callback(*args)
-
-
 def run_daemon(
     task: Callable[[], Any],
     on_success: Callable[[Any], None],
@@ -199,9 +193,7 @@ class BackgroundOrchestrator:
                     tuple[Callable[..., None], tuple[object, ...]], item
                 )
                 if not self._is_closing():
-                    self._invoke_delivered(
-                        partial(_invoke_legacy_callback, callback, args)
-                    )
+                    self._invoke_delivered(partial(callback, *args))
         finally:
             if coordinator is not None:
                 coordinator.end_batch()
