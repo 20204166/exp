@@ -929,7 +929,9 @@ class AppWindow:
     def _get_discovery_session(self) -> DiscoverySession:
         return ui_window_discovery.get_discovery_session(self)
 
-    def _listener_endpoint(self) -> tuple[bool, int | None, str | None]:
+    def _listener_endpoint(
+        self,
+    ) -> tuple[bool, int | None, str | None, bool | None]:
         return ui_window_discovery.listener_endpoint(self)
 
     def _start_peer_listener(self) -> None:

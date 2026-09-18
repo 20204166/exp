@@ -411,6 +411,23 @@ class ProcessScanBehaviourTests(unittest.TestCase):
         self.assertEqual(by_pid[50002].activity, "Active")
         self.assertTrue(by_pid[50001].action_allowed)
 
+    def test_scan_filter_uses_activity_threshold_constant(self) -> None:
+        process = FakeProcess(
+            50001,
+            "Borderline App",
+            getpass.getuser(),
+            cpu=1.5,
+            memory=1 * 1024**2,
+        )
+
+        with (
+            patch.object(SystemScanner, "PROCESS_ACTIVITY_MIN_CPU_PERCENT", 2.0),
+            patch("maintenance.scanner.psutil", FakePsutil([process])),
+        ):
+            candidates = make_scanner().scan_processes()
+
+        self.assertEqual(candidates, [])
+
 
 def _dialog_with(processes: dict[int, ProcessCandidate]) -> Any:
     dialog: Any = object.__new__(ProcessDialog)

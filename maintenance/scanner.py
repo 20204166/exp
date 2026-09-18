@@ -137,11 +137,12 @@ class SystemScanner(
     GPU_QUERY_TIMEOUT_SECONDS: float = 12.0
     GPU_QUERY_ABANDON_SECONDS: float = 60.0
     GPU_QUERY_TIMEOUT_MESSAGE = f"{GPU_INFORMATION_UNAVAILABLE}: query timed out"
+    _COMPONENT_FEATURES = ResourceFeatureCatalog().all()
     COMPONENT_KEYS: tuple[str, ...] = tuple(
-        feature.key for feature in ResourceFeatureCatalog().all()
+        feature.key for feature in _COMPONENT_FEATURES
     )
     COMPONENT_TITLES: ClassVar[dict[str, str]] = {
-        feature.key: feature.title for feature in ResourceFeatureCatalog().all()
+        feature.key: feature.title for feature in _COMPONENT_FEATURES
     }
     TUNNEL_INTERFACE_PREFIXES: frozenset[str] = frozenset(
         {"tun", "tap", "utun", "ppp", "ipsec", "wg"}

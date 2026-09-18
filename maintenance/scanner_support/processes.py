@@ -95,7 +95,10 @@ class ProcessesMixin:
             ):
                 continue
 
-            if memory_bytes < self.PROCESS_MIN_BYTES and cpu_percent < 1:
+            if (
+                memory_bytes < self.PROCESS_MIN_BYTES
+                and cpu_percent < self.PROCESS_ACTIVITY_MIN_CPU_PERCENT
+            ):
                 continue
 
             name = info["name"] or f"Process {info['pid']}"

@@ -113,28 +113,18 @@ class RemoteSocketServer:
                             )
                             text = body.decode("utf-8")
                             raw = json.loads(text)
-                            if (
-                                isinstance(raw, dict)
-                                and raw.get("op") == "pair_request"
-                            ):
+                            operation = raw.get("op") if isinstance(raw, dict) else None
+                            if operation == "pair_request":
                                 response = _handle_pairing_request(raw, pairing_handler)
-                            elif (
-                                isinstance(raw, dict)
-                                and raw.get("op") == "pair_confirm"
-                            ):
+                            elif operation == "pair_confirm":
                                 response = _handle_pair_confirm(
                                     raw, pair_confirm_handler, clock=clock
                                 )
-                            elif (
-                                isinstance(raw, dict) and raw.get("op") == "pair_abort"
-                            ):
+                            elif operation == "pair_abort":
                                 response = _handle_pair_abort(
                                     raw, pair_abort_handler, clock=clock
                                 )
-                            elif (
-                                isinstance(raw, dict)
-                                and raw.get("op") == "elevation_request"
-                            ):
+                            elif operation == "elevation_request":
                                 response = _handle_elevation_request(
                                     raw, elevation_handler
                                 )
@@ -191,7 +181,7 @@ class RemoteSocketServer:
             try:
                 _server_instance = _Server((self._host, _candidate), _handler)
                 if self._preferred_port > 0:
-                    self._preferred_port_honored = (_candidate == self._preferred_port)
+                    self._preferred_port_honored = _candidate == self._preferred_port
                 break
             except OSError:
                 if _candidate == self._port or self._preferred_port == 0:
@@ -208,7 +198,9 @@ class RemoteSocketServer:
         _server_instance.daemon_threads = True
         _server_instance.block_on_close = False
         self._server = _server_instance
-        self._thread = threading.Thread(target=_server_instance.serve_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=_server_instance.serve_forever, daemon=True
+        )
         self._thread.start()
 
     def stop(self) -> None:
