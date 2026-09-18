@@ -20,6 +20,7 @@ Rules under test:
 import time
 import unittest
 from dataclasses import replace
+from typing import Any
 from unittest.mock import Mock
 
 from maintenance.cluster import ClusterState, trusted_node_record
@@ -288,7 +289,7 @@ def _remote_invite_blob(coordinator_id: str = "peer-a") -> str:
     return encode_invite_blob(invite)
 
 
-def _make_coordinator(runner: DeferredRunner) -> any:
+def _make_coordinator(runner: DeferredRunner) -> Any:
     from maintenance.components.coordinator import AppCoordinator
     return AppCoordinator(runner=runner, deliver=lambda cb: cb())
 
