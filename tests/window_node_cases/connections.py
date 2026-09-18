@@ -517,3 +517,71 @@ class WindowNodeConnectionTests(unittest.TestCase):
         window._cluster_state = state
 
         self.assertFalse(ui_window_discovery.can_connect_peer(window, context))
+
+
+class PeerOfflineDebounceTests(unittest.TestCase):
+    def _window_with_peer(self) -> tuple[Any, Any]:
+        window = _make_window(
+            _trusted_context("peer-a", "Peer A", cpu_value="0%", host_label="peer"),
+            start_discovery=False,
+        )
+        window._refresh_nodes_page = Mock()
+        window._refresh_cluster_page = Mock()
+        window._rebuild_node_selector = Mock()
+        context = window._node_registry.context(NodeId("peer-a"))
+        return window, context
+
+    def test_detach_peer_schedules_transition_not_immediate_refresh(self) -> None:
+        window, context = self._window_with_peer()
+        render = Mock()
+        window._render_coordinator = Mock(return_value=render)
+
+        ui_window_discovery.detach_peer(window, context)
+
+        window._refresh_nodes_page.assert_not_called()
+        render.schedule_transition.assert_called_once_with(
+            "peer-offline:peer-a",
+            300,
+            window._refresh_nodes_page,
+        )
+
+    def test_detach_peer_falls_back_to_immediate_refresh_without_coordinator(
+        self,
+    ) -> None:
+        window, context = self._window_with_peer()
+        window._render_coordinator = Mock(return_value=None)
+
+        ui_window_discovery.detach_peer(window, context)
+
+        window._refresh_nodes_page.assert_called_once()
+
+    def test_attach_peer_cancels_offline_transition_before_refresh(self) -> None:
+        window, context = self._window_with_peer()
+        render = Mock()
+        window._render_coordinator = Mock(return_value=render)
+        context.descriptor = replace(context.descriptor, identity_fingerprint="fp-1")
+        provider = Mock()
+        cancelled: list[str] = []
+        refreshed: list[int] = []
+        render.cancel_transition.side_effect = lambda name: cancelled.append(name)
+        window._refresh_nodes_page.side_effect = lambda: refreshed.append(
+            len(cancelled)
+        )
+
+        ui_window_discovery.attach_peer(window, context, (provider, frozenset(), "fp-1"))
+
+        self.assertEqual(cancelled, ["peer-offline:peer-a"])
+        self.assertEqual(refreshed, [1], "refresh must happen after cancel")
+
+    def test_detach_peer_skips_local_context(self) -> None:
+        from tests.support.nodes import make_local_context
+
+        window, _ = self._window_with_peer()
+        local = make_local_context()
+        render = Mock()
+        window._render_coordinator = Mock(return_value=render)
+
+        ui_window_discovery.detach_peer(window, local)
+
+        render.schedule_transition.assert_not_called()
+        window._refresh_nodes_page.assert_not_called()

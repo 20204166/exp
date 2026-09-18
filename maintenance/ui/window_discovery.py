@@ -945,6 +945,9 @@ def attach_peer(
         status=NodeStatus.ONLINE,
         identity_status=NodeIdentityStatus.VERIFIED,
     )
+    render = controller._render_coordinator()
+    if render is not None:
+        render.cancel_transition(f"peer-offline:{context.node_id.value}")
     controller._refresh_nodes_page()
     controller._refresh_cluster_page()
     controller._rebuild_node_selector()
@@ -964,7 +967,15 @@ def detach_peer(controller: Any, context: NodeContext) -> None:
     service = controller.__dict__.get("_peer_service")
     if service is not None:
         service.clear_dashboard_share(context.node_id)
-    controller._refresh_nodes_page()
+    render = controller._render_coordinator()
+    if render is not None:
+        render.schedule_transition(
+            f"peer-offline:{context.node_id.value}",
+            300,
+            controller._refresh_nodes_page,
+        )
+    else:
+        controller._refresh_nodes_page()
 
 
 def cancel_peer_connection(controller: Any, context: NodeContext) -> None:
