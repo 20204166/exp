@@ -7,7 +7,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 Outcome = Literal["success", "failure", "cancelled"]
@@ -20,6 +20,18 @@ EventKind = Literal[
     "rejected",
     "cache_hit",
 ]
+_EVENT_KINDS: frozenset[str] = frozenset(
+    {
+        "request",
+        "commit",
+        "failure",
+        "coalesced",
+        "stale",
+        "rejected",
+        "cache_hit",
+    }
+)
+_COUNTED_EVENT_KINDS: frozenset[str] = frozenset({"coalesced", "stale", "rejected"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +55,7 @@ class MetricSnapshot:
     in_flight: int
     peak_in_flight: int
     samples: tuple[float, ...]
-    distribution: dict[str, float]
+    distribution: dict[str, float | int]
     last_error: str | None
 
 
@@ -68,10 +80,7 @@ class _Metric:
     coalesced: int = 0
     stale: int = 0
     rejected: int = 0
-    events: dict[str, int] = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        self.events = {}
+    events: dict[str, int] = field(default_factory=dict)
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -91,11 +100,12 @@ def summarize_samples(samples: tuple[float, ...]) -> dict[str, float | int]:
     ordered = sorted(samples)
     p25 = _percentile(ordered, 0.25)
     p75 = _percentile(ordered, 0.75)
+    median = statistics.median(ordered)
     return {
         "minimum": ordered[0],
         "p25": p25,
-        "p50": statistics.median(ordered),
-        "median": statistics.median(ordered),
+        "p50": median,
+        "median": median,
         "p75": p75,
         "p95": _percentile(ordered, 0.95),
         "p99": _percentile(ordered, 0.99),
@@ -153,6 +163,8 @@ class ObservabilityWatcher:
         with self._lock:
             if token.identifier not in self._active_tokens:
                 raise ValueError("observation token was already finished")
+            if duration < 0:
+                raise ValueError("duration_seconds cannot be negative")
             self._active_tokens.remove(token.identifier)
             metric = self._metric(token.target)
             metric.in_flight = max(metric.in_flight - 1, 0)
@@ -185,20 +197,12 @@ class ObservabilityWatcher:
 
     def record_event(self, target: str, event: EventKind) -> None:
         self._validate_target(target)
-        if event not in (
-            "request",
-            "commit",
-            "failure",
-            "coalesced",
-            "stale",
-            "rejected",
-            "cache_hit",
-        ):
+        if event not in _EVENT_KINDS:
             raise ValueError(f"invalid event: {event}")
         with self._lock:
             metric = self._metric(target)
             metric.events[event] = metric.events.get(event, 0) + 1
-            if event in ("coalesced", "stale", "rejected"):
+            if event in _COUNTED_EVENT_KINDS:
                 setattr(metric, event, getattr(metric, event) + 1)
 
     def event_count(self, target: str, event: str) -> int:

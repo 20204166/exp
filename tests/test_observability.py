@@ -111,6 +111,22 @@ class ObservabilityWatcherTests(unittest.TestCase):
         self.assertEqual(metric.count, 1)
         self.assertEqual(metric.in_flight, 0)
 
+        with self.assertRaisesRegex(ValueError, "already finished"):
+            watcher.finish(token, duration_seconds=-0.1)
+
+    def test_invalid_finish_duration_does_not_consume_token(self) -> None:
+        watcher = ObservabilityWatcher()
+        token = watcher.begin("app:scan")
+
+        with self.assertRaises(ValueError):
+            watcher.finish(token, duration_seconds=-0.1)
+
+        watcher.finish(token, duration_seconds=0.1)
+
+        metric = watcher.snapshot().metrics[0]
+        self.assertEqual(metric.count, 1)
+        self.assertEqual(metric.in_flight, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
