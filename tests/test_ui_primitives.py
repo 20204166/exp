@@ -904,6 +904,24 @@ class PendingTransitionTests(unittest.TestCase):
         scheduler.scheduled[0][1]()
         self.assertEqual(apply.call_count, 1)
 
+    def test_stale_callback_cannot_clear_or_apply_newer_transition(self) -> None:
+        transition, scheduler = self._make()
+        first_apply = Mock()
+        second_apply = Mock()
+
+        transition.start(500, first_apply)
+        stale_callback = scheduler.scheduled[0][1]
+        transition.start(500, second_apply)
+
+        stale_callback()
+
+        self.assertEqual(first_apply.call_count, 0)
+        self.assertEqual(second_apply.call_count, 0)
+        self.assertEqual(transition.pending_id, "t2")
+
+        scheduler.scheduled[0][1]()
+        second_apply.assert_called_once_with()
+
     def test_cancel_prevents_apply(self) -> None:
         transition, scheduler = self._make()
         apply = Mock()

@@ -18,7 +18,9 @@ class PendingTransition:
     ``schedule(delay, apply)`` returns an identifier (or None when nothing
     could be scheduled, e.g. while closing); ``cancel(identifier)`` stops a
     pending timer. Starting a new transition cancels any currently pending
-    one, so only the most recent state change is ever applied.
+    one, so only the most recent state change is ever applied. The callback
+    also verifies its generation because a timer may already be queued when
+    cancellation occurs.
     """
 
     def __init__(
@@ -29,6 +31,7 @@ class PendingTransition:
         self._schedule = schedule
         self._cancel = cancel
         self._id: Any = None
+        self._generation = 0
 
     @property
     def pending_id(self) -> Any:
@@ -39,10 +42,12 @@ class PendingTransition:
     def start(self, delay: int, apply: Callable[[], None]) -> None:
         """Schedule ``apply`` after ``delay``, superseding any pending change."""
 
+        self._generation += 1
+        generation = self._generation
         if self._id is not None:
             self._cancel(self._id)
             self._id = None
-        self._id = self._schedule(delay, self._run(apply))
+        self._id = self._schedule(delay, self._run(apply, generation))
 
     def cancel(self) -> None:
         """Cancel a pending change; safe to call when nothing is pending."""
@@ -50,9 +55,12 @@ class PendingTransition:
         if self._id is not None:
             self._cancel(self._id)
             self._id = None
+            self._generation += 1
 
-    def _run(self, apply: Callable[[], None]) -> Callable[[], None]:
+    def _run(self, apply: Callable[[], None], generation: int) -> Callable[[], None]:
         def run() -> None:
+            if generation != self._generation:
+                return
             self._id = None
             apply()
 

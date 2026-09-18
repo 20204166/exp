@@ -13,6 +13,7 @@ import socket as socket_module
 import ssl
 import struct
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 from maintenance.cluster import TrustedNodeRecord
@@ -162,7 +163,8 @@ class SocketRemoteTransport:
             ) from error
         finally:
             if wrapped_socket is not None:
-                wrapped_socket.close()
+                with suppress(OSError):
+                    wrapped_socket.close()
         try:
             return body.decode("utf-8")
         except UnicodeDecodeError as error:

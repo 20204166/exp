@@ -9,7 +9,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from unittest.mock import Mock, patch
 
 import algo
@@ -36,6 +36,7 @@ from maintenance.components import (
     usernames_match,
     windows_windll,
 )
+from maintenance.components.background import TkDeliveryQueue
 from maintenance.components.coordinator import (
     AppCoordinator,
     CachePolicy,
@@ -338,6 +339,28 @@ class AnalyzerStorageScanRootTests(unittest.TestCase):
 
 
 class BackgroundTaskRunnerTests(unittest.TestCase):
+    def test_delivery_queue_closes_when_widget_liveness_check_fails(self) -> None:
+        class BrokenWidget:
+            def bind(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            def after(self, *_args: object) -> str:
+                return "after#1"
+
+            def winfo_exists(self) -> bool:
+                raise tk.TclError("event loop is stopping")
+
+        delivery = TkDeliveryQueue(cast(Any, BrokenWidget()))
+        callback = Mock()
+
+        delivery(callback)
+        delivery._drain()
+        delivery(callback)
+
+        self.assertTrue(delivery._closed)
+        self.assertEqual(delivery._callbacks.qsize(), 0)
+        callback.assert_not_called()
+
     def test_run_in_thread_delivers_progress_and_success(self) -> None:
         widget: Any = ImmediateAfterWidget()
         runner = BackgroundTaskRunner()

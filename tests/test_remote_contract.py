@@ -9,7 +9,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from maintenance.cluster import (
     ClusterDataError,
@@ -1003,6 +1003,47 @@ class RemoteServiceRoundTripTests(unittest.TestCase):
 
 
 class SocketTransportTests(unittest.TestCase):
+    def test_tls_close_failure_does_not_replace_transport_error(self) -> None:
+        class RawSocket:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        class WrappedSocket:
+            def getpeercert(self, binary_form: bool) -> bytes:
+                del binary_form
+                return b"certificate"
+
+            def settimeout(self, _timeout: float) -> None:
+                return None
+
+            def sendall(self, _payload: bytes) -> None:
+                raise OSError("send failed")
+
+            def close(self) -> None:
+                raise OSError("close failed")
+
+        ssl_context = Mock()
+        ssl_context.wrap_socket.return_value = WrappedSocket()
+        transport = SocketRemoteTransport(
+            "127.0.0.1",
+            9,
+            ssl_context=ssl_context,
+        )
+
+        with (
+            patch(
+                "maintenance.remote_support.transport.socket_module.create_connection",
+                return_value=RawSocket(),
+            ),
+            self.assertRaises(RemoteTransportError) as context,
+        ):
+            transport.request("request")
+
+        self.assertIn("send failed", str(context.exception))
+
     def test_frame_helpers_handle_fragmented_header_and_body(self) -> None:
         class FragmentedSocket:
             def __init__(self, chunks):

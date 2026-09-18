@@ -34,6 +34,9 @@ class TkDeliveryQueue:
             and getattr(event, "widget", self._widget) is not self._widget
         ):
             return
+        self._close()
+
+    def _close(self) -> None:
         self._closed = True
         after_id = self._after_id
         self._after_id = None
@@ -42,6 +45,11 @@ class TkDeliveryQueue:
                 self._widget.after_cancel(after_id)
             except (RuntimeError, tk.TclError):
                 pass
+        while True:
+            try:
+                self._callbacks.get_nowait()
+            except Empty:
+                break
 
     def _drain(self) -> None:
         self._after_id = None
@@ -49,9 +57,10 @@ class TkDeliveryQueue:
             return
         try:
             if not self._widget.winfo_exists():
-                self._closed = True
+                self._close()
                 return
         except (RuntimeError, tk.TclError):
+            self._close()
             return
         while True:
             try:
