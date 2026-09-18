@@ -1,0 +1,1537 @@
+# Windows Runtime Findings — system-analyzer 1.6.0.5 (+ 1.6.0.7, 1.6.1.0 retests)
+
+Machine: DESKTOP-0C2C5H3 (Windows 11 Home 10.0.26200), AMD Radeon GPU (no NVIDIA).
+Installed via `irm https://raw.githubusercontent.com/20204166/exp/main/install/install-online.ps1 | iex`
+(wheel: `system_analyzer-1.6.0.5-py3-none-any.whl`, upgraded from 1.6.0.3 already on the machine).
+Log file: `C:\Users\BTN17\AppData\Local\system-analyzer\system-analyzer.log`
+State dir: `C:\Users\BTN17\AppData\Roaming\system-analyzer\` (`cluster.json`, `cluster-history.sqlite3`, `peer-tls.{crt,key}`)
+
+All findings below are reproduced on this physical Windows machine using the installed
+wheel only — no source was cloned or edited.
+
+**2026-09-17, PHASE 12D-W retest:** wheel `system_analyzer-1.6.0.7-py3-none-any.whl`
+(SHA-256 `b54ccb0f50b8ff0c70c8adb1986a37ba24b4cbbe250405ee6bd09ad0c5d438f5`), built from
+Linux fix commit `38e52c9` (argparse) + test commit `723840c`, installed via the same
+online installer and confirmed via `pip show system-analyzer` → `Version: 1.6.0.7`.
+Findings #1 and #2 below now carry a **Retest — 1.6.0.7** subsection each; the original
+1.6.0.5 failure text is left unchanged as historical evidence.
+
+**2026-09-17, PHASE 12E Linux repair:** wheel `system_analyzer-1.6.1.0-py3-none-any.whl`
+(SHA-256 `2d68d4194de5c94ea67239dc802e41dd30085b1bd4531d8b9d8fff621910aaf0`), single-instance
+guard for finding #2.  Windows retest pending.
+
+---
+
+## 1. CLI flags are completely ignored — `--help`/`--version`/any flag launches the GUI and hangs
+
+**Repro:**
+```powershell
+system-analyzer --help
+system-analyzer --version
+system-analyzer --totally-bogus-flag-xyz
+```
+All three produce **identical** behavior: no stdout/stderr, no exit — the full GUI
+("System Analyzer" window) launches and the process never returns. Confirmed via
+process argv:
+```
+PID 15304 system-analyzer.exe --help  (parent)
+PID 15036 python.exe "...\system-analyzer.exe" --help  (child, owns the GUI window)
+```
+Each hung until force-killed (`Stop-Process`). No CLI parsing / usage text / exit path
+exists at all — the entry point ignores `sys.argv` entirely.
+
+**Impact:** any scripted install-verification, CI smoke test, or `--version` check
+against this wheel hangs forever instead of failing fast or succeeding fast.
+
+### Retest — 1.6.0.7 (2026-09-17, PHASE 12D-W)
+
+```powershell
+system-analyzer --help
+system-analyzer --version
+system-analyzer --totally-bogus-flag-xyz
+```
+
+| Command | Exit code | Elapsed | Output | GUI? | Lingering process? |
+|---|---|---|---|---|---|
+| `--help` | 0 | 2.05s | `usage: system-analyzer [-h] [--version]` + description + options | No | None |
+| `--version` | 0 | 1.06s | `system-analyzer 1.6.0.7` | No | None |
+| `--totally-bogus-flag-xyz` | 2 | 1.06s | `system-analyzer: error: unrecognized arguments: --totally-bogus-flag-xyz` | No | None |
+
+Process check after each command (`Get-Process ... python\|system-analyzer`)
+returned **empty** every time — no launcher stub, no python child, no window.
+
+**PHYSICAL RESULT: PASS.**
+
+- Initial physical wheel: `1.6.0.5`
+- Initial result: **FAIL** (argv ignored entirely, GUI launched and hung on all three commands — see above)
+- Linux fix: commit `38e52c9`
+- Retest wheel: `system_analyzer-1.6.0.7-py3-none-any.whl`
+- Retest SHA-256: `b54ccb0f50b8ff0c70c8adb1986a37ba24b4cbbe250405ee6bd09ad0c5d438f5`
+- Physical result: **PASS**
+
+Finding #1 is physically closed on 1.6.0.7. Original 1.6.0.5 failure evidence above
+is preserved as-is, not rewritten.
+
+---
+
+## 2. No single-instance guard — two processes share the same node identity and state files
+
+**Repro:** launch `system-analyzer` twice (no args) without closing the first.
+
+Both instances log the **same** node id from the shared `cluster.json`:
+```
+2026-09-17 12:08:05 INFO maintenance.components.network_discovery: Network discovery active for node-b31a0913e76db7c60cb7c6ec82313660
+```
+(identical id to the first instance's earlier log lines). `cluster.json` shows this
+node already self-assigned `"roles": ["coordinator", "worker"]` with an active
+`coordinator_epoch`/`fencing_token`. Two live processes now both believe they are the
+same coordinator node, both with write access to the same
+`cluster-history.sqlite3` and `cluster.json`, with no lock file or mutex observed
+anywhere in `%APPDATA%\system-analyzer` or `%LOCALAPPDATA%\system-analyzer`.
+
+**Impact:** concurrent-write / split-brain coordinator risk any time a user
+double-launches the app (e.g. via Start Menu + a leftover tray/background instance),
+which is easy to do given finding #1 also silently spawns extra full instances.
+
+### Retest — 1.6.0.7 (2026-09-17, PHASE 12D-W)
+
+Procedure per the physical retest plan: confirmed zero lingering processes after
+the finding-#1 retest, launched exactly one normal `system-analyzer` (no args),
+confirmed clean single-instance startup, then launched a second normal
+`system-analyzer` (no args) while the first was still running. No state files were
+modified by hand at any point.
+
+| | First instance | Second instance |
+|---|---|---|
+| python PID | 14208 | 4432 |
+| launcher PID | 8788 | 12080 |
+| StartTime | 12:55:47 | 12:56:01 |
+| Window title | System Analyzer | System Analyzer |
+| Responding | True | True |
+| Alive after both launches | Yes | Yes |
+
+Both processes are healthy GUI instances — **no single-instance guard, no
+redirect-to-existing-instance behavior**. Log evidence, both instances:
+```
+2026-09-17 12:55:51 INFO maintenance.components.network_discovery: Network discovery active for node-b31a0913e76db7c60cb7c6ec82313660
+2026-09-17 12:56:04 INFO maintenance.components.network_discovery: Network discovery active for node-b31a0913e76db7c60cb7c6ec82313660
+```
+Identical node id on both lines, matching `cluster.json`'s `local_node_id`
+(`node-b31a0913e76db7c60cb7c6ec82313660`) — confirmed both instances read the same
+`local_node_id` from the same shared state directory
+(`C:\Users\BTN17\AppData\Roaming\system-analyzer\`; only one `cluster.json`, one
+`cluster-history.sqlite3` exist on this machine, no per-PID/per-instance copies).
+Independent advertisement/discovery was not further exercised, per the "STOP" rule
+below.
+
+**PHYSICAL RESULT: FINDING #2 REMAINS REPRODUCED on 1.6.0.7.**
+
+Per plan: STOPPING here. Not continuing to listener-port repair, mDNS adapter
+repair, pairing repair, or "This System" labeling repair (findings #3–#6, #12–#13)
+until this is resolved on Linux, since two processes owning the same persisted
+node identity invalidates clean network testing of those other findings. Both test
+instances were closed after evidence collection (no state files modified).
+
+### Retest — 1.6.1.0 (2026-09-17, PHASE 12E-W)
+
+wheel: `system_analyzer-1.6.1.0-py3-none-any.whl`
+SHA-256: `2d68d4194de5c94ea67239dc802e41dd30085b1bd4531d8b9d8fff621910aaf0`
+
+Installed via the normal online installer; `system-analyzer --version` confirmed
+`system-analyzer 1.6.1.0` before proceeding.
+
+**CLI regression (must still hold from Phase 12D):**
+
+| Command | Exit | GUI? | Lingering process? |
+|---|---|---|---|
+| `--help` | 0 | No | No |
+| `--version` | 0 | No | No |
+| `--totally-bogus-flag-xyz` | 2 | No | No |
+
+Unchanged — regression clean.
+
+**First launch:** launcher PID `6888`, runtime PID `15028`, both started
+`13:52:13`, responding, GUI up within the 5s check window.
+
+**Second no-arg launch (first instance still running):**
+```
+exit code: 1
+stderr:    System Analyzer is already running.
+elapsed:   1.09s
+```
+No second GUI appeared. Process check immediately after: still only PID
+15028/6888 — no second python child, no second launcher, no hidden process.
+
+**Network side-effect check:** log tail around the rejected launch shows exactly
+one `Network discovery active for node-...` line (13:52:16, matching the surviving
+first instance's own startup) — no second discovery/listener/advertisement event
+from the rejected process.
+
+**Node identity check:** `cluster.json.local_node_id` unchanged
+(`node-b31a0913e76db7c60cb7c6ec82313660`); no duplicate `cluster.json`/
+`cluster-history.sqlite3`/TLS files created. New artifact observed:
+`system-analyzer.lock` (first seen `13:52:26`) — the single-instance lock file
+introduced this phase. Not modified or deleted at any point during this test.
+
+**CLI while GUI is running:** `--help` and `--version` both still returned exit 0
+with correct output, no "already running" message, GUI remained healthy
+(single instance, responding) throughout.
+
+**Normal shutdown → relaunch:** `Process.CloseMainWindow()` on the runtime PID
+returned `True`, process exited within 15s. Relaunch immediately after
+succeeded normally (new PID pair `13724`/`7956`, no rejection).
+
+**Force-kill → relaunch (no manual lock deletion):** `Stop-Process -Force` on
+runtime PID `13724`. All processes gone immediately after. Lock file
+(`system-analyzer.lock`) remained physically present on disk (pathname survived,
+untouched by this test). Immediate relaunch with **no manual intervention**
+succeeded (new PID pair `11572`/`12024`) — proves ownership is OS-held, not
+stale-file-held, matching the "file may survive a crash, ownership may not" model.
+
+**Second-launch rejection after crash recovery:** repeated against the recovered
+instance — exit 1, `System Analyzer is already running.`, no new process, original
+recovered instance (PID 11572/12024) untouched.
+
+**Finding #2 pass criteria:**
+
+| # | Criterion | Result |
+|---|---|---|
+| A | First GUI starts normally | PASS |
+| B | Second no-arg launch: no GUI / already-running stderr / exit 1 / no lingering runtime | PASS |
+| C | First runtime remains healthy | PASS |
+| D | `--help`/`--version` still work while GUI running | PASS |
+| E | Fresh launch succeeds after normal close | PASS |
+| F | Fresh launch succeeds after force-kill, no manual lock deletion | PASS |
+
+**PHYSICAL RESULT: PHYSICAL PASS. Finding #2 is physically closed on 1.6.1.0.**
+Original 1.6.0.5/1.6.0.7 failure evidence above preserved unchanged.
+
+All instances closed after this test. Per the retest plan, network validation
+(pairing, thermals, listener, mDNS) resumes from a clean single-runtime
+environment next — old evidence gathered under duplicate-instance conditions is
+not assumed to still apply and is being rediscovered fresh, not patched onto.
+
+---
+
+## 3. Remote peer listener does not actually listen — failure went from *logged* to *silent* across versions
+
+On 1.6.0.3 (this machine's history, 2026-09-13 → 09-16), every launch logged:
+```
+WARNING maintenance.ui.window_discovery: Remote peer listener unavailable: [WinError 2] The system cannot find the file specified
+```
+`WinError 2` = file-not-found, which is not a normal TCP-bind failure — consistent
+with a POSIX-only code path (e.g. an `AF_UNIX` socket path or a helper executable
+looked up by file path) being hit on Windows.
+
+After upgrading to 1.6.0.5 today (12:03 onward), **this warning no longer appears at
+all**, in either instance's log. But actual listening sockets, checked directly:
+```
+Get-NetTCPConnection -State Listen | Where OwningProcess -in 14212,8772
+  0.0.0.0  56791  (PID 14212)
+  0.0.0.0  52788  (PID 8772)
+```
+— both processes are listening on random ephemeral ports, **not** port 43737, which
+is the port the UI displays under "Discovered peers → This System". So the
+underlying listener-setup problem is still present; 1.6.0.5 just stopped logging it,
+which is a diagnosability regression even if unrelated to the original bug.
+
+---
+
+## 4. Pairing fails with an unhelpful, completely unlogged error
+
+User-driven repro: Settings → Local-network discovery → Pair on a discovered peer
+labeled "This System" (port 43737, Node ID `node-f...73f51b` — **not** the same as
+this machine's own `local_node_id` `node-b31a0913e76db7c60cb7c6ec82313660` in
+`cluster.json`).
+
+Result: dialog shows **"Target did not provision the peer grant"** and the pair
+fails. `system-analyzer.log` gained **zero new lines** for this event — confirmed by
+diffing the log file before/after the pairing attempt. No trace of the failure
+exists outside the UI.
+
+Root cause is most likely #1: earlier `--help`/`--version`/bogus-flag test runs each
+spawned a full GUI+node instance that briefly advertised itself over mDNS before being
+killed; this instance's stale/half-dead advertisement is what got discovered and
+mislabeled "This System" (see #5), and pairing against it fails because the
+advertising process no longer exists to complete grant provisioning.
+
+**Root-cause theory above corrected by the 1.6.0.7 retest — see below: the original
+"leftover killed process" explanation does not hold up.**
+
+### Retest — 1.6.0.7 (2026-09-17, user-driven + independently confirmed)
+
+Fresh session: exactly **one** `system-analyzer` process was running (PID
+8584/13680, launched clean, no prior `--help`/`--version`/bogus-flag instances this
+session). The user opened Nodes & Connections and clicked **Pair** on the
+"This System" discovered peer themselves; result was identical:
+**"Target did not provision the peer grant."** User confirmed: *"still dud[n't]
+work."*
+
+Independently verified before and after:
+- `Get-Process` (broad match `python|system.analyzer|pythonw`): only PID 8584/13680.
+- `Get-ScheduledTask` filtered for system-analyzer/python: **no matches**.
+- `Get-Service` filtered for system-analyzer/python: **no matches**.
+- `system-analyzer.log`: the running instance logged only its own real node id
+  (`node-b31a0913e76db7c60cb7c6ec82313660`) — **zero log lines** mentioning
+  discovery or the `f...73f51b` peer, and zero new lines for the failed pair
+  attempt (same silent-failure pattern as before).
+
+The ghost peer itself: still labeled "This System", still Node ID
+`node-f...73f51b` — **the exact same node-id suffix seen during the 1.6.0.5
+session roughly 50 minutes and one wheel upgrade earlier** — but now advertising
+on a different port (`36161` vs. the earlier `43737`).
+
+**This contradicts the original root-cause theory.** A leftover killed process from
+the earlier `--help`/`--version`/bogus-flag testing cannot explain a peer that:
+(a) survived a full app version upgrade (1.6.0.5 → 1.6.0.7) and multiple full
+process restarts/kills in between, and (b) is being discovered by a session with no
+other local process, scheduled task, or service found anywhere on the machine.
+The `f...73f51b` identity is coming from something this machine cannot see with
+normal PowerShell process/task/service inspection — possibly a genuinely separate
+device on the LAN, a stale multicast/mDNS cache entry somewhere in the network path
+(router, another host), or a component of the app that persists independently of
+the GUI process lifecycle. **Flagging for the Linux side to investigate directly
+rather than assuming the earlier theory** — do not carry the "leftover test
+process" explanation forward as fact.
+
+**PHYSICAL RESULT: pairing still fails identically on 1.6.0.7. Not fixed (expected —
+commit 723840c targeted finding #1 only). Root cause is less understood than
+previously written, not more — see correction above.**
+
+---
+
+## 5. Discovered peer mislabeled "This System" despite a different Node ID
+
+The peer in #4 is shown under the heading **"This System"** in the Discovered peers
+list, but its Node ID does not match this machine's actual `local_node_id`. The
+real Windows hostname is `DESKTOP-0C2C5H3`, not "This System" — so the label isn't
+derived from the hostname either. This looks like a same-machine/loopback heuristic
+that doesn't actually verify identity, so a user could be misled into pairing with an
+untrusted or stale peer while believing it's their own instance.
+
+### Retest — 1.6.0.7 (2026-09-17)
+
+Unchanged: same "This System" label, same mismatched Node ID (`node-f...73f51b`),
+now on port `36161` instead of `43737` (see #4 retest for full detail on why this
+matters — the peer's persistence across an app upgrade rules out the "stale local
+test process" theory this finding originally leaned on). **Not fixed, not
+expected to be** (out of scope for commit 723840c).
+
+---
+
+## 6. mDNS (UDP 5353) bound inconsistently across network interfaces between the two instances
+
+```
+PID 14212: fe80::fa4a:c059:d9e:c411%14 : 5353                         (1 interface)
+PID 8772:  fe80::eb53:...%15, fe80::583f:...%3, ::1, ::, 
+           192.168.55.103, 127.0.0.1  : 5353                          (6 bindings, incl. real LAN IPv4)
+```
+The first instance never bound the real LAN adapter (`192.168.55.103`) for mDNS at
+all — only a single link-local IPv6 interface. This is a plausible explanation for
+why "Discovered peers" showed nothing for the two legitimately-running instances to
+find each other over the actual LAN: instance 1's discovery listener isn't present
+on the interface instance 2 (or any real LAN peer) would announce on. Flagging as a
+hypothesis for the Linux side to confirm against the `zeroconf`/interface-enumeration
+code — not confirmed root cause.
+
+---
+
+## 7. NVIDIA GPU probe runs unconditionally on non-NVIDIA hardware
+
+Every single launch, on this AMD-only machine:
+```
+WARNING maintenance.scanner: NVIDIA GPU query failed: NVML Shared Library Not Found
+```
+100% reproducible, every run, both instances. `Get-CimInstance Win32_VideoController`
+confirms no NVIDIA adapter is present (`AMD Radeon(TM) Graphics`). The scanner
+doesn't appear to gate the NVML probe behind actual NVIDIA-hardware detection.
+Low severity (log noise only, observed), but trivial to reproduce on any non-NVIDIA
+Windows box.
+
+---
+
+## 8. Thermals page: CPU temperature permanently blocked, Storage temperature never populates
+
+User-driven repro: main window → System Overview → Thermals.
+
+- **CPU Temperature** card shows: *"CPU temperature requires administrator
+  privileges"* — permanently, with no in-app path to elevate/retry (app was not
+  launched as admin, and there's no "Restart as administrator" affordance offered).
+- **Storage Temperature** card shows: *"Waiting for the first sample"* and never
+  progresses past that state.
+
+Log search for `temp|therm|sensor|admin|storage` (case-insensitive) over the entire
+log file: **zero matches** — same silent-failure pattern as #3/#4. Whatever is
+blocking storage-temperature sampling, or gating CPU temperature on admin rights,
+produces no log trace to diagnose from.
+
+### Retest — 1.6.0.7 (2026-09-17)
+
+Full page captured this time (previous session only screenshotted a partially
+scrolled view). Confirmed layout top-to-bottom: **Cpu Temperature**, **Gpu
+Temperature**, **Storage Temperature**, **Battery Temperature**, **Recent thermal
+events**.
+
+- **Cpu Temperature:** unchanged — *"CPU temperature requires administrator
+  privileges"*, permanently, no elevation affordance.
+- **Gpu Temperature:** *"Waiting for the first sample"* — never progresses (new
+  card not previously screenshotted in the 1.6.0.5 pass; same stuck state).
+- **Storage Temperature:** unchanged — *"Waiting for the first sample"*, never
+  progresses.
+- **Battery Temperature:** unchanged — *"Waiting for the first sample"*, never
+  progresses.
+- **Recent thermal events:** *"No recent thermal events"* (new section not
+  previously captured; consistent empty/inactive state, not obviously broken on
+  its own).
+
+Log search repeated for `temp|therm|sensor|admin` (case-insensitive) after visiting
+this page on 1.6.0.7: **zero matches**, same as 1.6.0.5.
+
+**PHYSICAL RESULT: unchanged / not fixed** (expected — commit 723840c targeted
+finding #1 only, not thermals).
+
+---
+
+## 9. "Last refreshed" timestamp is frozen while the data behind it is clearly live
+
+Repro: open System Overview, note the "Last refreshed: 12:04:58" label bottom-left,
+wait 65+ seconds without touching anything, screenshot again.
+
+Result: CPU (25.0% → 5.3%), Memory (66.3% → 65.2%, available GiB changed), Network
+(0.00 B/s → 238.19 B/s down, 175.72 → 108.27 B/s up), Battery (85% → 82%) all
+visibly updated — but **"Last refreshed: 12:04:58" never changed**, across a 65+
+second wait. Preferences (Settings → Preferences → Scanning) confirms each card
+polls independently and frequently (CPU 1s, Memory 5s, Network 1s, GPU 3s,
+Battery/Storage 30s), so the per-card data is genuinely live. The single global
+"Last refreshed" label is evidently wired to a different, one-shot "full scan"
+completion event that only fires once at startup and never again — it does not
+track the independent per-card refresh loops that actually update the numbers.
+
+**Impact:** the timestamp is actively misleading — a user has no reliable way to
+tell whether the dashboard is actually live or stalled, since the one indicator
+meant to answer that question is itself stuck.
+
+## 10. App exposes no accessible UI tree to Windows (UI Automation / assistive tech)
+
+Using `System.Windows.Automation` against the main window (`ProcessId 14212`):
+`FindAll(Descendants, TrueCondition)` returns **39 elements, all `ControlType.Pane`**
+— zero buttons, zero text, zero named controls, despite the window visibly
+containing many buttons, links, labels, and form fields (confirmed via
+screenshots). This means the UI is rendered inside an embedded web/canvas surface
+with accessibility not exposed to the OS at all.
+
+**Impact:** the app is unusable with a screen reader or any UIA-based
+assistive/automation tooling on Windows — not just a test-automation inconvenience,
+a real accessibility gap.
+
+## 11. Capability list text is clipped, not wrapped, in "All Systems"
+
+Settings → All Systems → the "This System" machine row lists capabilities as a
+single unwrapped line that runs off the right edge of its container and is cut off
+mid-word: `..., Remote Management, Storage Re` (truncated, presumably
+"Storage Read/Storage Removal/similar"). No ellipsis, no wrap, no horizontal
+scroll affordance in that card — content is simply clipped by the window edge.
+
+## 12. Local machine identity is presented inconsistently between pages
+
+- All Systems → "This System" row: `Local · Online · Coordinator · DESKTOP-0C2C5H3
+  · Local · Trusted · ...` — correctly shows the real Windows hostname.
+- Nodes & Connections → Discovered peers (see finding #5, earlier session): a
+  peer card labeled bare **"This System"**, no hostname shown at all, with a
+  Node ID that did not match this machine's own `local_node_id`.
+
+Same display string ("This System") is used for two different concepts —
+"this is genuinely your local install" (All Systems) vs. "some discovered peer
+that might be on the same machine" (Nodes & Connections) — with no hostname
+disambiguation in the latter. This is the same confusable-identity issue as #5,
+now confirmed from the trustworthy side (All Systems) as well.
+
+## 13. Two legitimate, simultaneously-running instances never discover each other
+
+With PID 14212 and PID 8772 both running normally (no crashes, both logging
+"Network discovery active") for 10+ minutes side by side on the same machine,
+Nodes & Connections still reports **"Status: Running - no peers found"** /
+"Discovery running - 0 peers found" on both. Consistent with finding #6
+(inconsistent mDNS interface binding) — the two processes' discovery listeners
+are plausibly not reachable from each other's bound interfaces.
+
+---
+
+## Summary table
+
+| # | Finding | Reproducible | Logged? |
+|---|---|---|---|
+| 1 | `--help`/`--version`/any flag ignored, launches GUI, hangs forever | Yes, 3/3 | No |
+| 2 | No single-instance guard; shared node identity across processes | Yes | Partially (id logged, collision not) |
+| 3 | Peer listener not actually bound to advertised port; warning silenced in 1.6.0.5 | Yes | No (was logged in 1.6.0.3) |
+| 4 | Pairing fails with generic error, no log entry | Yes (user-driven) | No |
+| 5 | Discovered peer mislabeled "This System" with mismatched Node ID | Yes | No |
+| 6 | Inconsistent mDNS interface binding between instances | Yes | No |
+| 7 | Unconditional NVIDIA NVML probe fails noisily on AMD-only box | Yes, every launch | Yes (WARNING) |
+| 8 | Thermals: CPU temp permanently blocked, storage temp never samples | Yes (user-driven) | No |
+| 9 | "Last refreshed" timestamp frozen while underlying data is live | Yes, 65s+ wait confirmed | No |
+| 10 | No accessible UI tree exposed (UI Automation sees 39 unlabeled panes only) | Yes | N/A |
+| 11 | Capability list text clipped mid-word, no wrap/ellipsis, in All Systems | Yes | N/A |
+| 12 | "This System" label reused for both the real local install and an unrelated discovered peer | Yes | No |
+| 13 | Two live, healthy instances never discover each other after 10+ min | Yes | Partially (INFO only, no error) |
+
+## Suggested triage order for the Linux side
+
+Per the project's testing protocol (`WINDOWS-TESTING-PROTOCOL.md`), pick the
+**first broken boundary** rather than fixing everything at once. #1 (CLI entry point
+ignoring argv) is the most isolated, most portable, and most likely to have a
+Linux-runnable regression test (invoke the console-script entry point with
+`--help`/`--version` and assert it prints and exits — no Windows-specific
+behavior involved). Recommend starting there, since it's also what's polluting the
+network-discovery state behind #2/#4/#5.
+
+---
+
+## Finding #1 — Repair log
+
+**PHYSICAL INITIAL (wheel 1.6.0.5):** FAIL — `--help`/`--version`/any flag launched full GUI and never exited.
+
+**Root cause:** `main.main()` called `AppWindow()` unconditionally; `sys.argv` was never inspected.
+
+**Fix (commit 38e52c9 / wheel 1.6.0.7):**
+`main._build_arg_parser()` returns an `argparse.ArgumentParser` with `--version` wired to `action="version"`.
+`main.main()` calls `_build_arg_parser().parse_args()` as its first statement — before `setup_logging()`, before `AppWindow()`, before any network/state bootstrap.
+
+**Linux regression tests added (`tests/test_logging_setup.py`):**
+- `EntryPointArgParsingTests` — parser in isolation: exit codes, version string contains `__version__`
+- `EntryPointEndToEndTests` — `main.main()` with `AppWindow` mocked: asserts not-called for help/version/unknown; called-once for no-args
+
+**Linux clean-venv smoke test (wheel 1.6.0.7):**
+
+| Command | Output | Exit |
+|---|---|---|
+| `system-analyzer --help` | usage text | 0 |
+| `system-analyzer --version` | `system-analyzer 1.6.0.7` | 0 |
+| `system-analyzer --totally-bogus-flag-xyz` | `error: unrecognized arguments: ...` | 2 |
+
+**Wheel:** `system_analyzer-1.6.0.7-py3-none-any.whl`
+**SHA-256:** `b54ccb0f50b8ff0c70c8adb1986a37ba24b4cbbe250405ee6bd09ad0c5d438f5`
+
+**Windows retest:** NOT VERIFIED — install 1.6.0.7 on Windows and run the three commands above.
+
+---
+
+## Finding #2 — Linux fix in progress (Phase 12E)
+
+Single-instance guard absent.  Still independently reproducible (confirmed REPRODUCED on 1.6.0.7 — see retest in the Finding #2 section above).
+
+### Phase 12E Linux repair (2026-09-17)
+
+**Fix commit:** `4814049`
+**Fix wheel:** `system_analyzer-1.6.1.0-py3-none-any.whl`
+**SHA-256:** `2d68d4194de5c94ea67239dc802e41dd30085b1bd4531d8b9d8fff621910aaf0`
+
+**Mechanism:** `maintenance/instance_lock.py` (new module) — OS-held exclusive
+advisory lock on the profile state directory (`%APPDATA%\system-analyzer\system-analyzer.lock`
+on Windows).  POSIX uses `fcntl.flock`; Windows uses `msvcrt.locking`.  Both
+paths release automatically on process termination including crashes (OS holds
+the lock on the file descriptor; fd closed on death → lock released).
+
+**Lock acquisition point:** `main.main()` — after `argparse.parse_args()` (so
+`--help`/`--version` still work while a runtime instance holds the lock), before
+`AppWindow()` construction (so no mutable state is touched by the second launch).
+
+**Second launch behavior:** prints `System Analyzer is already running.` to
+stderr, exits with code 1.  `AppWindow` is never constructed; `cluster.json`
+is never written; mDNS and the listener are never started.
+
+**Linux automated evidence:**
+
+| Test class | Label | Count |
+|---|---|---|
+| `InstanceLockAcquireTests` | UNIT | 5 |
+| `InstanceLockSubprocessTests` | REAL OS LOCK — Linux | 2 |
+| `WindowsLockBranchTests` (test_instance_lock.py) | UNIT / EMULATED WINDOWS BRANCH | 3 |
+| `WindowsInstanceLockBranchTests` (test_cross_platform_branches.py) | UNIT / EMULATED WINDOWS BRANCH | 3 |
+| `EntryPointEndToEndTests` additions | UNIT | 4 |
+
+Subprocess tests (`InstanceLockSubprocessTests`) spawn real child processes and
+exercise the OS-level flock exclusion and crash-recovery path.  These are
+`REAL OS LOCK ON LINUX`, not physical Windows evidence.
+
+**Windows retest required:** install `system_analyzer-1.6.1.0-py3-none-any.whl`
+on DESKTOP-0C2C5H3, launch two no-arg GUI instances, confirm second launch prints
+`System Analyzer is already running.` and exits immediately, confirm first instance
+remains alive.  Then kill the first instance forcefully and confirm a fresh launch
+succeeds (crash-recovery).
+
+**Windows retest — DONE, PHYSICAL PASS.** See the "Retest — 1.6.1.0 (PHASE 12E-W)"
+subsection under Finding #2 earlier in this document for full evidence (PIDs, exit
+codes, timings, six-criteria pass table). This "Windows retest required" note
+above is stale as of that retest; left in place for chronology rather than edited,
+per prior agreement not to silently rewrite externally-authored content.
+
+---
+
+## PHASE 12E-W — Clean single-runtime network/thermals baseline (2026-09-17, wheel 1.6.1.0)
+
+Per the retest plan: old network evidence (findings #3–#6, #12–#13) was gathered
+while duplicate-instance ownership was still possible, so it is not assumed valid.
+This section is a **fresh** reproduction from a guaranteed single-runtime
+environment (Finding #2 confirmed PASS immediately beforehand; only one process,
+PID 1216/14788, running for the whole of this section) — not a patch onto old
+evidence.
+
+**Thermals:** unchanged from both prior versions. Cpu Temperature still *"CPU
+temperature requires administrator privileges"* (permanent, no elevation path);
+Gpu/Storage/Battery Temperature still *"Waiting for the first sample"*
+indefinitely. Confirmed reproduced identically on 1.6.1.0 from a clean single
+instance — not an artifact of the earlier duplicate-instance sessions.
+
+**Pairing / Discovery — behavior has changed, and not obviously for the better:**
+on this clean instance, Nodes & Connections shows **"Status: Running - no peers
+found"** / **"Discovered peers: No peers discovered yet"**, sustained for 100+
+seconds of observation (checked at ~0s, ~40s, ~100s after opening the page; log
+file gained zero new relevant lines in that window beyond this instance's own
+periodic discovery/NVML entries). This is different from both the 1.6.0.5 and
+1.6.0.7 sessions, where a peer labeled "This System" (Node ID `node-f...73f51b`)
+was already visible within the first screenshot taken.
+
+**This means the previously-reproduced pairing failure (findings #4/#5: "Target
+did not provision the peer grant" against a mismatched-identity "This System"
+peer) has NOT yet been re-reproduced from this clean instance** — there is
+currently nothing in the Discovered peers list to attempt pairing against. This is
+recorded as a genuine behavior difference, not assumed to mean the underlying bug
+is fixed (Phase 12E's stated scope was the single-instance lock, not discovery/
+pairing) and not assumed to mean it's still broken in the same way either. Two
+explanations are open and unconfirmed:
+1. The `f...73f51b` ghost peer's source (still unidentified — see the 1.6.0.7
+   retest note under finding #4) happens not to be broadcasting/reachable at this
+   moment, independent of anything this wheel changed.
+2. Something incidental to a longer-running clean single-instance session (vs. the
+   rapid multi-instance churn of earlier sessions) changed what gets discovered.
+
+**Open question for the user:** if a pairing failure was observed during this same
+session, it was most likely against one of the earlier PHASE 12E-W lock-test
+instances (PIDs 15028/6888, 13724/7956, or 11572/12024) before they were closed —
+those were not individually checked for Nodes & Connections state before closing.
+Not claiming pairing is fixed on 1.6.1.0; the clean repro simply hasn't caught the
+same failure yet. Next step, pending user direction: extend the observation window
+and/or check whether the ghost peer reappears with more elapsed time, rather than
+prematurely marking either PASS or FAIL.
+
+---
+
+## PHASE 12F — Controlled two-node discovery/listener validation (2026-09-17, both nodes 1.6.1.0)
+
+**Purpose:** replace speculative single-node evidence with a controlled two-node
+baseline.  Evidence boundary: prove each stage in order (single process per node →
+known NodeIds → actual listeners → direct TCP → mDNS discovery → identity match →
+TLS → Pair → authenticated hello) before diagnosing the next.
+
+---
+
+### PHASE 12F-L — Linux identity resolution (2026-09-17)
+
+**Context:** Windows's first controlled observation found NodeId
+`node-983364764039f9e6625e687273710909`, not the previously-recorded
+`node-ff37fa18b5d28f2343ab617f8773f51b`, with TLS fingerprint
+`1a7b:7cc8:e529:c7f7:2e92:4ce7:51d8:ce0f:54bf:b526:30ca:5fe0:263d:cd5a:c340:adc7`.
+This pass resolves the discrepancy before permitting another Pair.
+
+#### LINUX RUNTIME
+
+| Field | Value |
+|---|---|
+| Version | `1.6.1.0` |
+| PID | `3220` |
+| Command | `/home/btn17/Downloads/exp/.venv/bin/python /home/btn17/.local/bin/system-analyzer` |
+| Start time | `2026-09-17 15:49:58` |
+| Resolved state root | `/home/btn17/.config/system-analyzer/` |
+| `cluster.json` `local_node_id` | `node-983364764039f9e6625e687273710909` |
+| `cluster_id` | `local-cluster` |
+| Actual listener bind | `0.0.0.0:43281` |
+| Actual listener port | **43281** |
+
+Only one System Analyzer process on Linux; no second runtime, no second profile
+directory.
+
+#### LINUX TLS
+
+| Field | Value |
+|---|---|
+| Certificate path | `/home/btn17/.config/system-analyzer/peer-tls.crt` |
+| Cert created | `2026-09-10 15:30` (unchanged since creation) |
+| Canonical TLS fingerprint (SHA-256/DER) | `1a7b:7cc8:e529:c7f7:2e92:4ce7:51d8:ce0f:54bf:b526:30ca:5fe0:263d:cd5a:c340:adc7` |
+| Matches Windows-observed fingerprint | **YES — exact match** |
+
+#### LINUX DISCOVERY
+
+| Field | Value |
+|---|---|
+| Zeroconf-visible addresses | `['100.85.0.1', '192.168.55.107', '10.2.0.2', '127.0.0.1']` |
+| UDP 5353 bindings (PID 3220) | `192.168.55.107:5353`, `10.2.0.2:5353`, `127.0.0.1:5353`, `100.85.0.1:5353` (4 IPv4 bindings); plus `*`, `::`, `[::1]`, link-locals on IPv6 |
+| Advertised service instance | `node-983364764039f9e6625e687273710909._system-analyzer._tcp.local.` |
+| Advertised `id` (NodeId) | `node-983364764039f9e6625e687273710909` |
+| Advertised hostname | `m75-node1.local.` |
+| Advertised port | **43281** |
+| Advertised addresses | `10.2.0.2` (VPN — listed **first**), `100.85.0.1` (VPN), `192.168.55.107` (LAN — listed **third**) |
+| Advertised `tls_fingerprint` | `1a7b:7cc8:e529:c7f7:2e92:4ce7:51d8:ce0f:54bf:b526:30ca:5fe0:263d:cd5a:c340:adc7` |
+| Advertised `connectable` | `true` |
+
+**VPN address ordering confirmed:** `10.2.0.2` (unreachable from Windows) is first
+in the address list.  `window_discovery.py:1234` selects `candidate.addresses[0]`
+when building the connection endpoint for a trusted-node endpoint sync — if Windows
+picks the first address for the pair attempt, the connection would target an
+unreachable VPN IP.  That said, the Windows pair attempt returned the structured
+"Target did not provision the peer grant" response (not a connection error), which
+implies the TCP connection did succeed — possibly because Windows tried multiple
+addresses or the address ordering was different on the Windows resolver side.  The
+`addresses[0]` selection is a confirmed code path, confirmed to pick a VPN address
+first here, and is recorded as a separate finding candidate for the next pass.
+
+#### PROFILE AUDIT
+
+Only one System Analyzer profile directory exists:
+`/home/btn17/.config/system-analyzer/`
+
+`node-ff37fa18b5d28f2343ab617f8773f51b` — found only in log history:
+`/home/btn17/.local/state/system-analyzer/system-analyzer.log`
+(last appearance: `2026-09-17 14:50:34`).  Not present in any cluster.json or TLS
+file.
+
+`node-983364764039f9e6625e687273710909` — appears in current cluster.json and in
+log history from `2026-09-17 15:01:48` onward.
+
+#### IDENTITY CHANGE ROOT CAUSE
+
+At `2026-09-17 15:01:45`:
+```
+WARNING maintenance.cluster: Unsupported cluster settings schema; using defaults
+```
+
+`ClusterStore._parse()` (`cluster.py:922-925`) rejects any `schema_version` not in
+`(1, 2)`.  When it rejects, it returns `ClusterState()` — the no-arg default —
+which has `local_node_id: str = "local"` (`cluster.py:661`).  The outer `load()`
+then detects `local_node_id == "local"` (`cluster.py:850`) and calls
+`generate_stable_node_id()`, producing `node-983364...`.  The TLS cert is generated
+by a separate code path (`ensure_tls_material()`) and was NOT regenerated.
+
+**The old cluster.json had a `schema_version` outside `(1, 2)` — most likely from
+an experimental/newer source build.  When this version was loaded by the current
+code, it silently discarded the `local_node_id` and generated a new one.**
+
+This is an identity-persistence bug: `ClusterStore.load()` should preserve
+`local_node_id` even when `schema_version` is unsupported.  The node's network
+identity should not be tied to schema migration success.  This is noted for future
+repair; per Phase 12F-L instructions, no production code is changed here.
+
+#### CONSISTENCY CHECK
+
+| Comparison | Result |
+|---|---|
+| `cluster.json NodeId` == `mDNS advertised NodeId` | **MATCH** — both `node-983364764039f9e6625e687273710909` |
+| `mDNS advertised NodeId` == `Windows-discovered NodeId` | **MATCH** |
+| `cluster.json NodeId` == `Windows-discovered NodeId` | **MATCH** |
+| Actual Linux listener port == mDNS advertised port | **MATCH** — both `43281` |
+| mDNS advertised port == Windows-discovered port | **MATCH** — both `43281` |
+| Linux TLS fingerprint == mDNS advertised `tls_fingerprint` | **MATCH** |
+| Linux TLS fingerprint == Windows-observed TLS fingerprint | **MATCH** |
+
+All four identity sources (cluster.json, runtime log, mDNS advertisement,
+Windows discovery) are coherent on `node-983364764039f9e6625e687273710909`.
+
+#### CONCLUSION
+
+**Windows-discovered peer IS the current m75-node1 Linux runtime — VERIFIED.**
+
+The earlier `node-ff37...` record was stale: the cluster.json was regenerated today
+at 15:01:45 due to an unsupported schema version.  The TLS cert survived
+unchanged across that event (it is the stable cross-session identity anchor).
+
+**Earlier Phase 12F doc note corrected:** the ghost-peer identification based on
+NodeId suffix truncation (`f...73f51b` ≈ `f8773f51b`) was circumstantially correct
+in attributing the peer to the Linux machine, but the specific NodeId it cited
+(`node-ff37...`) was from an already-superseded cluster state.  The current
+authoritative Linux NodeId is `node-983364764039f9e6625e687273710909`.
+
+#### FIRST BROKEN BOUNDARY
+
+No broken boundary at the identity/TLS/port layer — all consistent.  Two
+unresolved items carried forward:
+
+1. **VPN address ordering**: `addresses[0]` picks `10.2.0.2` (VPN, unreachable from
+   Windows) before `192.168.55.107` (LAN).  Whether this caused the pair failure
+   is unconfirmed — the "Target did not provision the peer grant" response suggests
+   TCP succeeded, but address-selection behaviour on the Windows resolver side is
+   not yet proven.
+
+2. **Pair failure root cause**: the pair was attempted before this identity pass
+   completed; the Linux approval dialog may have timed out (user was on Windows side,
+   not watching the Linux screen).  A new controlled pair — with a user watching
+   both screens simultaneously — is required to distinguish a human-timeout from a
+   production defect.
+
+**Production code changed: NO.**
+
+---
+
+### NODE A identity (Linux — m75-node1) — CORRECTED post Phase 12F-L
+
+| Field | Value |
+|---|---|
+| Hostname | `m75-node1` |
+| App version | `1.6.1.0` |
+| **local_node_id (current)** | **`node-983364764039f9e6625e687273710909`** |
+| local_node_id (historical, superseded) | `node-ff37fa18b5d28f2343ab617f8773f51b` (last seen 14:50:34, replaced by schema-fallback at 15:01:45) |
+| cluster_id | `local-cluster` |
+| LAN IPv4 | `192.168.55.107` (interface `enp2s0f0`) |
+| VPN adapters present | `pvpnksintrf1` at `100.85.0.1/24` (ProtonVPN, **default route**); `proton0` at `10.2.0.2` |
+| discovery_enabled | `True` |
+| Listener port | **43281** (OS-confirmed, PID 3220) |
+| mDNS advertised addresses | `10.2.0.2` (VPN, first), `100.85.0.1` (VPN, second), `192.168.55.107` (LAN, third) |
+| TLS fingerprint | `1a7b:7cc8:e529:c7f7:2e92:4ce7:51d8:ce0f:54bf:b526:30ca:5fe0:263d:cd5a:c340:adc7` |
+
+### NODE W identity (Windows — DESKTOP-0C2C5H3)
+
+| Field | Value |
+|---|---|
+| Hostname | `DESKTOP-0C2C5H3` |
+| App version | `1.6.1.0` |
+| local_node_id | `node-b31a0913e76db7c60cb7c6ec82313660` |
+| LAN IPv4 | `192.168.55.103` |
+| Listener port | `0.0.0.0:50778` (OS-confirmed) |
+| discovery_enabled | `True` |
+| mDNS service type | `_system-analyzer._tcp.local.` |
+
+### Phase 12F controlled experiment — IN PROGRESS
+
+| Step | Status | Evidence |
+|---|---|---|
+| Single process — NODE A | **CONFIRMED** — PID 3220 only | `ps aux`, `ss -tlnp` |
+| Single process — NODE W | **CONFIRMED** | Windows process check |
+| Listener port — NODE A | **CONFIRMED** `43281` | `ss -tlnp` PID 3220 |
+| Listener port — NODE W | **CONFIRMED** `50778` | Windows `Get-NetTCPConnection` |
+| Advertised port == actual port — NODE A | **CONFIRMED** `43281` == `43281` | mDNS browse + `ss` |
+| Advertised port == actual port — NODE W | PENDING | — |
+| Direct TCP: Linux → Windows listener | PENDING | — |
+| Direct TCP: Windows → Linux listener | PENDING | — |
+| mDNS: NODE W sees NODE A | **CONFIRMED** — `node-983364...` seen on Windows | Windows Nodes & Connections |
+| mDNS: NODE A sees NODE W | PENDING | — |
+| Discovered NodeId matches expected — Windows sees Linux | **CONFIRMED** | `node-983364...` == cluster.json |
+| Discovered NodeId matches expected — Linux sees Windows | PENDING | — |
+| "This System" mislabel for remote node absent | PENDING — reclassify after next observation | — |
+| Controlled Pair — both screens attended | PENDING — requires user watching both screens | — |
+| Authenticated hello | PENDING | — |
+
+---
+
+## PHASE 12F-W — Windows-side evidence (2026-09-17)
+
+Executed the Windows-only portions of the Phase 12F controlled plan. **No access
+to the Linux machine from this session** — Part A (Linux zeroconf/listener/mDNS
+prep), direct TCP from the Linux side, and Linux-side discovery observation could
+not be performed here and still need to come from the Linux side or a separate
+Linux-side session.
+
+### Part B — NODE W prep (complete)
+
+| Field | Value |
+|---|---|
+| Version | `system-analyzer 1.6.1.0` (confirmed via `--version`) |
+| Runtime PID | `4020` (launcher `4624`), single instance confirmed, `MainWindowTitle` = `System Analyzer` |
+| **WINDOWS_ACTUAL_PORT** | `50778`, bind `0.0.0.0` (`Get-NetTCPConnection -State Listen` filtered to PID 4020) |
+| LAN adapter | `WiFi` → `192.168.55.103/24`, has default gateway — matches expected NODE W address |
+| Other adapters | `Local Area Connection* 1` `169.254.99.193/16`, `Local Area Connection* 2` `169.254.87.51/16`, `Bluetooth Network Connection` `169.254.208.36/16` — all APIPA, no gateway, no VPN adapter present on Windows |
+
+Part C (direct TCP) not yet performed — blocked on `LINUX_ACTUAL_PORT` from the
+Linux side.
+
+### Part D/F — discovery + pairing observation (2026-09-17, ~15:51)
+
+On the same NODE W instance (PID 4020/4624, still the single confirmed runtime),
+user opened Nodes & Connections and attempted Pair against a discovered peer. Full
+evidence captured via the in-app "Details" panel:
+
+```
+Name: This System
+Node ID: node-983364764039f9e6625e687273710909
+Hostname: This System
+Host: This System
+Port: 43281
+Pairing: pairing_failed
+Target: (empty)
+Role: (empty)
+Permissions: (empty)
+Identity status: (empty)
+Identity fingerprint: cf1e:352f:367e:4111:a9c6:696c:2871:af2d:f65d:e0e9:6b69:3dc6:4c02:831d:4008:6a04
+TLS fingerprint: 1a7b:7cc8:e529:c7f7:2e92:4ce7:51d8:ce0f:54bf:b526:30ca:5fe0:263d:cd5a:c340:adc7
+```
+
+UI error shown: **"Target did not provision the peer grant"** (same text as every
+prior session).
+
+**This does NOT match the documented Linux identity.** Per this document's own
+PHASE 12F prep note above (line ~641), the expected Linux `local_node_id` is
+`node-ff37fa18b5d28f2343ab617f8773f51b` (truncated suffix `...73f51b`). The NodeId
+captured just now is `node-983364764039f9e6625e687273710909` (suffix `...710909`)
+— a different value, not a truncation match. Per Part G of the Phase 12F-W plan,
+this is recorded as an **unexpected peer**, not assumed to be Linux NODE A:
+
+| NodeId | name | hostname | port | first seen | last seen |
+|---|---|---|---|---|---|
+| `node-983364764039f9e6625e687273710909` | This System | This System | 43281 | ~15:51 (this session, PID 4020) | ~15:52, status `pairing_failed` |
+
+**Anomaly worth flagging before anyone trusts this as "the Linux node":** the TLS
+fingerprint captured here (`1a7b:7cc8:e529:c7f7:...:cd5a:c340:adc7`) is
+**byte-identical** to the TLS fingerprint captured in both the 1.6.0.5 session
+(finding #4, port `43737`) and the 1.6.0.7 session (finding #4 retest, port
+`36161`) — despite the displayed Node ID and port being different in all three
+observations (`...73f51b`/43737, `...73f51b`/36161, `...710909`/43281 — note even
+the *first two* sessions' node-id suffix as OCR'd from a truncated dialog may not
+be as reliable as assumed; only this session's suffix was read from the untruncated
+Details panel). A TLS certificate fingerprint is a cryptographic identity that
+should not change across genuinely different remote devices or app restarts on the
+same device with persisted keys; a self-reported `Node ID` string is comparatively
+easy to regenerate. This is the opposite of what would be expected if these were
+either (a) three consistent observations of the same real Linux node, or (b) three
+different devices. It is flagged here, unresolved, rather than assumed to confirm
+either the "phantom Windows artifact" theory or the "confirmed Linux node" theory.
+
+**Supporting evidence, checked at time of capture:**
+- `cluster.json` on Windows: `peer_grants: []`, `trusted_nodes: []` — the failed
+  pairing left no trace here.
+- `system-analyzer.log`: **zero new lines** since this instance's own startup
+  (`14:47:11`), despite the discovery + pairing attempt happening over an hour
+  later (~15:51–15:52). Same silent-failure pattern as findings #3/#4/#8.
+
+**Status: UNRESOLVED, blocking further controlled pairing.** Per the plan's Part G
+and the "do not pair with unknown peers" rule, this observation should not be
+treated as either a reproduction or a non-reproduction of the documented
+Linux-node pairing failure until the Linux side confirms what `local_node_id`
+`m75-node1` is *currently* reporting in its own `cluster.json`. Open question sent
+to the user: is `m75-node1` running right now, and does its current
+`local_node_id` match `node-ff37fa18b5d28f2343ab617f8773f51b`,
+`node-983364764039f9e6625e687273710909`, or neither?
+
+No source code was changed during this phase. No further Pair attempts were made
+against this or any other peer after this observation, pending clarification.
+
+---
+
+## PHASE 12F-P — Controlled Windows → Linux Pair retest (2026-09-17, ~18:27)
+
+Per the authoritative identities supplied for this phase: NODE A (Linux,
+`m75-node1`) = `node-983364764039f9e6625e687273710909`, listener
+`0.0.0.0:43281`, LAN `192.168.55.107`. This resolves the PHASE 12F-W open
+question from the previous section — `node-98...710909` **is** confirmed to be
+the current Linux identity, not a third unknown peer.
+
+**PRECHECK (Windows side):**
+
+| Field | Value |
+|---|---|
+| WINDOWS_PID | `3532` (single instance, confirmed via `MainWindowTitle -like "*System Analyzer*"`, no other python/system-analyzer process running) |
+| Windows current listener | `0.0.0.0:51125` (changed from the earlier `50778`/`56791`/`52788` — ephemeral, not treated as a defect per plan) |
+
+**TRANSPORT — Windows → Linux (Step 3, the critical test):**
+
+```
+Test-NetConnection 192.168.55.107 -Port 43281
+
+PingSucceeded     : True
+TcpTestSucceeded  : False
+SourceAddress     : 192.168.55.103
+InterfaceAlias    : WiFi
+NetworkIsolationContext : Internet
+```
+
+Repeated once immediately after to rule out a transient result — **same outcome
+both times** (`TcpTestSucceeded: False`, `PingSucceeded: True`).
+
+**Supporting Windows-side network evidence:**
+
+| Check | Result |
+|---|---|
+| `Get-NetConnectionProfile` (WiFi) | `NetworkCategory: Public`, `IPv4Connectivity: Internet` |
+| `Get-NetFirewallProfile` | All three profiles (Domain/Private/Public) `Enabled: True`, `DefaultOutboundAction: NotConfigured` (= allow by Windows default), `DefaultInboundAction: NotConfigured` |
+| Enabled outbound **block** rules | none found |
+| Named python/system-analyzer outbound rules | none found |
+
+Windows' own firewall shows no explicit outbound block, and outbound is allowed
+by default — so nothing on the Windows side obviously explains the failed TCP
+connect. The WiFi profile being `Public` rather than `Private` is notable context
+(affects Windows' own inbound/discovery posture) but does not by itself block
+Windows-*initiated* outbound TCP.
+
+**PHYSICAL RESULT — STOP per plan Step 3.** `TcpTestSucceeded: False` on the
+Windows → Linux direct-TCP test halts the experiment before mDNS/Pair, per the
+plan's explicit rule ("If FALSE: STOP. Do not Pair."). **No Pair attempt was
+made.** The first broken boundary for this controlled run is:
+
+    Windows -> Linux transport (direct TCP to 192.168.55.107:43281)
+
+This is evidence to return to the Linux side, not something fixable from Windows:
+either the Linux listener was not actually up/bound to that address at the time of
+this test, something between the two machines (e.g. AP/router client isolation on
+a network Windows itself categorizes as `Public`) is blocking peer-to-peer TCP
+despite ICMP passing, or the listener is bound to an interface/address not
+reachable from the Windows LAN path. Not diagnosed further per the "do not
+investigate pairing" instruction once transport fails. No source code was
+changed. No repeated Pair attempts were made (none were attempted at all).
+
+---
+
+## PHASE 12F-T — Windows → Linux TCP transport root-cause (2026-09-17, ~19:05)
+
+**Goal:** Determine where the TCP SYN from Windows dies. Categories:
+A = never reaches Linux NIC / B = arrives but iptables DROPs / C = SYN-ACK
+sent but return broken / D = full handshake / E = listener gone.
+
+### Step 1 — Runtime still alive
+
+| Check | Result |
+|---|---|
+| `ps -fp 3220` | `system-analyzer` running as `btn17`, PPID 3151, started 15:49 |
+| `ss -tlnp sport = :43281` | `LISTEN 0 16 0.0.0.0:43281 users:(("system-analyzer",pid=3220,fd=6))` |
+
+PID and listener confirmed unchanged since Phase 12F-P precheck.
+
+### Step 2 — Local connectivity
+
+| Test | Result |
+|---|---|
+| `nc -zv 127.0.0.1 43281` | **succeeded** (exit 0) |
+| `nc -zv 192.168.55.107 43281` | **succeeded** (exit 0) |
+
+The listener accepts connections sourced locally on both loopback and the LAN IP.
+The failure is therefore not the listener itself — it is something between
+the Windows NIC and the Linux application socket.
+
+### Step 3 — Route analysis (ProtonVPN kill switch)
+
+`ip -brief address`:
+```
+lo               UNKNOWN  127.0.0.1/8 ::1/128
+enp2s0f0         UP       192.168.55.107/24 fe80::…
+pvpnksintrf1     UNKNOWN  100.85.0.1/24 fdeb:…
+proton0          UNKNOWN  10.2.0.2/32 2a07:…
+```
+
+`ip route show`:
+```
+default via 100.85.0.1 dev pvpnksintrf1 proto static metric 98
+default via 192.168.55.1 dev enp2s0f0 proto dhcp metric 100
+100.85.0.0/24 dev pvpnksintrf1 proto kernel metric 98
+192.168.55.0/24 dev enp2s0f0 proto kernel metric 100
+195.242.214.210 via 192.168.55.1 dev enp2s0f0 proto static metric 100
+```
+
+`ip rule show`:
+```
+0:      from all lookup local
+30776:  from all lookup main suppress_prefixlength 0
+30777:  not from all fwmark 0xea13b2c lookup 245447468
+32766:  from all lookup main
+32767:  from all lookup default
+```
+
+`ip route show table 245447468`:
+```
+default dev proton0 proto static scope link metric 50
+```
+
+**Kill-switch routing analysis:**
+
+Rule 30777 routes all un-fwmarked traffic to table 245447468 (VPN-only, default
+via `proton0`). Rule 30776 short-circuits this for routes in the main table with
+prefix length > 0. Since `192.168.55.0/24 dev enp2s0f0` (prefix /24) is in the
+main table, outbound packets to 192.168.55.103 (Windows) exit through `enp2s0f0`
+correctly.
+
+`ip route get 192.168.55.103` → `192.168.55.103 dev enp2s0f0 src 192.168.55.107`
+confirms the SYN-ACK routing path is correct.
+
+**Conclusion:** The routing kill switch does NOT block TCP replies to LAN
+addresses. The kill switch only affects traffic destined for non-LAN addresses
+without a VPN fwmark.
+
+### Step 4 — Probable cause: ProtonVPN iptables INPUT rules
+
+`nft list ruleset` → **no rules / nft not installed** — the kill switch is
+implemented via iptables, not nftables.
+
+`sudo iptables` requires interactive sudo — could not run non-interactively.
+ProtonVPN daemon (PID 1029, root) and kill-switch interface `pvpnksintrf1` are
+both active. ProtonVPN's Linux kill switch commonly adds iptables INPUT rules of
+the form:
+
+```
+-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A INPUT -i lo -j ACCEPT
+-A INPUT -j DROP
+```
+
+This would:
+- Allow ICMP echo replies (RELATED/ESTABLISHED to an outbound ping) — but NOT
+  incoming ICMP echo requests initiated from outside. **Yet `PingSucceeded: True`
+  from Windows** — meaning ICMP *requests* arriving from Windows also pass. This
+  suggests the INPUT policy is not a blanket DROP, OR there is an explicit ICMP
+  ACCEPT rule.
+- Drop new incoming TCP connections (`--ctstate NEW`), explaining
+  `TcpTestSucceeded: False` while `PingSucceeded: True`.
+
+**Primary hypothesis: Category B — SYN arrives at enp2s0f0 but is dropped by an
+iptables INPUT rule that allows ICMP but drops new TCP.**
+
+### Step 5 — PENDING: packet capture + iptables read (user action required)
+
+The following commands must be run in an interactive terminal (sudo required).
+Run them in this order:
+
+**Terminal 1 — packet capture (start first):**
+```bash
+sudo tcpdump -ni enp2s0f0 'host 192.168.55.103 and tcp port 43281' -c 20
+```
+
+**Windows — run once after tcpdump is listening:**
+```powershell
+Test-NetConnection 192.168.55.107 -Port 43281
+```
+
+**Terminal 2 — iptables state (read-only, run any time):**
+```bash
+sudo iptables -S INPUT
+sudo iptables -S OUTPUT
+sudo iptables -L INPUT -n -v --line-numbers
+```
+
+**Expected outputs to record:**
+1. Whether `tcpdump` captures a SYN (`Flags [S]`) from `192.168.55.103`:
+   - **SYN visible** → Category B (arrives, dropped locally — check INPUT rules)
+   - **No SYN visible** → Category A (blocked before reaching Linux NIC)
+2. The full `iptables -S INPUT` listing — look for DROP/REJECT rules and
+   conntrack state matches.
+
+**No firewall or VPN configuration changes are to be made until this capture
+confirms the category.**
+
+**Status: PENDING packet capture.** Awaiting user execution of the commands
+above.
+
+---
+
+## PHASE 12G — LAN Transport Repair (2026-09-18, wheel 1.6.1.2)
+
+**Goal:** Replace ephemeral `port=0` listener with a stable configured port so
+Windows can reach the Linux peer listener consistently. Physical TCP proof
+required before code changes.
+
+### What was implemented
+
+**`PEER_SERVICE_DEFAULT_PORT = 27321`** — canonical constant in
+`maintenance/remote_support/server.py`. Below Linux ephemeral range (32768–60999).
+Not a well-known IANA port. Single owner: that file only.
+
+**`RemoteSocketServer.preferred_port`** — tries the configured port first; on
+`OSError` falls back to `port=0` (ephemeral) with `LOGGER.warning`. Property
+`preferred_port_honored: bool | None` tracks the outcome.
+
+**UFW application profile** — `packaging/system-analyzer`:
+```ini
+[System Analyzer]
+title=System Analyzer Peer Service
+description=Inbound TCP for System Analyzer LAN peer connections (port 27321)
+ports=27321/tcp
+```
+
+Install steps (Linux, interactive sudo):
+```bash
+sudo cp packaging/system-analyzer /etc/ufw/applications.d/
+sudo ufw app update "System Analyzer"
+sudo ufw allow "System Analyzer"
+```
+
+**Port contract tests** — `tests/test_remote_server.py` and
+`tests/test_cross_platform_branches.py`: constant exists, re-exported, value=27321;
+preferred_port_honored lifecycle; no duplicate 27321 literals outside canonical owner;
+window_discovery uses constant not literal; no firewall mutations.
+
+### Physical result (2026-09-18)
+
+```
+ss -tlnp 'sport = :27321'
+→ LISTEN 0 16 0.0.0.0:27321  (PID 44237)
+
+Test-NetConnection 192.168.55.107 -Port 27321
+TcpTestSucceeded : True
+```
+
+**PHASE 12G PHYSICAL PASS — Windows → Linux TCP on port 27321 confirmed.**
+
+Port: `27321` (stable, not ephemeral). UFW rule applied by user. VPN remains
+enabled throughout.
+
+---
+
+## PHASE 12H — Controlled Pairing Boundary Capture (2026-09-18, wheels 1.6.1.3 / 1.6.1.4)
+
+**Goal:** With TCP now proven, determine the first broken boundary in the pairing
+handshake. Mac → Linux pairing works; Windows → Linux pairing fails.
+
+### Confirmed baselines going in
+
+| Node | NodeId | LAN | Port | TLS fingerprint |
+|---|---|---|---|---|
+| Linux (m75-node1) | `node-983364764039f9e6625e687273710909` | `192.168.55.107` | `27321` | `1a7b:7cc8:...` |
+| Windows (DESKTOP-0C2C5H3) | `node-b31a0913e76db7c60cb7c6ec82313660` | `192.168.55.103` | varies (ephemeral) | — |
+
+### Boundary A — Endpoint selection defect (CONFIRMED, FIXED in 1.6.1.3)
+
+**Evidence:** Pair attempt from Windows failed with "Target did not provision the
+peer grant." Linux log showed **zero incoming connection entries** — the TCP
+connection never reached the Linux application. Direct TCP
+(`Test-NetConnection 192.168.55.107 -Port 27321 → TcpTestSucceeded: True`) works,
+proving the path is open.
+
+**Root cause:** `window_discovery.py:1243` (pre-fix):
+```python
+address = candidate.addresses[0] if candidate.addresses else record.host
+```
+Linux advertises addresses in order: `10.2.0.2` (VPN), `100.85.0.1` (VPN),
+`192.168.55.107` (LAN). Windows picked `10.2.0.2` first — unreachable from
+Windows since the ProtonVPN tunnel does not bridge to Windows.
+
+Mac → Linux pairing works because macOS resolves/orders the mDNS address list
+differently, placing the LAN address first.
+
+**Fix (wheel 1.6.1.3):** `_lan_address_key(addr)` helper added to
+`window_discovery.py` — ranks `192.168/16` (0), `172.16/12` (1), `10/8` (2),
+`100.64/10` (3), other (4). Selection changed to:
+```python
+address = min(candidate.addresses, key=_lan_address_key) if candidate.addresses else record.host
+```
+DEBUG log added showing which address was selected and what candidates were.
+
+**The fix runs on the INITIATOR side (Windows).** Linux needs the fix only when
+Linux initiates (reverse direction). Install 1.6.1.3 on Windows to pick up the fix.
+
+### Boundary B — Pairing approval dialogue (PENDING physical confirmation)
+
+After installing 1.6.1.3 on Windows and retrying, Windows now shows "Target did
+not provision the peer grant" but via a **different code path** — the connection
+reaches Linux (TCP+TLS succeed) but the pair_request is rejected or the approval
+dialogue is not seen/approved.
+
+**Linux log shows no "Pair request received" entry** — meaning `handle_pairing_request`
+was never called. Two possible explanations:
+
+1. **TLS handshake fails silently** — `server.py` catches all exceptions in the
+   handler; if `ssl_context.wrap_socket()` fails, no response is sent and Windows'
+   `on_error` shows "Target did not provision the peer grant."
+
+2. **`_handle_pairing_request` field validation fails** — returns
+   `{"approved": false, "error": "pairing_unavailable"}` before calling the
+   application handler; this produces no log entry in `handle_pairing_request`.
+
+**Diagnostic logging added (wheel 1.6.1.4):** `handle_pairing_request` now logs:
+- `INFO Pair request received from <NodeId>` — at function entry
+- `WARNING` — if pairing lock already held
+- `INFO Showing pairing dialog for <NodeId>` — when messagebox is about to open
+- `EXCEPTION` — if `messagebox.askyesno` raises (e.g. TclError on invalid parent)
+- `INFO Pairing dialog answered: approved=<bool>` — after user responds
+- `WARNING Pair request timed out` — if no answer in 60s
+- `INFO Pair request complete: approved=<bool>` — final result
+
+**Window lift added (wheel 1.6.1.4):** `controller.master.lift()` is called just
+before `messagebox.askyesno` so the System Analyzer window comes to the front.
+Any TclError from `lift()` is swallowed — it never blocks the dialogue itself.
+
+### How to run the next controlled pairing test
+
+**Pre-conditions:**
+- Linux: `system-analyzer 1.6.1.4` running, `ss -tlnp 'sport = :27321'` confirms listener
+- Windows: `system-analyzer 1.6.1.3` or `1.6.1.4` installed, app running
+- **Both screens must be attended simultaneously**
+
+**Procedure:**
+1. On Linux, confirm listener: `ss -tlnp 'sport = :27321'`
+2. On Windows, open Settings → Nodes & Connections
+3. Find Linux peer (NodeId `node-983364...710909`, port `27321`)
+4. Press **Pair** once
+5. **Immediately look at Linux screen** — the app window will come to the front
+   with a YES/NO dialogue: **"Allow node-b31a... to read this system?"**
+6. Click **YES** on Linux promptly (dialogue times out after 60s)
+7. Note what Windows shows after you approve
+
+**After the attempt — capture evidence:**
+
+Linux:
+```bash
+tail -50 /home/btn17/.local/state/system-analyzer/system-analyzer.log
+```
+
+Windows:
+```powershell
+Get-Content "$env:LOCALAPPDATA\system-analyzer\system-analyzer.log" -Tail 50
+```
+
+**What to look for in the Linux log:**
+- `Pair request received from node-b31a...` → request reached handler ✓
+- `Showing pairing dialog for node-b31a...` → dialogue was displayed ✓
+- `Pairing dialog answered: approved=True` → user approved ✓
+- `Pair request complete: approved=True` → success path
+- `EXCEPTION` line → TclError or other crash in dialogue
+- **Nothing** → TLS is still failing (connection never reached handler)
+
+### Wheel inventory
+
+| Wheel | Key change |
+|---|---|
+| `1.6.1.2` | Stable port 27321, UFW profile |
+| `1.6.1.3` | `_lan_address_key` — LAN address preference over VPN |
+| `1.6.1.4` | Pairing diagnostic logging + `lift()` before dialogue |
+
+All wheels are in `dist/`. Install with:
+```bash
+# Linux
+pip install dist/system_analyzer-1.6.1.4-py3-none-any.whl --force-reinstall --break-system-packages
+
+# Windows (PowerShell)
+pip install system_analyzer-1.6.1.4-py3-none-any.whl --force-reinstall
+```
+
+### Current status (2026-09-18 ~13:30)
+
+- Linux listener: `0.0.0.0:27321` (check with `ss -tlnp 'sport = :27321'`)
+- Linux version: `1.6.1.4`
+- Windows version needed: `1.6.1.3` or `1.6.1.4`
+- Next action: controlled pair with both screens attended; click YES on Linux
+
+---
+
+## 14. Diagnostics "Save performance capture" writes into the installed package's `site-packages` tree, not a discoverable user location
+
+New in 1.6.1.4: Settings → Diagnostics → **Save performance capture**. On this
+machine it wrote to:
+
+```
+C:\Users\BTN17\AppData\Roaming\Python\Python312\site-packages\docs\performance\observability\observability-20260918T132404Z.json
+```
+
+That is inside the **installed package's own `site-packages` directory**
+(`docs/performance/observability/` sits alongside `maintenance/` and `window.py`
+from the wheel install) — not a user data/output location like `%APPDATA%`,
+`%LOCALAPPDATA%`, Documents, or Downloads. This is a genuinely awkward place for
+a user-triggered "save" action to write to:
+
+- `site-packages` is where installed packages live, not where users expect their
+  own exported files to land — nobody browsing for "the file I just saved" would
+  think to look there.
+- On some installs this directory may not be writable by the running user at all
+  (e.g. an admin-installed package on a shared machine, or a future MSI/packaged
+  build with an install path under `Program Files`), which would make this save
+  action fail outright rather than just being hard to find.
+- It's fragile across reinstalls/upgrades — this exact path depends on which
+  Python installed the wheel and where `pip` put `site-packages`, which changed at
+  least once already on this machine between wheel versions in this same testing
+  session.
+
+**Recommendation for the Linux side (not implemented here, no source touched):**
+if the intended save directory can't be resolved/created/written to, the save
+action should fall back to writing the capture into the **current working
+directory the app was launched from** (i.e. wherever `system-analyzer` was run
+from), rather than silently writing into — or failing inside — the package install
+tree. That guarantees the user can actually find the file they just asked the app
+to save, and gives it a real chance of being writable regardless of how the app
+was installed or packaged.
+
+---
+
+## 15. PHASE 12H-W — Windows → Linux Pair retest, 1.6.1.4 (2026-09-18)
+
+**Process note, stated upfront:** this run did not stay to the plan's "exactly one
+attended Pair attempt" discipline. A UI click aimed at a peer's "Details" button
+produced an ambiguous result (main page navigated unexpectedly, no Details popup
+opened), and it's not possible to say with certainty whether that click, or an
+earlier untracked action, triggered one of the two pair attempts captured below.
+Recorded transparently rather than presented as a clean single-attempt result.
+
+**Baseline (confirmed):**
+
+| Field | Value |
+|---|---|
+| Windows version | `system-analyzer 1.6.1.4` |
+| Windows runtime PID | `15780` |
+| Direct TCP `192.168.55.107:27321` | `TcpTestSucceeded: True` |
+| Discovered target NodeId | `node-983364764039f9e6625e687273710909` — matches authoritative Linux identity |
+| Discovered target port | `27321` — matches authoritative |
+| Discovered target TLS fingerprint | `1a7b:7cc8:e529:...:cd5a:c340:adc7` — matches authoritative |
+| Labeled "This System" | **YES — REMOTE PEER MISLABEL — REPRODUCED** (identity fields all correct despite the label) |
+
+**Pair attempt evidence — sourced from the new Diagnostics → Save performance
+capture export** (see finding #14), not from `system-analyzer.log`, which
+contained **zero lines** about any of this:
+
+```
+target: app:node:node-983364764039f9e6625e687273710909:pair
+  count: 2, successes: 1, failures: 1
+  last_error: "RemoteExecutionError"
+  sample durations: 6.4628720999971850s, 0.0417407999993884s
+
+operations[] entry for the same key:
+  generation: 2, in_flight: false, last_error: null,
+  last_success: 1789737835.0803978
+```
+
+Interpretation: **two** pair attempts occurred in this session. One threw a typed
+`RemoteExecutionError` exception (duration 6.46s — long enough to suggest it
+actually waited on something, e.g. a round trip or a timeout, rather than failing
+instantly). The other completed its RPC round-trip without throwing (duration
+0.04s, `last_error: null`, has a `last_success` timestamp) — but:
+
+```
+Windows cluster.json immediately after, both trusted_nodes and peer_grants: []
+```
+
+**Even the non-erroring attempt produced no persisted trust.** This means
+"success" in the app's own operation tracker only reflects that a response was
+received without an exception — not that pairing actually succeeded. A rejection
+response (e.g. the same "Target did not provision the peer grant" seen in every
+prior session) would show up exactly this way: no exception, no error, but also
+no trust recorded.
+
+**Windows log:** confirmed empty for this entire sequence — no mention of
+`pair`, `RemoteExecutionError`, or the target NodeId anywhere in
+`system-analyzer.log`, despite the Diagnostics export proving the activity
+happened. The diagnostics system captures far more than the log file does; the
+log file remains the wrong place to look for pairing evidence.
+
+**Discovery instability, same session:** by ~14:28, roughly 5 minutes after the
+peer was first seen, Nodes & Connections reverted to "Status: Running - no peers
+found" / "0 peers found" — the peer dropped out of discovery entirely. Consistent
+with prior sessions' pattern of this peer's presence being intermittent rather
+than continuously advertised.
+
+**Boundary classification: not cleanly assignable this round**, for the reason
+stated at the top — Linux-side approval-dialog observation wasn't coordinated
+with a watched screen this time, so it's unknown whether either attempt reached
+and passed human approval on Linux. What **is** confirmed: transport, identity
+matching, and TLS are not the problem (all passed); at least one attempt reached
+the target and received a structured response without an exception, yet no trust
+was persisted on the Windows side either way. That places the unresolved boundary
+somewhere at or after target approval — pair response handling, initiator trust
+persistence, or pair_confirm — but not before it.
+
+**Recommendation:** rerun this phase once more with both screens deliberately
+watched from the first click, and treat the Diagnostics "Save performance
+capture" export as the primary evidence source for the next attempt rather than
+the log file, since it's the only thing on Windows that actually recorded
+anything.
+
+No source code was changed on Windows during this phase.
+
+---
+
+## 16. PHASE 12H-W retry — clean both-screens-watched attempt: BLOCKED on discovery (2026-09-18, ~14:39)
+
+Re-attempted the controlled Pair with the same PID `15780` instance (still
+running, transport re-confirmed `TcpTestSucceeded: True` on `192.168.55.107:27321`
+immediately beforehand). This time, before touching anything, checked Nodes &
+Connections first: **"Status: Running - no peers found" / "0 peers found."**
+Waited 20 seconds, rechecked — still 0 peers found. The Linux target was not
+discoverable at the start of this attempt, so no Pair click was made (nothing to
+click). Consistent with finding #15's note that this peer's presence is
+intermittent, not continuous.
+
+**Status: waiting on confirmation that `system-analyzer` is actually running on
+the Linux side right now** before continuing to poll for discovery. No Pair
+attempt made this round — zero risk of adding a third untracked attempt to the
+count. Using the wait productively to retest other still-open findings on
+1.6.1.4 (below) rather than idle-polling.
+
+---
+
+## 17. Deep retest of open findings #3/#6/#7/#9/#10/#11 on 1.6.1.4 (2026-09-18, ~14:45–14:51)
+
+Performed while waiting for the Linux peer to become discoverable again (still
+`0 peers found` throughout, checked repeatedly — see finding #16). Same instance,
+PID `15780`.
+
+### #3 — Remote peer listener port: IMPROVED, may now be resolved
+
+Previously (1.6.0.5/1.6.0.7): Windows bound a random ephemeral port each launch
+(`56791`, `52788`, `50778`, `51125`, ...), never matching the advertised/expected
+port. **Now:**
+
+```
+Get-NetTCPConnection -State Listen | Where OwningProcess -eq 15780
+  0.0.0.0  27321
+```
+
+Windows is stably bound to **27321** — the same "stable port" value the Linux
+side's wheel notes (finding #13 prep section) describe for `1.6.1.2+`. This looks
+like the stable-port work landed on the Windows build too, not just Linux.
+**Recommend Linux confirm this was intentional/shared and re-verify the
+advertised-port-matches-actual-port check now that both sides are stable**, but
+this finding looks resolved from the Windows side.
+
+### #6 — mDNS UDP 5353 interface binding: IMPROVED, may now be resolved
+
+Previously: a single instance bound only one link-local IPv6 interface for mDNS,
+missing the real LAN adapter entirely. **Now:**
+
+```
+Get-NetUDPEndpoint | Where OwningProcess -eq 15780 | (LocalPort 5353)
+  fe80::fa4a:c059:d9e:c411%14
+  fe80::eb53:a5bf:c6f4:dca1%15
+  fe80::583f:1f73:b56b:ea04%3
+  ::1
+  192.168.55.103   <- the real LAN IPv4, now present
+  127.0.0.1
+```
+
+The real LAN address is now bound alongside loopback and all link-local
+interfaces. This looks resolved. (Caveat: still can't confirm two-way discovery
+between Windows and a live Linux peer this session, since the peer keeps dropping
+out — see finding #16/#18 below. This only confirms Windows is *listening* on the
+right interface, not that discovery completes end-to-end.)
+
+### #7 — NVIDIA NVML probe on non-NVIDIA hardware: STILL REPRODUCED, unchanged
+
+```
+2026-09-18 14:23:05,402 WARNING maintenance.scanner: NVIDIA GPU query failed: NVML Shared Library Not Found
+```
+Still logs every launch on this AMD-only machine. No change.
+
+### #9 — "Last refreshed" timestamp frozen: STILL REPRODUCED, stronger evidence
+
+Original test: 65 seconds stale while data updated live. **This time: 14:23:05 →
+14:50, a full 27 minutes**, with the same timestamp never advancing while CPU
+(9.7% → 14.0%), Memory (85.5% → 83.9%), and Network rates all visibly changed
+across the screenshots. Not a transient glitch — confirmed stale across nearly
+half an hour of continuous runtime.
+
+### #10 — No accessible UI tree exposed: STILL REPRODUCED
+
+```
+UI Automation FindAll(Descendants) on PID 15780: 131 elements, all ControlType.Pane
+```
+Element count grew from 39 (1.6.0.5 session) to 131 (more UI surface — Diagnostics
+page, etc.), but the accessibility problem is identical: zero named/typed
+controls, screen readers and UIA tooling still see nothing usable.
+
+### #11 — Capability list text clipped in All Systems: STILL REPRODUCED
+
+Same exact clipped string observed again: `..., Remote Management, Storage Re`
+— cut off mid-word, no wrap, no ellipsis. Unchanged from the original 1.6.0.5
+finding.
+
+### Summary of this pass
+
+| # | Finding | 1.6.1.4 status |
+|---|---|---|
+| 3 | Listener port not matching advertised port | **Improved — now stable at 27321, likely resolved** |
+| 6 | mDNS bound to wrong/incomplete interfaces | **Improved — real LAN IPv4 now bound, likely resolved** |
+| 7 | NVML probe warns on non-NVIDIA hardware | Unchanged, still reproduced |
+| 9 | "Last refreshed" frozen while data is live | Unchanged, still reproduced (confirmed over 27 min) |
+| 10 | No accessible UI tree (UI Automation) | Unchanged, still reproduced |
+| 11 | Capability list text clipped | Unchanged, still reproduced |
+
+No source code was changed on Windows during this pass. No Pair attempts were
+made — this was pure read-only retesting while waiting on Linux-side discovery.
