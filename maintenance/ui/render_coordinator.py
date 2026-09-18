@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from maintenance.observability import EventKind, ObservabilityWatcher, Outcome
+from maintenance.ui.transition import PendingTransition
 
 LOGGER = logging.getLogger(__name__)
 
@@ -64,7 +65,13 @@ class UICoordinator:
     and committed once at the batch boundary.
     """
 
-    def __init__(self, *, observer: ObservabilityWatcher | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        schedule: Callable[[int, Callable[[], None]], Any] | None = None,
+        cancel: Callable[[Any], bool] | None = None,
+        observer: ObservabilityWatcher | None = None,
+    ) -> None:
         self._pending: dict[str, _PendingRender] = {}
         self._visible: dict[str, bool] = {}
         self._generations: dict[str, int] = {}
@@ -75,6 +82,9 @@ class UICoordinator:
         self.pending_peak = 0
         self.last_commit_seconds = 0.0
         self._observer = observer or ObservabilityWatcher()
+        self._schedule = schedule or (lambda _delay, _callback: None)
+        self._cancel = cancel or (lambda _identifier: False)
+        self._transitions: dict[str, PendingTransition] = {}
 
     def _event_total(self, event: EventKind) -> int:
         return self._observer.event_total("ui:render:", event)
@@ -172,6 +182,23 @@ class UICoordinator:
     def shutdown(self) -> None:
         self._closed = True
         self.clear()
+        for transition in self._transitions.values():
+            transition.cancel()
+        self._transitions.clear()
+
+    def schedule_transition(
+        self, name: str, delay: int, apply: Callable[[], None]
+    ) -> None:
+        """Schedule a named delayed callback, superseding any pending one of the same name."""
+        if name not in self._transitions:
+            self._transitions[name] = PendingTransition(self._schedule, self._cancel)
+        self._transitions[name].start(delay, apply)
+
+    def cancel_transition(self, name: str) -> None:
+        """Cancel a pending transition by name; safe when nothing is pending."""
+        transition = self._transitions.get(name)
+        if transition is not None:
+            transition.cancel()
 
     def request(
         self,

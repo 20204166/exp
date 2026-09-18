@@ -2,6 +2,7 @@
 
 import unittest
 from threading import current_thread
+from typing import Any
 
 from maintenance.observability import ObservabilityWatcher
 from maintenance.ui.render_coordinator import RenderIntent, UICoordinator
@@ -301,6 +302,107 @@ class UICoordinatorTests(unittest.TestCase):
         coordinator.end_batch()
 
         self.assertEqual(committed, ["scan-status", "dashboard"])
+
+
+class UICoordinatorTransitionTests(unittest.TestCase):
+    """UICoordinator must manage named PendingTransition slots."""
+
+    def _make_coordinator(
+        self,
+    ) -> "tuple[UICoordinator, list[tuple[int, Any]], list[Any]]":
+        scheduled: list[tuple[int, Any]] = []
+        cancelled: list[Any] = []
+        timer_id = 0
+
+        def fake_schedule(delay: int, callback: Any) -> int:
+            nonlocal timer_id
+            timer_id += 1
+            scheduled.append((delay, callback))
+            return timer_id
+
+        def fake_cancel(identifier: Any) -> bool:
+            cancelled.append(identifier)
+            return True
+
+        coordinator = UICoordinator(schedule=fake_schedule, cancel=fake_cancel)
+        return coordinator, scheduled, cancelled
+
+    def test_schedule_transition_fires_after_delay(self) -> None:
+        coordinator, scheduled, _ = self._make_coordinator()
+        applied: list[str] = []
+
+        coordinator.schedule_transition("status", 200, lambda: applied.append("done"))
+
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(scheduled[0][0], 200)
+        self.assertEqual(applied, [])
+
+        scheduled[0][1]()  # fire the timer
+        self.assertEqual(applied, ["done"])
+
+    def test_schedule_transition_supersedes_pending(self) -> None:
+        coordinator, scheduled, cancelled = self._make_coordinator()
+        applied: list[str] = []
+
+        coordinator.schedule_transition("status", 200, lambda: applied.append("first"))
+        coordinator.schedule_transition("status", 200, lambda: applied.append("second"))
+
+        self.assertEqual(len(cancelled), 1, "first timer must be cancelled")
+        self.assertEqual(len(scheduled), 2)
+
+        scheduled[1][1]()  # fire only the second timer
+        self.assertEqual(applied, ["second"])
+
+    def test_schedule_transition_different_names_are_independent(self) -> None:
+        coordinator, scheduled, cancelled = self._make_coordinator()
+
+        coordinator.schedule_transition("status", 200, lambda: None)
+        coordinator.schedule_transition("peer", 100, lambda: None)
+
+        self.assertEqual(len(cancelled), 0, "different names must not cancel each other")
+        self.assertEqual(len(scheduled), 2)
+
+    def test_cancel_transition_cancels_the_timer(self) -> None:
+        coordinator, scheduled, cancelled = self._make_coordinator()
+
+        coordinator.schedule_transition("status", 200, lambda: None)
+        coordinator.cancel_transition("status")
+
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(len(cancelled), 1)
+        self.assertEqual(cancelled[0], 1, "cancel must be called with the scheduled timer id")
+
+    def test_cancel_transition_unknown_name_is_safe(self) -> None:
+        coordinator, _, _ = self._make_coordinator()
+        coordinator.cancel_transition("nonexistent")  # must not raise
+
+    def test_shutdown_cancels_all_pending_transitions(self) -> None:
+        coordinator, scheduled, cancelled = self._make_coordinator()
+
+        coordinator.schedule_transition("status", 200, lambda: None)
+        coordinator.schedule_transition("peer", 100, lambda: None)
+
+        coordinator.shutdown()
+
+        self.assertEqual(len(cancelled), 2, "shutdown must cancel all pending transitions")
+
+    def test_no_schedule_callable_means_transitions_are_noop(self) -> None:
+        coordinator = UICoordinator()  # no schedule/cancel injected
+        coordinator.schedule_transition("status", 200, lambda: None)  # must not raise
+        coordinator.cancel_transition("status")  # must not raise
+        coordinator.shutdown()  # must not raise
+
+    def test_completion_slot_cancel_on_new_scan(self) -> None:
+        """Models the scan-complete → new-scan flow: the hold timer is cancelled."""
+        coordinator, scheduled, cancelled = self._make_coordinator()
+
+        coordinator.schedule_transition("completion", 3000, lambda: None)
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(scheduled[0][0], 3000)
+
+        coordinator.cancel_transition("completion")
+
+        self.assertEqual(len(cancelled), 1, "cancel must be called when a new scan starts")
 
 
 if __name__ == "__main__":
