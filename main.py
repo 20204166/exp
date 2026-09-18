@@ -15,6 +15,8 @@ LOG_DIR_NAME = "system-analyzer"
 LOG_FILE_NAME = "system-analyzer.log"
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
+LOGGER = logging.getLogger(__name__)
+
 
 def default_log_path(
     *,
@@ -30,19 +32,13 @@ def default_log_path(
 
     if system == "Windows":
         base = env.get("LOCALAPPDATA") or env.get("APPDATA")
-        return (
-            (Path(base) if base else home_dir / "AppData" / "Local")
-            / LOG_DIR_NAME
-            / LOG_FILE_NAME
-        )
-    if system == "Darwin":
-        return home_dir / "Library" / "Logs" / LOG_DIR_NAME / LOG_FILE_NAME
-    base = env.get("XDG_STATE_HOME")
-    return (
-        (Path(base) if base else home_dir / ".local" / "state")
-        / LOG_DIR_NAME
-        / LOG_FILE_NAME
-    )
+        base_dir = Path(base) if base else home_dir / "AppData" / "Local"
+    elif system == "Darwin":
+        base_dir = home_dir / "Library" / "Logs"
+    else:
+        base = env.get("XDG_STATE_HOME")
+        base_dir = Path(base) if base else home_dir / ".local" / "state"
+    return base_dir / LOG_DIR_NAME / LOG_FILE_NAME
 
 
 def setup_logging() -> Path | None:
@@ -99,6 +95,7 @@ def main() -> None:
 
     try:
         setup_logging()
+        LOGGER.info("system-analyzer %s started", __version__)
         app = AppWindow()
         app.run()
     finally:
