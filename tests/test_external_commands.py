@@ -23,6 +23,8 @@ class RunTextCommandTests(unittest.TestCase):
 
         self.assertEqual(stdout, "")
         self.assertIn("invalid byte", error or "")
+        # Command name must appear so the error is self-contained when propagated.
+        self.assertIn("cmd", error or "")
 
     def test_successful_command_returns_stdout(self) -> None:
         stdout, error = run_text_command(
@@ -146,6 +148,8 @@ class RunJsonCommandTests(unittest.TestCase):
 
         self.assertIsNone(payload)
         self.assertIn("Expecting", error or "")
+        # Command name must appear so the error traces back to its source.
+        self.assertIn("cmd", error or "")
 
     def test_empty_stdout_parses_fallback_when_supplied(self) -> None:
         fake = subprocess.CompletedProcess(["cmd"], returncode=0, stdout="")

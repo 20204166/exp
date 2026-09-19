@@ -44,7 +44,11 @@ def run_text_command(
             timeout=timeout_seconds,
             creationflags=creationflags,
         )
-    except (OSError, UnicodeError, subprocess.SubprocessError) as error:
+    except UnicodeError as error:
+        # str(UnicodeError) omits the command name; the other subprocess
+        # exception types embed it themselves, so prefix here for parity.
+        return "", f"{command[0]!r}: {error}"
+    except (OSError, subprocess.SubprocessError) as error:
         return "", str(error)
     return result.stdout, None
 
@@ -79,4 +83,6 @@ def run_json_command(
     try:
         return json.loads(stdout), None
     except json.JSONDecodeError as error:
-        return None, str(error)
+        # Include the command name so the caller can trace which probe
+        # produced unparseable output when the error propagates up layers.
+        return None, f"{command[0]!r}: {error}"

@@ -111,11 +111,10 @@ class DashboardSnapshot:
     resources: tuple[ResourceSummary, ...]
 
     def get(self, key: str) -> ResourceSummary:
-        for resource in self.resources:
-            if resource.key == key:
-                return resource
-
-        raise KeyError(f"Unknown resource: {key}")
+        resource = next((item for item in self.resources if item.key == key), None)
+        if resource is None:
+            raise KeyError(f"Unknown resource: {key}")
+        return resource
 
 
 @dataclass(frozen=True, slots=True)

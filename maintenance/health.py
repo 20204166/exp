@@ -83,10 +83,10 @@ def health_warnings(
 
 
 def _resource(snapshot: DashboardSnapshot, key: str) -> ResourceSummary | None:
-    return next(
-        (resource for resource in snapshot.resources if resource.key == key),
-        None,
-    )
+    try:
+        return snapshot.get(key)
+    except KeyError:
+        return None
 
 
 def _temperature(

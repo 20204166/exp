@@ -15,14 +15,12 @@ def merge_resource(
 ) -> ResourceSummary:
     """Merge one incoming card against its last valid value."""
 
-    prior = (
-        next(
-            (item for item in previous_snapshot.resources if item.key == key),
-            None,
-        )
-        if previous_snapshot is not None
-        else None
-    )
+    prior = None
+    if previous_snapshot is not None:
+        try:
+            prior = previous_snapshot.get(key)
+        except KeyError:
+            pass
 
     if not resource.failed:
         failed_counts[key] = 0
