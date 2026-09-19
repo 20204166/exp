@@ -1,3 +1,6 @@
+> **ARCHIVED** — Phase completed.  Current cluster state model in
+> `docs/REMOTE_CLUSTER_TRUE_FLOW.md`.  Keep as planning history.
+
 # Phase 15.4-15.8: Authenticated Peer Network Plan
 
 ## Status

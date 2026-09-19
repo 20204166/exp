@@ -1,5 +1,13 @@
 # Remote / Pairing / Trust / Cluster / Coordinator — Canonical True-Flow Reconstruction
 
+> **Canonical owner.** This file is the authoritative distributed-state model.
+> It supersedes: `docs/CLUSTER_ROLES_FAILOVER_2026-09-11.md`,
+> `docs/MASTER_WORKER_PLACEMENT_2026-09-11.md`,
+> `docs/TRUSTED_PEER_LAN_EVIDENCE_2026-09-10.md`,
+> `docs/PHASE_15_4_TO_15_8_PEER_NETWORK_PLAN.md` (planning-only),
+> and the pre-transaction pairing description in `docs/SYSTEM_ANALYZER_REVIEW.md`.
+> Phase sections §67–§69 are the most recent additions (Phase 13B).
+
 ## 1. Audit metadata
 
 - **Repository:** `/home/btn17/Downloads/exp` (System Analyzer)

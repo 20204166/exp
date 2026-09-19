@@ -1,3 +1,6 @@
+> **SUPERSEDED** — Capability matrix and platform rules consolidated into
+> `docs/PLATFORM.md` (canonical owner).  Keep as detailed evidence trail.
+
 # Cross-Platform Compatibility Audit
 
 ## Baseline

@@ -1,5 +1,11 @@
 # System Analyzer — Current Architecture & Connection Review
 
+> **Canonical owner.** This file is the authoritative module-ownership and
+> call-graph reference.  It supersedes `docs/SYSTEM_ANALYZER_REVIEW.md`
+> (2026-09-10, version 1.4.6.0) — see §Corrections for specific stale claims
+> in that prior review.  Evidence basis: direct source reading, version 1.5.7.2,
+> commit `6480895`.
+
 **Review date:** 2026-09-13
 **Repository version at time of audit:** `1.5.7.2` (`maintenance/_version.py`), commit `6480895`
 **Evidence basis:** direct reading of current runtime source, tests, and packaging files in this

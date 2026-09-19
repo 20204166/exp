@@ -1,3 +1,6 @@
+> **ARCHIVED** — Extraction completed.  Module ownership in
+> `docs/SYSTEM_ARCHITECTURE_REVIEW.md`.  Keep as planning history.
+
 # Bounded `window.py` Extraction Plan
 
 ## Status

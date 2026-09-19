@@ -1,3 +1,6 @@
+> **SUPERSEDED** — Protocol rules consolidated into `docs/PLATFORM.md` (canonical owner).
+> This runbook (Phase 12B/12C, version 1.6.0.6) is kept as historical evidence only.
+
 # Windows Physical Validation Guide — Phase 12B / 12C
 
 **Date:** 2026-09-17  

@@ -1,3 +1,5 @@
+> **ARCHIVED** — Consolidation completed.  Keep as planning history.
+
 # Clock and Governor Consolidation Plan
 
 Date: 2026-09-09

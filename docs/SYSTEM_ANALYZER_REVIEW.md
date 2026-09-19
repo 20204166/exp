@@ -1,3 +1,8 @@
+> **SUPERSEDED** — This review (2026-09-10, version 1.4.6.0) is superseded by
+> `docs/SYSTEM_ARCHITECTURE_REVIEW.md` (2026-09-13, version 1.5.7.2).
+> Several remote-path claims here are stale; see the §Corrections section
+> of the newer document.  Keep as historical evidence only.
+
 # System Analyzer - Technical & Product Review
 
 **Review date:** 2026-09-10  

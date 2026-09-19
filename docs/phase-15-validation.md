@@ -1,3 +1,5 @@
+> **ARCHIVED** — Phase 15 validation completed.  Keep as historical evidence.
+
 # Phase 15 Validation
 
 ## architecture found

@@ -1,3 +1,6 @@
+> **ARCHIVED** — Audit completed and findings addressed.  Current execution model
+> in `docs/SYSTEM_ARCHITECTURE_REVIEW.md`.  Keep as historical evidence.
+
 # Background Execution Audit
 
 **Scope:** Final report for the bounded background-execution consolidation in the

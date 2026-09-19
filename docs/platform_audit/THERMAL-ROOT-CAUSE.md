@@ -1,3 +1,6 @@
+> **SUPERSEDED** — Root cause and fix boundary consolidated into `docs/PLATFORM.md`
+> (canonical owner).  Keep as detailed evidence trail.
+
 # Thermal Pipeline Root Cause
 
 ## BugGuard Declaration

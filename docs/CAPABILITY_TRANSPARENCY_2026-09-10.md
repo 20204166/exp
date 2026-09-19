@@ -1,3 +1,7 @@
+> **SUPERSEDED** — Capability model consolidated into `docs/SYSTEM_ARCHITECTURE_REVIEW.md`
+> and thermal root cause into `docs/PLATFORM.md` (canonical owners).
+> Keep as historical evidence only.
+
 # Capability Transparency
 
 This is a bounded provider audit. A platform branch is not treated as native

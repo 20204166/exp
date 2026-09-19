@@ -1,3 +1,8 @@
+> **STATUS: RUNBOOK — not yet fully executed.**  Observed/Evidence columns are
+> unfilled.  Security constraints (§2) consolidated into `docs/SECURITY.md`.
+> Platform rules consolidated into `docs/PLATFORM.md`.  This document remains
+> the authoritative acceptance scenario runbook pending physical execution.
+
 # Physical Two-Node End-to-End Acceptance + Failure-Injection Audit
 
 **Date:** 2026-09-17  

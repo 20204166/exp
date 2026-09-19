@@ -1,3 +1,6 @@
+> **SUPERSEDED** — Consolidated into `docs/REMOTE_CLUSTER_TRUE_FLOW.md` (canonical owner).
+> Keep as historical evidence only.
+
 # Master/Worker Placement Boundaries
 
 This document describes the placement behavior currently implemented in System

@@ -1,3 +1,6 @@
+> **ARCHIVED** — Phase 15 work completed.  Process safety rules in `docs/SECURITY.md`.
+> Keep as historical evidence.
+
 # Phase 15.11 Cleanup Safety Audit
 
 ## Boundary Reviewed

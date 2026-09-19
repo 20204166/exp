@@ -1,3 +1,6 @@
+> **SUPERSEDED** — Consolidated into `docs/REMOTE_CLUSTER_TRUE_FLOW.md` (canonical owner).
+> Keep as historical evidence only.
+
 # Cluster Roles and Failover
 
 ## Implemented Boundary

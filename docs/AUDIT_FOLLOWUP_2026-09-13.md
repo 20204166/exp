@@ -1,3 +1,6 @@
+> **HISTORICAL EVIDENCE** — Architecture state now in `docs/SYSTEM_ARCHITECTURE_REVIEW.md`.
+> Key test-runner note (xvfb-run/live-Tk) preserved in `AGENTS.md`.
+
 # Architecture Audit Follow-Up — 2026-09-13
 
 Plain-language companion to `docs/SYSTEM_ARCHITECTURE_REVIEW.md`. That document is the full

@@ -1,3 +1,6 @@
+> **ARCHIVED** — Implementation completed (Phase 12–13B).  Architecture outcome
+> in `docs/SYSTEM_ARCHITECTURE_REVIEW.md`.  Keep as planning history.
+
 # System Analyzer Reliability and Thermal UX Implementation Plan
 
 Date: 2026-09-07

@@ -1,3 +1,6 @@
+> **HISTORICAL EVIDENCE** — Pairing/trust model now documented in
+> `docs/REMOTE_CLUSTER_TRUE_FLOW.md` (canonical owner).  Keep as evidence trail.
+
 # Trusted Peer LAN Evidence
 
 ## Audit Classification

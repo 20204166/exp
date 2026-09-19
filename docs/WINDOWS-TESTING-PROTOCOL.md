@@ -1,3 +1,6 @@
+> **SUPERSEDED** — Rules consolidated into `docs/PLATFORM.md` (canonical owner).
+> Keep as historical evidence only.
+
 # Windows Testing Protocol — `exp` / `system-analyzer`
 
 Status: physical Windows testing is the **only** next step. No more speculative

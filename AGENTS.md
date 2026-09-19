@@ -1,4 +1,48 @@
 # Repo Guide
+
+## Canonical Documentation Index
+
+Five files own all durable knowledge.  Read the relevant one before editing:
+
+| File | Owns |
+|---|---|
+| `AGENTS.md` (this file) | Repo law, code structure, test/lint rules |
+| `docs/REMOTE_CLUSTER_TRUE_FLOW.md` | Pairing, trust, cluster phases, distributed state model |
+| `docs/SYSTEM_ARCHITECTURE_REVIEW.md` | Module ownership, call graph, state locations (supersedes `docs/SYSTEM_ANALYZER_REVIEW.md`) |
+| `docs/PLATFORM.md` | Windows/platform rules, capability matrix, fix protocol, thermal model |
+| `docs/SECURITY.md` | No-log rules, trust model, process safety, fencing tokens, firewall rules |
+
+All other docs under `docs/` are historical evidence trails or archived plans.
+Never use an old plan or audit doc as implementation proof without verifying the code.
+
+## Security and Logging Constraints
+
+These apply everywhere, always:
+
+- **Never commit secrets.**
+- **Do not log:** HMAC secrets; private keys; fencing token values.  Fencing token *presence* may be recorded, not the value.
+- **Do not expose the fence token in user-visible evidence.**
+- **Do not weaken security/firewall configuration automatically.**
+- **DO NOT blindly delete user state.**
+- **DO NOT say "remote cluster is fully validated" merely because automated tests pass.**
+- Physical two-node testing is required; see `docs/PLATFORM.md` and `docs/PHYSICAL_TWO_NODE_ACCEPTANCE_2026-09-17.md`.
+
+## Windows Platform Rules
+
+- **WINDOWS IS A PLATFORM DIFFERENCE, NOT A SECURITY EXCEPTION. FIX THE PLATFORM BOUNDARY. DO NOT FORK THE TRUST MODEL.**
+- DO NOT develop on Windows; DO NOT run tests/source tools on Windows.
+- DO NOT disable firewalls globally; DO NOT disable ProtonVPN permanently.
+- DO NOT open the entire LAN to arbitrary ports; DO NOT hardcode ProtonVPN-specific behavior.
+- Windows machine (`DESKTOP-0C2C5H3`) is a black-box runtime node only — install wheel, run app, report results.
+- See `docs/PLATFORM.md` for the full protocol and capability matrix.
+
+## Cluster Three Axes (never collapse)
+
+TRUST (pairing/records/grants) · CLUSTER (assignments/joined state) · CONNECTION (Online/Offline).
+Coordinator identity on a joined Worker comes from `coordinator_epoch.coordinator_id`.
+See `docs/REMOTE_CLUSTER_TRUE_FLOW.md` for the full distributed state model.
+
+
 - `main.py` is the app entrypoint (`python main.py`); it only creates `window.AppWindow`.
 - `window.py` owns the Tk root, scan timers, and `ScanCoordinator`; GUI tests use fake masters/widgets instead of a live Tk mainloop.
 - `algo.py` is the app-level facade for dashboard scans and cleanup entry points, delegating discovery and scan logic to `maintenance/scanner.py`.

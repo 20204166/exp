@@ -1,3 +1,7 @@
+> **HISTORICAL EVIDENCE TRAIL** — Platform rules and protocol consolidated into
+> `docs/PLATFORM.md` (canonical owner).  This document is the physical-evidence
+> record and must be kept intact.
+
 # Windows Runtime Findings — system-analyzer 1.6.0.5 (+ 1.6.0.7, 1.6.1.0 retests)
 
 Machine: DESKTOP-0C2C5H3 (Windows 11 Home 10.0.26200), AMD Radeon GPU (no NVIDIA).
