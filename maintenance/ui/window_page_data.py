@@ -87,7 +87,9 @@ def card_specs(controller: Any) -> list[ui_preferences.CardControlSpec]:
 
 def nodes_peer_specs(controller: Any) -> list[ui_nodes.DiscoveredPeerSpec]:
     registry = controller.__dict__.get("_node_registry")
-    return [] if registry is None else node_specs.discovered_peer_specs(registry)
+    if registry is None:
+        return []
+    return node_specs.discovered_peer_specs(registry, controller._cluster_state)
 
 
 def _peer_disconnected_ids(controller: Any) -> list[Any]:

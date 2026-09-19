@@ -709,5 +709,63 @@ class MembershipMetaTextTests(unittest.TestCase):
         self.assertLess(worker_pos, online_pos)
 
 
+class PairButtonVisibilityTests(unittest.TestCase):
+    """§9 Pair button must be hidden once an established pair relationship exists.
+
+    Pair button visible:     discovered peer, no relationship
+    Pair button hidden:      has_pair_relationship=True (inbound PeerGrant OR
+                             pairing_state=trusted from outbound TrustedNodeRecord)
+
+    These tests cover the acceptor-side case where only a PeerGrantRecord exists
+    (no outbound TrustedNodeRecord), which is the Phase 13B-C failure mode.
+    """
+
+    @staticmethod
+    def _has_pair_button(recorder: Any) -> bool:
+        try:
+            recorder.button_with_text("Pair")
+            return True
+        except StopIteration:
+            return False
+
+    def test_unpaired_discovered_peer_shows_pair_button(self) -> None:
+        spec = replace(_discovered_spec("n1"), has_pair_relationship=False)
+        _, _, recorder = make_page(discovered=[spec])
+        self.assertTrue(self._has_pair_button(recorder))
+
+    def test_acceptor_peer_grant_only_hides_pair_button(self) -> None:
+        """Acceptor side: PeerGrantRecord exists for peer → Pair hidden."""
+        spec = replace(_discovered_spec("n1"), has_pair_relationship=True)
+        _, _, recorder = make_page(discovered=[spec])
+        self.assertFalse(self._has_pair_button(recorder))
+
+    def test_pair_relationship_false_to_true_rebuilds_row_without_pair(self) -> None:
+        """When has_pair_relationship transitions False→True the row is rebuilt
+        and the pair action is cleared from the ButtonCoordinator."""
+        coordinator = ButtonCoordinator()
+        page, _, _ = make_page(discovered=[], button_coordinator=coordinator)
+        pair_action = "nodes:peer:n1:pair"
+        before = replace(_discovered_spec("n1"), has_pair_relationship=False)
+        page.refresh_discovered([before])
+        self.assertIn(pair_action, coordinator.registered_ids())
+        after = replace(_discovered_spec("n1"), has_pair_relationship=True)
+        page.refresh_discovered([after])
+        self.assertNotIn(pair_action, coordinator.registered_ids())
+
+    def test_address_text_says_paired_when_relationship_established(self) -> None:
+        page, _, _ = make_page()
+        spec = replace(_discovered_spec("n1"), has_pair_relationship=True)
+        text = page._discovered_address_text(spec)
+        self.assertIn("Paired", text)
+        self.assertNotIn("Discovered", text)
+
+    def test_address_text_says_discovered_when_no_relationship(self) -> None:
+        page, _, _ = make_page()
+        spec = replace(_discovered_spec("n1"), has_pair_relationship=False)
+        text = page._discovered_address_text(spec)
+        self.assertIn("Discovered", text)
+        self.assertNotIn("Paired", text)
+
+
 if __name__ == "__main__":
     unittest.main()

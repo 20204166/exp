@@ -78,6 +78,7 @@ class DiscoveredPeerSpec:
     identity_fingerprint: str | None = None
     transport_fingerprint: str | None = None
     pairing_state: str = "discovered"
+    has_pair_relationship: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -431,6 +432,7 @@ class NodesConnectionsPage:
         "port",
         "pairing_state",
         "identity_fingerprint",
+        "has_pair_relationship",
     )
 
     def refresh_discovered(self, specs: list[DiscoveredPeerSpec]) -> None:
@@ -503,7 +505,10 @@ class NodesConnectionsPage:
             details.config(text=self._discovered_details_text(spec))
 
     def _discovered_address_text(self, spec: DiscoveredPeerSpec) -> str:
-        address = f"Discovered · {spec.hostname}"
+        if spec.has_pair_relationship:
+            address = f"Paired · {spec.hostname}"
+        else:
+            address = f"Discovered · {spec.hostname}"
         if spec.port is not None:
             address += f" · port {spec.port}"
         if not spec.compatible:
@@ -553,31 +558,41 @@ class NodesConnectionsPage:
         row._details_label = details_label
         actions = self.frame_cls(row, bg=self.colors["card"])
         actions.pack(fill="x", pady=(6, 0))
-        pair_id = f"nodes:peer:{spec.node_id}:pair"
-        reject_id = f"nodes:peer:{spec.node_id}:reject"
-        pair_command = lambda: (
-            self.callbacks.on_open_pairing(spec)
-            if self.callbacks.on_open_pairing is not _noop_open_pairing
-            else self.callbacks.on_pair(spec.node_id)
-        )
-        reject_command = lambda: self.callbacks.on_reject(spec.node_id)
-        pair_button = self.button_cls(
-            actions,
-            text="Pair",
-            command=pair_command,
-            style=ui_styles.STYLE_PRIMARY_BUTTON,
-            state=tk.NORMAL if spec.compatible else tk.DISABLED,
-        )
-        pair_button.pack(side="right")
-        self._register_button(pair_id, pair_command, pair_button, spec.compatible)
-        reject_button = self.button_cls(
-            actions,
-            text="Reject",
-            command=reject_command,
-            style=ui_styles.STYLE_NEUTRAL_BUTTON,
-        )
-        reject_button.pack(side="right", padx=(0, 8))
-        self._register_button(reject_id, reject_command, reject_button, True)
+        if spec.has_pair_relationship:
+            # Established relationship: hide Pair/Reject, show neutral status label.
+            self.label_cls(
+                actions,
+                text="Paired",
+                bg=self.colors["card"],
+                fg=self.colors["secondary"],
+                font=self.fonts["body"],
+            ).pack(side="right")
+        else:
+            pair_id = f"nodes:peer:{spec.node_id}:pair"
+            reject_id = f"nodes:peer:{spec.node_id}:reject"
+            pair_command = lambda: (
+                self.callbacks.on_open_pairing(spec)
+                if self.callbacks.on_open_pairing is not _noop_open_pairing
+                else self.callbacks.on_pair(spec.node_id)
+            )
+            reject_command = lambda: self.callbacks.on_reject(spec.node_id)
+            pair_button = self.button_cls(
+                actions,
+                text="Pair",
+                command=pair_command,
+                style=ui_styles.STYLE_PRIMARY_BUTTON,
+                state=tk.NORMAL if spec.compatible else tk.DISABLED,
+            )
+            pair_button.pack(side="right")
+            self._register_button(pair_id, pair_command, pair_button, spec.compatible)
+            reject_button = self.button_cls(
+                actions,
+                text="Reject",
+                command=reject_command,
+                style=ui_styles.STYLE_NEUTRAL_BUTTON,
+            )
+            reject_button.pack(side="right", padx=(0, 8))
+            self._register_button(reject_id, reject_command, reject_button, True)
         self._details_button(actions, spec)
         return row
 

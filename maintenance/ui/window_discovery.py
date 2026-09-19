@@ -663,6 +663,12 @@ def handle_pairing_confirm(controller: Any, request: PairingControlRequest) -> b
             controller.__dict__.setdefault("_completed_pairings", {})[
                 pending.transaction_id
             ] = pending
+            # Refresh the acceptor's N&C page so the newly-granted peer no
+            # longer shows a Pair button (the PeerGrantRecord now present means
+            # has_pair_relationship=True in the discovered spec).
+            refresh = getattr(controller, "_refresh_nodes_page", None)
+            if callable(refresh):
+                controller._submit_ui(refresh)
         return saved
 
 

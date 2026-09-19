@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
 
+from maintenance.cluster import PeerGrantRecord
 from maintenance.models import CapabilityState
 from maintenance.preferences import AppPreferences
 from maintenance.ui import nodes_connections
@@ -37,6 +38,103 @@ class SnapshotStateTests(unittest.TestCase):
 
         self.assertIsInstance(specs[0], nodes_connections.DiscoveredPeerSpec)
         self.assertEqual(specs[0].transport_fingerprint, "tls:bb")
+
+    def test_discovered_peer_no_grant_has_pair_relationship_false(self) -> None:
+        """Candidate with no matching PeerGrant → has_pair_relationship=False."""
+        candidate = SimpleNamespace(
+            stable_id="peer-a",
+            hostname="peer-a.local",
+            app_version="1.0",
+            compatible=True,
+            connectable=True,
+            port=8123,
+            identity_fingerprint="fp",
+            transport_fingerprint="tls",
+        )
+        registry = SimpleNamespace(
+            discovered_candidates=lambda: (candidate,),
+            pairing_state=lambda _: SimpleNamespace(value="discovered"),
+        )
+        cluster_state = SimpleNamespace(peer_grants=())
+
+        specs = node_specs.discovered_peer_specs(registry, cluster_state)
+
+        self.assertFalse(specs[0].has_pair_relationship)
+
+    def test_discovered_peer_with_matching_grant_has_pair_relationship_true(self) -> None:
+        """Candidate whose NodeId matches a PeerGrantRecord → has_pair_relationship=True."""
+        candidate = SimpleNamespace(
+            stable_id="peer-a",
+            hostname="peer-a.local",
+            app_version="1.0",
+            compatible=True,
+            connectable=True,
+            port=8123,
+            identity_fingerprint="fp",
+            transport_fingerprint="tls",
+        )
+        registry = SimpleNamespace(
+            discovered_candidates=lambda: (candidate,),
+            pairing_state=lambda _: SimpleNamespace(value="discovered"),
+        )
+        grant = PeerGrantRecord(
+            caller_node_id="peer-a",
+            secret="s" * 64,
+            permissions=frozenset(),
+        )
+        cluster_state = SimpleNamespace(peer_grants=(grant,))
+
+        specs = node_specs.discovered_peer_specs(registry, cluster_state)
+
+        self.assertTrue(specs[0].has_pair_relationship)
+
+    def test_discovered_peer_unrelated_grant_does_not_set_pair_relationship(self) -> None:
+        """A PeerGrant for a different NodeId must not affect this candidate."""
+        candidate = SimpleNamespace(
+            stable_id="peer-a",
+            hostname="peer-a.local",
+            app_version="1.0",
+            compatible=True,
+            connectable=True,
+            port=8123,
+            identity_fingerprint="fp",
+            transport_fingerprint="tls",
+        )
+        registry = SimpleNamespace(
+            discovered_candidates=lambda: (candidate,),
+            pairing_state=lambda _: SimpleNamespace(value="discovered"),
+        )
+        grant = PeerGrantRecord(
+            caller_node_id="other-peer",
+            secret="s" * 64,
+            permissions=frozenset(),
+        )
+        cluster_state = SimpleNamespace(peer_grants=(grant,))
+
+        specs = node_specs.discovered_peer_specs(registry, cluster_state)
+
+        self.assertFalse(specs[0].has_pair_relationship)
+
+    def test_discovered_peer_no_cluster_state_defaults_to_no_pair_relationship(self) -> None:
+        """Omitting cluster_state is backward-compatible: no relationship assumed."""
+        candidate = SimpleNamespace(
+            stable_id="peer-a",
+            hostname="peer-a.local",
+            app_version="1.0",
+            compatible=True,
+            connectable=True,
+            port=8123,
+            identity_fingerprint="fp",
+            transport_fingerprint="tls",
+        )
+        registry = SimpleNamespace(
+            discovered_candidates=lambda: (candidate,),
+            pairing_state=lambda _: SimpleNamespace(value="discovered"),
+        )
+
+        specs = node_specs.discovered_peer_specs(registry)
+
+        self.assertFalse(specs[0].has_pair_relationship)
 
     def test_merge_snapshot_keeps_previous_failed_resource_until_limit(self) -> None:
         previous = make_snapshot(make_summary("cpu", "CPU", value="25%"))

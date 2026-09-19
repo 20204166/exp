@@ -12,9 +12,20 @@ from maintenance.ui import nodes_connections as ui_nodes
 from maintenance.ui.target_state import render_target_state
 
 
-def discovered_peer_specs(registry: Any) -> list[ui_nodes.DiscoveredPeerSpec]:
-    """Project untrusted discovery observations without adding capabilities."""
+def discovered_peer_specs(
+    registry: Any, cluster_state: Any = None
+) -> list[ui_nodes.DiscoveredPeerSpec]:
+    """Project untrusted discovery observations without adding capabilities.
 
+    Peers that have an inbound PeerGrantRecord (accepted-pair acceptor side) are
+    included with ``has_pair_relationship=True`` so the UI suppresses the Pair
+    button for established relationships even without an outbound TrustedNodeRecord.
+    """
+
+    grant_node_ids: frozenset[str] = frozenset(
+        grant.caller_node_id
+        for grant in (cluster_state.peer_grants if cluster_state is not None else ())
+    )
     return [
         ui_nodes.DiscoveredPeerSpec(
             node_id=candidate.stable_id,
@@ -26,6 +37,7 @@ def discovered_peer_specs(registry: Any) -> list[ui_nodes.DiscoveredPeerSpec]:
             identity_fingerprint=candidate.identity_fingerprint,
             transport_fingerprint=candidate.transport_fingerprint,
             pairing_state=registry.pairing_state(NodeId(candidate.stable_id)).value,
+            has_pair_relationship=candidate.stable_id in grant_node_ids,
         )
         for candidate in registry.discovered_candidates()
     ]

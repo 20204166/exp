@@ -2771,6 +2771,85 @@ Physical Windows evidence is still required for all NOT VERIFIED PHYSICAL rows.
 
 ---
 
+## §69 Phase 13B-C: Acceptor-Side Pair Relationship Presentation (2026-09-19)
+
+### Root cause
+
+The Pair button was driven by `discovered_candidates()` membership alone. After B accepts a Pair from A, B stores `PeerGrantRecord(A)` but never calls `promote_to_trusted(A)` or removes A from `_discovered`. So A stayed in B's Discovered section with an active Pair button.
+
+`handle_pairing_confirm()` (the acceptor-side grant finalization) also did not trigger a UI refresh, so B's N&C page never re-evaluated the newly established relationship.
+
+### Directional storage — unchanged
+
+```
+A (initiator):  TrustedNodeRecord(B)   outbound trust
+B (acceptor):   PeerGrantRecord(A)     inbound grant
+```
+
+Authorization semantics are unchanged. B does NOT receive a `TrustedNodeRecord(A)`. The fix is presentation only.
+
+### Normalized relationship concept: `has_pair_relationship`
+
+`DiscoveredPeerSpec.has_pair_relationship` (bool, default False) — set to True when the discovered candidate's `stable_id` matches a `caller_node_id` in `cluster_state.peer_grants`. This is the only new state; it does not change any authorization record.
+
+### Pair button rule — corrected
+
+```
+Pair visible = discovered AND NOT has_pair_relationship AND NOT outbound TrustedNodeRecord
+```
+
+Equivalently: Pair is hidden whenever either side of the completed pair relationship is locally evidenced.
+
+### Changes
+
+| File | Change |
+|---|---|
+| `maintenance/ui/nodes_connections.py` | `DiscoveredPeerSpec.has_pair_relationship: bool = False`; added to `_DISCOVERED_STRUCTURAL`; `_peer_row()` hides Pair+Reject buttons and shows "Paired" label when True; `_discovered_address_text()` shows "Paired · hostname" when True |
+| `maintenance/ui/window_supports/node_specs.py` | `discovered_peer_specs()` accepts optional `cluster_state`; computes `grant_node_ids` from `peer_grants`; sets `has_pair_relationship` per candidate |
+| `maintenance/ui/window_page_data.py` | `nodes_peer_specs()` passes `controller._cluster_state` |
+| `maintenance/ui/window_discovery.py` | `handle_pairing_confirm()` schedules `_refresh_nodes_page` via `_submit_ui` after saving the grant (guarded: only when method exists) |
+
+### Live refresh
+
+When B accepts a Pair: `handle_pairing_confirm()` → saves `PeerGrantRecord` → `_submit_ui(_refresh_nodes_page)` → `discovered_peer_specs()` is called with updated `cluster_state` → A's spec has `has_pair_relationship=True` → row is rebuilt without Pair button.
+
+No page reopen required. No restart required.
+
+### Pairing spinner / transient state
+
+The existing `_DISCOVERED_STRUCTURAL` includes `pairing_state`. When `has_pair_relationship` changes True, the row is fully rebuilt (structural change), clearing any prior PAIRING/PAIRING_FAILED display.
+
+### Restart / persistence
+
+`peer_grants` is persisted in `ClusterState` (serialized JSON). After restart, `discovered_peer_specs()` reads persisted grants → `has_pair_relationship=True` survives restart.
+
+### Tests added
+
+`tests/test_window_supports.py` — `SnapshotStateTests`:
+- `test_discovered_peer_no_grant_has_pair_relationship_false`
+- `test_discovered_peer_with_matching_grant_has_pair_relationship_true`
+- `test_discovered_peer_unrelated_grant_does_not_set_pair_relationship`
+- `test_discovered_peer_no_cluster_state_defaults_to_no_pair_relationship`
+
+`tests/test_nodes_connections_page.py` — `PairButtonVisibilityTests`:
+- `test_unpaired_discovered_peer_shows_pair_button`
+- `test_acceptor_peer_grant_only_hides_pair_button`
+- `test_pair_relationship_false_to_true_rebuilds_row_without_pair`
+- `test_address_text_says_paired_when_relationship_established`
+- `test_address_text_says_discovered_when_no_relationship`
+
+### What was NOT changed
+
+- `PeerGrantRecord` authorization semantics — unchanged
+- `TrustedNodeRecord` authorization semantics — unchanged
+- Pair protocol, pairing ceremony — unchanged
+- Join protocol — unchanged
+- Share My Dashboard — unchanged
+- `coordinator_epoch` / cluster membership — unchanged
+- No reverse TrustedNodeRecord created on acceptor
+
+---
+
 ## §68 Phase 13B-P: Cluster Member Marker + Distributed-State Model (2026-09-19)
 
 ### What changed from §67
