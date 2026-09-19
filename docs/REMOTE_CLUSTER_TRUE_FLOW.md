@@ -2674,15 +2674,17 @@ Physical Windows evidence is still required for all NOT VERIFIED PHYSICAL rows.
 7. After JOIN, the inviting Coordinator is no longer just "a peer"; it is the Worker's **active cluster connection**.
 8. The authoritative source for "who is my Coordinator" on a joined Worker is `ClusterState.coordinator_epoch.coordinator_id`.
 9. `coordinator_epoch.coordinator_id.value != local_node_id` is the canonical predicate for "I am a joined Worker, not a solo coordinator".
-10. A non-revoked `RoleAssignment` is the primary source for `is_cluster_member`. `coordinator_epoch` is the authoritative fallback when no assignment exists (older persisted join data).
-11. An explicit `revoked=True` assignment always wins — it prevents the epoch fallback from re-marking a revoked peer as a member.
+10. **COORDINATOR VIEW**: Active non-revoked `role_assignments` are authoritative for a Coordinator's membership topology. They answer: which Workers belong to my cluster, what roles do they hold, is an assignment revoked? `coordinator_epoch` plays no special role on the Coordinator side.
+10b. **WORKER VIEW**: A joined Worker's persisted state authoritatively provides its `cluster_id`, its own `local_role`, and `coordinator_epoch.coordinator_id`. A joined Worker may identify "this peer is my Coordinator" from `coordinator_epoch.coordinator_id` even if it does not persist a separate active `role_assignment` for the Coordinator. `coordinator_epoch` identifies ONLY the current Coordinator relationship — it must NOT be used to fabricate arbitrary Workers, full topology, or membership for unrelated trusted peers.
+11. **Membership precedence for a peer NodeId** (in order, first match wins): (1) Active non-revoked `role_assignment` exists → assignment wins; (2) Explicit `role_assignment` with `revoked=True` exists → revoked wins, epoch fallback is suppressed; (3) No assignment AND peer NodeId equals `coordinator_epoch.coordinator_id` on a joined Worker → peer is the Coordinator; (4) Otherwise → no membership may be inferred.
+11b. **Three axes must remain separate**: TRUST (pairing/trusted records/peer grants) · CLUSTER (Coordinator role_assignments / Worker joined state + Coordinator identity) · CONNECTION (Online/Offline). Do not collapse these.
 12. After JOIN, Worker's `role_assignments` contains: `{COORDINATOR,WORKER}` for the remote Coordinator AND `{WORKER}` for local. The local node's user-facing role is "Worker", not "Coordinator".
 13. The **local Worker row** in All Systems must show `role="worker"` and `is_cluster_member=True` after join. The old solo-bootstrap `{COORDINATOR,WORKER}` entry is replaced by `{WORKER}`.
 14. **Create Invite** is hidden on a joined Worker because `spec.role == "coordinator"` is False after join.
 15. **Join Cluster** button is hidden after join because `is_cluster_member=True`.
 16. The **Pair** button appears only in the "Discovered peers" section and only for UNTRUSTED (unpaired) nodes. Once a node is promoted to trusted (via `promote_to_trusted`), it moves to the "Trusted nodes" section which has no Pair button.
 17. A trusted Coordinator rediscovered via mDNS goes through `update_discovered()` which, for a known context with no identity mismatch, updates the descriptor but does NOT add the node back to `_discovered`. Pair cannot reappear for a trusted node.
-18. After JOIN, the Coordinator card in Nodes & Connections (TrustedNodeSpec) must show `role="coordinator"`, `is_cluster_member=True`, meta text "Trusted · Coordinator · Online/Offline".
+18. After JOIN, the Coordinator card in Nodes & Connections (TrustedNodeSpec) must show `role="coordinator"`, `is_cluster_member=True`, meta text "Trusted · Coordinator · Cluster member · Online/Offline".
 19. After JOIN, the Coordinator row in All Systems (ClusterNodeSpec) must show `role="coordinator"`, `is_cluster_member=True`.
 20. The Worker's local row in All Systems must show `role="worker"`, `is_cluster_member=True`.
 21. Connection loss does not erase cluster membership. The Coordinator card shows "Coordinator · Cluster member · Offline" when disconnected.
@@ -2690,8 +2692,8 @@ Physical Windows evidence is still required for all NOT VERIFIED PHYSICAL rows.
 23. Discovery updates after join reachability/metadata of the Coordinator context. They do not downgrade the relationship back to "discovered peer".
 24. There is exactly ONE card per NodeId. The trusted/joined relationship takes precedence over any discovered candidate for the same NodeId.
 25. Standalone solo coordinators (not joined) correctly show `role="coordinator"` and `is_cluster_member=True`.
-26. `TrustedNodeSpec._trusted_meta_text()` reads `is_cluster_member` and `role` to produce "Trusted · Coordinator · Online" vs "Trusted · Not in cluster · Online".
-27. `ClusterNodeSpec._meta_text()` reads `is_cluster_member` and `role` to produce "Coordinator · Online" vs "Not in cluster · Online".
+26. `TrustedNodeSpec._trusted_meta_text()` reads `is_cluster_member` and `role` to produce "Trusted · Coordinator · Cluster member · Online" vs "Trusted · Not in cluster · Online". The explicit "Cluster member" label is rendered for every active member regardless of role.
+27. `ClusterNodeSpec._meta_text()` reads `is_cluster_member` and `role` to produce "Trusted · Online · Coordinator · Cluster member" vs "Trusted · Online · Not in cluster". The explicit "Cluster member" label is rendered for every active member, including the local node's own row.
 28. Coordinator-side behavior is unchanged: the Coordinator always had `role_assignments` containing its own `{COORDINATOR,WORKER}` entry plus each enrolled Worker. The epoch-based fallback fires only when `coordinator_epoch.coordinator_id.value != local_node_id`.
 29. All physical successes preserved: Windows/Linux connection, Pair, Join, Share My Dashboard, stable port 27321, discovery TTL, TLS, trust, authorization.
 
@@ -2766,3 +2768,89 @@ Physical Windows evidence is still required for all NOT VERIFIED PHYSICAL rows.
 - `local_cluster_spec()` for Nodes & Connections cluster section — already correct
 - `_build_cluster_membership_section()` — already correct for joined Workers
 - Windows/Linux platform compatibility — unchanged
+
+---
+
+## §68 Phase 13B-P: Cluster Member Marker + Distributed-State Model (2026-09-19)
+
+### What changed from §67
+
+§67 implemented the epoch-based coordinator fallback so `is_cluster_member=True` reached the specs correctly. §68 makes that membership **visible** by rendering the literal "Cluster member" label in both presentation layers, and corrects the canonical model description to separate the Coordinator view from the Worker view.
+
+### Rendering changes
+
+| Layer | File | Before | After |
+|---|---|---|---|
+| Nodes & Connections `_trusted_meta_text()` | `maintenance/ui/nodes_connections.py:708` | `Trusted · Coordinator · Online` | `Trusted · Coordinator · Cluster member · Online` |
+| All Systems `_meta_text()` | `maintenance/ui/cluster_page.py:417` | `Trusted · Online · Coordinator` | `Trusted · Online · Coordinator · Cluster member` |
+
+The marker appears for every active member (local or remote, coordinator or worker). It is absent for non-members ("Not in cluster") and for discovered/untrusted candidates.
+
+### Membership marker rule
+
+| Node | Visible marker |
+|---|---|
+| Local active Coordinator | Yes |
+| Local joined Worker | Yes |
+| Remote current Coordinator (from Worker) | Yes |
+| Remote active Worker (from Coordinator) | Yes |
+| Active member while Offline | Yes |
+| Merely discovered peer | No |
+| Paired non-member | No |
+| Trusted non-member | No |
+| Revoked assignment | No |
+
+### Physical topology for acceptance test
+
+| Node | ID |
+|---|---|
+| Coordinator (Linux, m75-node1) | `node-983364764039f9e6625e687273710909` |
+| Worker (Windows, DESKTOP-0C2C5H3) | `node-b31a0913e76db7c60cb7c6ec82313660` |
+
+### Physical acceptance contract (Worker UX)
+
+**BEFORE JOIN:**
+`Trusted · Not in cluster · Online`
+
+**AFTER JOIN:**
+`Trusted · Coordinator · Cluster member · Online`
+Primary action: Remove Connection (no Pair, no Join)
+
+**COORDINATOR OFFLINE:**
+`Trusted · Coordinator · Cluster member · Offline`
+(Pair remains hidden)
+
+**ALL SYSTEMS — WORKER MACHINE:**
+```
+DESKTOP-0C2C5H3   Worker · Cluster member
+m75-node1         Coordinator · Cluster member · Online
+```
+
+**ALL SYSTEMS — COORDINATOR MACHINE:**
+```
+m75-node1         Coordinator · Cluster member
+DESKTOP-0C2C5H3   Worker · Cluster member · Online
+```
+
+### Automated tests added/updated
+
+`tests/test_nodes_connections_page.py` — `NAndCMembershipLabelTests`:
+- `test_case_c_paired_joined_online_shows_worker` — added `assertIn("Cluster member")`
+- `test_case_d_paired_joined_offline_shows_worker_offline` — added `assertIn("Cluster member")`
+- `test_case_f_coordinator_peer_online_shows_coordinator` — added `assertIn("Cluster member")`
+- `test_case_f_coordinator_peer_offline_shows_coordinator` — added `assertIn("Cluster member")`
+
+`tests/test_cluster_page.py` — `AllSystemsMetaTextMembershipTests`:
+- `test_active_worker_member_shows_worker` — added `assertIn("Cluster member")`
+- `test_coordinator_member_shows_coordinator` — added `assertIn("Cluster member")`
+- `test_local_node_always_shows_role_not_not_in_cluster` — added `assertIn("Cluster member")`
+
+### What was NOT changed
+
+- Pair protocol, pairing ceremony, trust persistence — unchanged
+- Join protocol, `_apply_cluster_join`, `consume_invite` — unchanged
+- `coordinator_epoch` propagation — unchanged
+- Discovery, TLS, HMAC, authorization — unchanged
+- Share My Dashboard — unchanged
+- Coordinator-side role_assignments logic — unchanged
+- `node_specs.py` epoch fallback from §67 — unchanged (still needed)

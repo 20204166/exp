@@ -414,7 +414,7 @@ class ClusterPage:
         if not spec.is_local and not spec.is_cluster_member:
             meta += " · Not in cluster"
         else:
-            meta += f" · {spec.role.title()}"
+            meta += f" · {spec.role.title()} · Cluster member"
         if spec.paused:
             meta += " · Paused"
         if spec.hostname and spec.hostname != spec.display_name:

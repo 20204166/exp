@@ -350,6 +350,7 @@ class AllSystemsMetaTextMembershipTests(unittest.TestCase):
         )
         text = self._meta(spec)
         self.assertIn("Worker", text)
+        self.assertIn("Cluster member", text)
         self.assertNotIn("Not in cluster", text)
 
     def test_coordinator_member_shows_coordinator(self) -> None:
@@ -360,6 +361,7 @@ class AllSystemsMetaTextMembershipTests(unittest.TestCase):
         )
         text = self._meta(spec)
         self.assertIn("Coordinator", text)
+        self.assertIn("Cluster member", text)
         self.assertNotIn("Not in cluster", text)
 
     def test_local_node_always_shows_role_not_not_in_cluster(self) -> None:
@@ -372,6 +374,7 @@ class AllSystemsMetaTextMembershipTests(unittest.TestCase):
         text = self._meta(local)
         self.assertNotIn("Not in cluster", text)
         self.assertIn("Coordinator", text)
+        self.assertIn("Cluster member", text)
 
     def test_local_non_member_shows_role_not_not_in_cluster(self) -> None:
         """Even if is_cluster_member=False for local, do not show Not in cluster."""

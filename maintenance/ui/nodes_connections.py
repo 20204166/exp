@@ -705,7 +705,10 @@ class NodesConnectionsPage:
             manual_disconnected=spec.manual_disconnected,
             retry_automatic=spec.retry_automatic,
         )
-        membership = spec.role.title() if spec.is_cluster_member else "Not in cluster"
+        if spec.is_cluster_member:
+            membership = f"{spec.role.title()} · Cluster member"
+        else:
+            membership = "Not in cluster"
         role_status = f"{node_presentation.trust_label('trusted')} · {membership} · {conn_label}"
         if spec.target_state != "Unknown":
             role_status += f" · {spec.target_state}"

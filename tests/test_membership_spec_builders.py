@@ -49,7 +49,10 @@ from tests.test_window_nodes import _make_window, _trusted_context
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _registry_with_trusted_peer(peer_id: str = "peer-a") -> tuple[NodeRegistry, NodeContext]:
+
+def _registry_with_trusted_peer(
+    peer_id: str = "peer-a",
+) -> tuple[NodeRegistry, NodeContext]:
     """Return a registry containing a local node and one trusted remote peer."""
     registry = NodeRegistry()
     local = make_local_context()
@@ -80,7 +83,8 @@ def _cluster_state_with_worker(
     state = ClusterState.create_local(local_node_id=local_id)
     state = replace(
         state,
-        role_assignments=state.role_assignments + (
+        role_assignments=state.role_assignments
+        + (
             RoleAssignment(
                 frozenset({ClusterRole.WORKER}),
                 node_id=NodeId(worker_id),
@@ -108,7 +112,8 @@ def _cluster_state_with_coordinator_peer(
     state = ClusterState.create_local(local_node_id=local_id)
     state = replace(
         state,
-        role_assignments=state.role_assignments + (
+        role_assignments=state.role_assignments
+        + (
             RoleAssignment(
                 frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}),
                 node_id=NodeId(coordinator_peer_id),
@@ -131,6 +136,7 @@ def _cluster_state_with_coordinator_peer(
 # §2  PAIR only — is_cluster_member must be False
 # ---------------------------------------------------------------------------
 
+
 class PairOnlyMembershipTests(unittest.TestCase):
     """Pair establishes trust only; it must not set is_cluster_member=True."""
 
@@ -148,7 +154,9 @@ class PairOnlyMembershipTests(unittest.TestCase):
         self.assertEqual(len(peer_specs), 1)
         self.assertFalse(peer_specs[0].is_cluster_member)
 
-    def test_trusted_node_specs_pair_only_role_defaults_to_worker_but_not_member(self) -> None:
+    def test_trusted_node_specs_pair_only_role_defaults_to_worker_but_not_member(
+        self,
+    ) -> None:
         registry, _peer = _registry_with_trusted_peer("peer-a")
         state = _solo_cluster_state("local")
 
@@ -173,6 +181,7 @@ class PairOnlyMembershipTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # §4  JOIN creates membership
 # ---------------------------------------------------------------------------
+
 
 class JoinCreatesMembershipTests(unittest.TestCase):
     """After join, role_assignments contains the worker — specs must reflect it."""
@@ -220,7 +229,9 @@ class JoinCreatesMembershipTests(unittest.TestCase):
 
     def test_join_refreshes_both_nodes_and_cluster_pages(self) -> None:
         runner = DeferredRunner()
-        peer_ctx = _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer")
+        peer_ctx = _trusted_context(
+            "peer-a", "Peer A", cpu_value="peer", host_label="peer"
+        )
         window = _make_window(peer_ctx, start_discovery=False)
         blob = _remote_invite_blob("peer-a")
         window._cluster_state = ClusterState(
@@ -275,8 +286,11 @@ class JoinCreatesMembershipTests(unittest.TestCase):
         window._save_cluster_state = Mock(side_effect=save)
 
         window_node_actions.join_cluster_via_invite(
-            window, "peer-a", blob,
-            provider_cls=Mock(return_value=provider), transport_cls=Mock,
+            window,
+            "peer-a",
+            blob,
+            provider_cls=Mock(return_value=provider),
+            transport_cls=Mock,
         )
         runner.run_next()
 
@@ -289,17 +303,20 @@ def _remote_invite_blob(coordinator_id: str = "peer-a") -> str:
     remote_state = ClusterState.create_local(local_node_id=coordinator_id)
     invite = remote_state.create_invite(target_node_id="local")
     from maintenance.cluster import encode_invite_blob
+
     return encode_invite_blob(invite)
 
 
 def _make_coordinator(runner: DeferredRunner) -> Any:
     from maintenance.components.coordinator import AppCoordinator
+
     return AppCoordinator(runner=runner, deliver=lambda cb: cb())
 
 
 # ---------------------------------------------------------------------------
 # §10  Revoked assignment -> is_cluster_member=False
 # ---------------------------------------------------------------------------
+
 
 class RevokedAssignmentMembershipTests(unittest.TestCase):
     """Historical/revoked assignments must never yield is_cluster_member=True."""
@@ -329,7 +346,8 @@ class RevokedAssignmentMembershipTests(unittest.TestCase):
         state = ClusterState.create_local(local_node_id="local")
         state = replace(
             state,
-            role_assignments=state.role_assignments + (
+            role_assignments=state.role_assignments
+            + (
                 RoleAssignment(
                     frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}),
                     node_id=NodeId("peer-a"),
@@ -347,6 +365,7 @@ class RevokedAssignmentMembershipTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # §11  Role source: role_assignments wins over descriptor.role
 # ---------------------------------------------------------------------------
+
 
 class RoleSourceTests(unittest.TestCase):
     """The canonical role for a member comes from role_assignments, not descriptor."""
@@ -386,7 +405,8 @@ class RoleSourceTests(unittest.TestCase):
         state = ClusterState.create_local(local_node_id="local")
         state = replace(
             state,
-            role_assignments=state.role_assignments + (
+            role_assignments=state.role_assignments
+            + (
                 RoleAssignment(
                     frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}),
                     node_id=NodeId("peer-a"),
@@ -406,12 +426,15 @@ class RoleSourceTests(unittest.TestCase):
 # §20  Connection loss does not mutate membership
 # ---------------------------------------------------------------------------
 
+
 class ConnectionVsMembershipTests(unittest.TestCase):
     """Disconnecting a worker must not change role_assignments or is_cluster_member."""
 
     def test_remove_connection_does_not_mutate_role_assignments(self) -> None:
         runner = DeferredRunner()
-        peer_ctx = _trusted_context("peer-a", "Peer A", cpu_value="peer", host_label="peer")
+        peer_ctx = _trusted_context(
+            "peer-a", "Peer A", cpu_value="peer", host_label="peer"
+        )
         window = _make_window(peer_ctx, start_discovery=False)
 
         state = _cluster_state_with_worker("local", "peer-a")
@@ -437,16 +460,20 @@ class ConnectionVsMembershipTests(unittest.TestCase):
         original_assignments = window._cluster_state.role_assignments
 
         window_node_actions.remove_connection_node(
-            window, "peer-a",
+            window,
+            "peer-a",
             messagebox_module=Mock(askyesno=Mock(return_value=True)),
-            provider_cls=Mock(return_value=Mock(remove_connection=Mock(return_value={"ok": True}))),
+            provider_cls=Mock(
+                return_value=Mock(remove_connection=Mock(return_value={"ok": True}))
+            ),
             transport_cls=Mock,
         )
         runner.run_next()
 
         # role_assignments must NOT have been mutated by remove_connection
         self.assertEqual(
-            window._cluster_state.role_assignments, original_assignments,
+            window._cluster_state.role_assignments,
+            original_assignments,
             "remove_connection must not mutate role_assignments",
         )
 
@@ -460,9 +487,7 @@ class ConnectionVsMembershipTests(unittest.TestCase):
         self.assertTrue(peer_online.is_cluster_member)
 
         # Simulate offline — only connection_status changes, not role_assignments
-        peer.connection = replace(
-            peer.connection, status=NodeConnectionStatus.OFFLINE
-        )
+        peer.connection = replace(peer.connection, status=NodeConnectionStatus.OFFLINE)
 
         offline_specs = node_specs.trusted_node_specs(registry, state)
         peer_offline = next(s for s in offline_specs if s.node_id == "peer-a")
@@ -476,9 +501,7 @@ class ConnectionVsMembershipTests(unittest.TestCase):
         registry, peer = _registry_with_trusted_peer("peer-a")
         state = _cluster_state_with_worker("local", "peer-a")
 
-        peer.connection = replace(
-            peer.connection, status=NodeConnectionStatus.OFFLINE
-        )
+        peer.connection = replace(peer.connection, status=NodeConnectionStatus.OFFLINE)
 
         specs = node_specs.cluster_node_specs(registry, cluster_state=state)
         peer_specs = [s for s in specs if s.node_id == "peer-a"]
@@ -491,7 +514,10 @@ class ConnectionVsMembershipTests(unittest.TestCase):
 # Phase 13B — Worker-side view of its Coordinator
 # ---------------------------------------------------------------------------
 
-def _registry_with_coord_peer(coordinator_id: str = "coord") -> tuple[NodeRegistry, NodeContext]:
+
+def _registry_with_coord_peer(
+    coordinator_id: str = "coord",
+) -> tuple[NodeRegistry, NodeContext]:
     """Registry with a local node and one trusted remote Coordinator peer."""
     registry = NodeRegistry()
     local = make_local_context()
@@ -613,7 +639,8 @@ class WorkerViewCoordinatorTests(unittest.TestCase):
         """Explicit revocation must win over epoch fallback."""
         registry, _coord = _registry_with_coord_peer("coord")
         state = _joined_worker_state(
-            "local", "coord",
+            "local",
+            "coord",
             coordinator_in_assignments=True,
             coordinator_revoked=True,
         )

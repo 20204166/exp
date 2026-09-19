@@ -636,6 +636,7 @@ class MembershipMetaTextTests(unittest.TestCase):
         )
         text = self._meta(spec)
         self.assertIn("Worker", text)
+        self.assertIn("Cluster member", text)
         self.assertIn("Online", text)
         self.assertNotIn("Not in cluster", text)
 
@@ -650,6 +651,7 @@ class MembershipMetaTextTests(unittest.TestCase):
         )
         text = self._meta(spec)
         self.assertIn("Worker", text)
+        self.assertIn("Cluster member", text)
         self.assertIn("Offline", text)
         self.assertNotIn("Not in cluster", text)
 
@@ -675,6 +677,7 @@ class MembershipMetaTextTests(unittest.TestCase):
         )
         text = self._meta(spec)
         self.assertIn("Coordinator", text)
+        self.assertIn("Cluster member", text)
         self.assertNotIn("Worker", text)
         self.assertNotIn("Not in cluster", text)
 
@@ -689,6 +692,7 @@ class MembershipMetaTextTests(unittest.TestCase):
         )
         text = self._meta(spec)
         self.assertIn("Coordinator", text)
+        self.assertIn("Cluster member", text)
         self.assertNotIn("Not in cluster", text)
 
     def test_membership_label_precedes_connection_label(self) -> None:
