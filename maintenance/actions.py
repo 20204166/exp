@@ -96,26 +96,22 @@ class ProcessManager:
             psutil_module.NoSuchProcess,
             psutil_module.AccessDenied,
         )
-        current_user = getpass.getuser()
-        protected_pids = self._protected_pids(psutil_module)
-        if protected_pids is None:
-            errors.append("Process ancestry unavailable; refusing process actions.")
-            return self._build_process_action_result(pids, (), (), errors)
         target_create_times = dict(expected_create_times or {})
-
         targets: list[Any] = []
-        for process in processes:
-            if include_children:
+
+        if include_children:
+            current_user = getpass.getuser()
+            protected_pids = self._protected_pids(psutil_module)
+            if protected_pids is None:
+                errors.append("Process ancestry unavailable; refusing process actions.")
+                return self._build_process_action_result(pids, (), (), errors)
+            for process in processes:
                 try:
                     children = process.children(recursive=True)
                 except process_errors:
                     children = []
                 for child in children:
-                    if self._is_allowed_target(
-                        child,
-                        current_user,
-                        protected_pids,
-                    ):
+                    if self._is_allowed_target(child, current_user, protected_pids):
                         try:
                             target_create_times[child.pid] = float(child.create_time())
                         except process_errors as error:
@@ -124,7 +120,9 @@ class ProcessManager:
                             targets.append(child)
                     else:
                         errors.append(f"PID {child.pid} is protected.")
-            targets.append(process)
+                targets.append(process)
+        else:
+            targets.extend(processes)
 
         for target in targets:
             try:
@@ -276,6 +274,7 @@ class FileManager:
     def move_to_trash(self, paths: list[Path]) -> FileActionResult:
         send2trash_fn = self._require_send2trash()
         allowed_root = self.allowed_root
+        root_is_dir = allowed_root.is_dir()
         moved: list[Path] = []
         errors: list[str] = []
 
@@ -294,7 +293,7 @@ class FileManager:
                 continue
 
             if (
-                not allowed_root.is_dir()
+                not root_is_dir
                 or not resolved_path.is_relative_to(allowed_root)
                 or not resolved_path.is_file()
             ):

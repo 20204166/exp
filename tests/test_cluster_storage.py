@@ -7,6 +7,7 @@ from maintenance.components.cluster_storage import (
     ResourceSnapshot,
     SnapshotBatch,
     StandbyBuffer,
+    snapshot_batch_from_dict,
 )
 from maintenance.nodes import NodeId
 
@@ -79,3 +80,17 @@ class ClusterStorageTests(unittest.TestCase):
         self.assertTrue(store.import_batch(first, expected_epoch=3, now=100.0))
         self.assertTrue(store.import_batch(second, expected_epoch=3, now=102.0))
         self.assertEqual(store.data_gaps()[0].first_missing_sequence, 2)
+
+    def test_wire_batch_rejects_non_integer_identity_fields(self) -> None:
+        value = {
+            "batch_id": "batch",
+            "source_node_id": "coordinator",
+            "source_epoch": 1.5,
+            "sequence": True,
+            "observed_at": 100.0,
+            "encoded_size": 20,
+            "payload": [],
+        }
+
+        with self.assertRaises(ValueError):
+            snapshot_batch_from_dict(value)

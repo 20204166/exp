@@ -606,6 +606,15 @@ class ProcessDialogNodeTests(unittest.TestCase):
 
         self.assertEqual(dialog.quit_button.state, tk.DISABLED)
 
+    def test_read_only_dialog_keeps_quit_disabled_after_error(self) -> None:
+        dialog = _dialog_with({100: _process(100, "Firefox")})
+        dialog._read_only = True
+
+        with patch("maintenance.dialogs.messagebox.showerror"):
+            dialog._show_error("scan failed")
+
+        self.assertEqual(dialog.quit_button.state, tk.DISABLED)
+
     def test_dialog_source_provider_is_target_bound(self) -> None:
         dialog: Any = object.__new__(ProcessDialog)
         provider_a = Mock()

@@ -1290,7 +1290,7 @@ class ProcessDialog(tk.Toplevel):
     def _show_error(self, message: str) -> None:
         self._finish_refresh()
         self.refresh_button.config(state=tk.NORMAL)
-        self.quit_button.config(state=tk.NORMAL)
+        self.quit_button.config(state=tk.NORMAL if not self._read_only else tk.DISABLED)
         self.status_label.config(text="Operation failed")
         messagebox.showerror("Process Error", message, parent=self)
 

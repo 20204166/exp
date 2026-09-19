@@ -105,7 +105,7 @@ class AppCoordinatorStressTests(unittest.TestCase):
 
     def test_two_hundred_cycles_keep_state_bounded(self) -> None:
         coordinator, runner = self._make()
-        results: dict[str, int] = {}
+        peak_tracked_states = 0
 
         for cycle in range(200):
             key = KEYS[cycle % len(KEYS)]
@@ -115,15 +115,17 @@ class AppCoordinatorStressTests(unittest.TestCase):
             )
             if runner.pending:
                 runner.run_next()
-            self.assertLessEqual(len(coordinator._states), len(KEYS))
+            tracked_states = len(coordinator._states)
+            peak_tracked_states = max(peak_tracked_states, tracked_states)
+            self.assertLessEqual(tracked_states, len(KEYS))
             self.assertEqual(
                 coordinator.has_pending_work,
                 any(state.in_flight for state in coordinator._states.values()),
             )
-            last = coordinator.last_result(key)
-            if last is not None:
-                results[key] = last
 
+        # The peak is more useful than only checking the final count: it catches
+        # transient state growth that would be hidden after later cycles reuse keys.
+        self.assertEqual(peak_tracked_states, len(KEYS))
         self.assertEqual(len(coordinator._states), len(KEYS))
 
         # Drain any remaining work; every run settles with no in-flight lease.

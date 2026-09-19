@@ -64,12 +64,12 @@ def health_warnings(
     ):
         warnings.append(f"Memory pressure is high ({memory.percent:.0f}%)")
 
-    for category, key, prefix in (
-        ("CPU", "cpu", "Temperature: "),
-        ("GPU", "gpu", "Temperature: "),
-        ("NVMe", "storage", "Drive temperature: "),
+    for category, resource, prefix in (
+        ("CPU", _resource(snapshot, "cpu"), "Temperature: "),
+        ("GPU", _resource(snapshot, "gpu"), "Temperature: "),
+        ("NVMe", storage, "Drive temperature: "),
     ):
-        temperature = _temperature(snapshot, key, prefix)
+        temperature = _temperature(resource, prefix)
         met = temperature is not None and temperature >= TEMPERATURE_WARN_C
         if _sustained(state, f"temp_{category}", met, consecutive_limit):
             warnings.append(f"{category} temperature is {temperature:.0f}°C")
@@ -90,11 +90,9 @@ def _resource(snapshot: DashboardSnapshot, key: str) -> ResourceSummary | None:
 
 
 def _temperature(
-    snapshot: DashboardSnapshot,
-    key: str,
+    resource: ResourceSummary | None,
     prefix: str,
 ) -> float | None:
-    resource = _resource(snapshot, key)
     if resource is None:
         return None
     if resource.temperatures:

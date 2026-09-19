@@ -74,7 +74,7 @@ class DashboardScanLifecycle:
         if not finished:
             return False, False
         self.resolved_generation = generation
-        return finished, rerun_requested
+        return True, rerun_requested
 
     def resolve_generation(self, generation: int) -> tuple[bool, bool]:
         finished, rerun_requested = self.claim_resolution(generation)

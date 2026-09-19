@@ -20,6 +20,14 @@ STANDBY_MAX_AGE_SECONDS = 24 * 60 * 60
 MAX_BATCH_PAYLOAD_BYTES = 4 * 1024 * 1024
 
 
+def _wire_integer(value: object, field: str) -> int:
+    """Accept JSON integers without silently truncating other numeric types."""
+
+    if type(value) is not int:  # bool is intentionally excluded as well.
+        raise ValueError(f"snapshot batch {field} must be an integer")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class ResourceSnapshot:
     node_id: NodeId
@@ -144,11 +152,11 @@ def snapshot_batch_from_dict(value: object) -> SnapshotBatch:
     batch = SnapshotBatch(
         str(value["batch_id"]),
         NodeId(str(value["source_node_id"])),
-        int(value["source_epoch"]),
-        int(value["sequence"]),
+        _wire_integer(value["source_epoch"], "source epoch"),
+        _wire_integer(value["sequence"], "sequence"),
         float(value["observed_at"]),
         tuple(records),
-        int(value["encoded_size"]),
+        _wire_integer(value["encoded_size"], "encoded size"),
         str(value.get("cluster_id", "")),
     )
     if (

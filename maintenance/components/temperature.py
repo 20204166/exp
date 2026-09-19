@@ -241,10 +241,7 @@ class TemperatureTelemetry:
             samples = self._legacy_samples(component, summary)
 
         if samples:
-            self._record_samples(telemetry, samples)
-            telemetry.state = TemperatureState.VALID
-            telemetry.current = samples[-1]
-            telemetry.empty_reads = 0
+            self._apply_valid_samples(telemetry, samples)
         else:
             self._settle_inactive_event(telemetry)
             if summary.temperature_unavailable_reason is not None:
@@ -326,10 +323,25 @@ class TemperatureTelemetry:
             telemetry = self._component(component)
             telemetry.last_error = None
             if samples:
-                self._record_samples(telemetry, samples)
-                telemetry.state = TemperatureState.VALID
-                telemetry.current = samples[-1]
-                telemetry.empty_reads = 0
+                self._apply_valid_samples(telemetry, samples)
+
+    def _apply_valid_samples(
+        self,
+        telemetry: _ComponentTelemetry,
+        samples: tuple[TemperatureSample, ...],
+    ) -> None:
+        """Record a non-empty batch of valid samples and mark the component live.
+
+        Called from both ``_record_summary`` (summary path) and
+        ``record_scan`` (scan path) which share identical post-record state
+        transitions: advance history, set VALID, update current, reset the
+        empty-read counter.
+        """
+
+        self._record_samples(telemetry, samples)
+        telemetry.state = TemperatureState.VALID
+        telemetry.current = samples[-1]
+        telemetry.empty_reads = 0
 
     def _component(self, component: str) -> _ComponentTelemetry:
         telemetry = self._components.get(component)
@@ -591,6 +603,21 @@ class TemperatureTelemetry:
         return ()
 
 
+def _require_nonempty_str(field_name: str, value: Any) -> str:
+    """Validate that a deserialized field is a non-empty string.
+
+    Used by ``temperature_sample_from_dict`` for the three string identity
+    fields (component, sensor_id, sensor_name) which all share the same
+    two-step isinstance + truthiness check.
+    """
+
+    if not isinstance(value, str):
+        raise TypeError(f"temperature sample {field_name} must be a string")
+    if not value:
+        raise ValueError(f"temperature sample {field_name} must not be empty")
+    return value
+
+
 def temperature_sample_to_dict(sample: TemperatureSample) -> dict[str, Any]:
     return {
         "component": sample.component,
@@ -611,18 +638,9 @@ def temperature_sample_from_dict(data: Any) -> TemperatureSample:
     value_celsius = data.get("value_celsius")
     sampled_at = data.get("sampled_at")
     sampled_monotonic = data.get("sampled_monotonic")
-    if not isinstance(component, str):
-        raise TypeError("temperature sample component must be a string")
-    if not isinstance(sensor_id, str):
-        raise TypeError("temperature sample sensor_id must be a string")
-    if not isinstance(sensor_name, str):
-        raise TypeError("temperature sample sensor_name must be a string")
-    if not component:
-        raise ValueError("temperature sample component must not be empty")
-    if not sensor_id:
-        raise ValueError("temperature sample sensor_id must not be empty")
-    if not sensor_name:
-        raise ValueError("temperature sample sensor_name must not be empty")
+    component = _require_nonempty_str("component", component)
+    sensor_id = _require_nonempty_str("sensor_id", sensor_id)
+    sensor_name = _require_nonempty_str("sensor_name", sensor_name)
     if not isinstance(value_celsius, (int, float)) or isinstance(value_celsius, bool):
         raise TypeError("temperature sample value must be a number")
     if not is_valid_temperature_value(value_celsius):
