@@ -150,6 +150,7 @@ class RecordingTree:
         self.width = 755
         self.widths: dict[str, int] = {}
         self.rows: list[Any] = []
+        self._row_ids: list[str] = []
 
     def selection(self) -> tuple[str, ...]:
         return self.selected
@@ -161,12 +162,25 @@ class RecordingTree:
         self.widths[name] = options["width"]
 
     def delete(self, *items: object) -> None:
-        self.rows.clear()
+        if not items:
+            self.rows.clear()
+            self._row_ids.clear()
+            return
+        requested = {str(item) for item in items}
+        retained = [
+            (row_id, row)
+            for row_id, row in zip(self._row_ids, self.rows, strict=True)
+            if row_id not in requested
+        ]
+        self._row_ids = [row_id for row_id, _row in retained]
+        self.rows = [row for _row_id, row in retained]
 
-    def get_children(self) -> tuple[()]:
-        return ()
+    def get_children(self) -> tuple[str, ...]:
+        return tuple(self._row_ids)
 
     def insert(self, *args: object, **kwargs: object) -> None:
+        row_id = str(kwargs.get("iid", len(self._row_ids)))
+        self._row_ids.append(row_id)
         self.rows.append(args)
 
 

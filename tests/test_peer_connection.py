@@ -248,7 +248,9 @@ class TrustSurvivalTests(unittest.TestCase):
 
     def test_remote_transport_error_does_not_revoke_trust(self) -> None:
         self.manager._connect = Mock(  # type: ignore[attr-defined]
-            side_effect=RemoteTransportError("remote transport failed: TimeoutError: timed out")
+            side_effect=RemoteTransportError(
+                "remote transport failed: TimeoutError: timed out"
+            )
         )
         initial_trust = self._initial_trust()
 
@@ -285,7 +287,9 @@ class TrustSurvivalTests(unittest.TestCase):
     ) -> None:
         """on_failed signals the caller (e.g. detach_peer) but MUST NOT revoke trust."""
         self.manager._connect = Mock(  # type: ignore[attr-defined]
-            side_effect=RemoteTransportError("remote transport failed: ConnectionRefusedError: [Errno 111] Connection refused")
+            side_effect=RemoteTransportError(
+                "remote transport failed: ConnectionRefusedError: [Errno 111] Connection refused"
+            )
         )
         self.manager.reconcile(0.0)
 
@@ -293,13 +297,19 @@ class TrustSurvivalTests(unittest.TestCase):
         self.assertIs(failure_context, self.peer)
         self.assertIn(
             failure_reason,
-            {PeerFailure.CONNECTION_REFUSED, PeerFailure.ROUTE_FAILURE, PeerFailure.TIMEOUT},
+            {
+                PeerFailure.CONNECTION_REFUSED,
+                PeerFailure.ROUTE_FAILURE,
+                PeerFailure.TIMEOUT,
+            },
         )
         self.assertEqual(failure_context.descriptor.trust, NodeTrustState.TRUSTED)
 
     def test_multiple_transport_failures_do_not_revoke_trust(self) -> None:
         self.manager._connect = Mock(  # type: ignore[attr-defined]
-            side_effect=RemoteTransportError("remote transport failed: TimeoutError: timed out")
+            side_effect=RemoteTransportError(
+                "remote transport failed: TimeoutError: timed out"
+            )
         )
 
         for tick in (0.0, 2.0, 4.0, 8.0, 16.0):

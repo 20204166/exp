@@ -99,7 +99,12 @@ class RemoteRoleOperationTests(unittest.TestCase):
         runner.run_next()
 
         window._nodes_error.assert_not_called()
-        self.assertIsNotNone(window._cluster_state.record("peer-a"))
+        assignment = next(
+            item
+            for item in window._cluster_state.role_assignments
+            if item.node_id == NodeId("peer-a")
+        )
+        self.assertEqual(assignment.roles, frozenset({ClusterRole.WORKER}))
 
     def test_set_roles_reports_error_on_rpc_failure_without_local_save(self) -> None:
         runner = DeferredRunner()

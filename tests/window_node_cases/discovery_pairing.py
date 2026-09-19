@@ -18,7 +18,6 @@ from maintenance.nodes import (
     NodeId,
     NodeIdentityStatus,
     NodeRegistry,
-    NodeTrustState,
     node_identity_fingerprint,
     node_operation_key,
 )
@@ -61,7 +60,6 @@ class WindowDiscoveryIntegrationTests(unittest.TestCase):
         self.assertFalse(kwargs["advertisement"].connectable)
 
     def test_manual_host_records_are_preserved_in_cluster_state(self) -> None:
-        from maintenance.nodes import NodeContext, NodeDescriptor, NodeId, NodeStatus
         from maintenance.remote_support.protocol import READ_CAPABILITIES
         window = _make_window(start_discovery=False)
         window._cluster_state = ClusterState()
@@ -1182,7 +1180,11 @@ class Phase10ThreadingTests(unittest.TestCase):
         from maintenance.remote import CapabilityElevationRequest
 
         s = secret if secret is not None else "c" * 64
-        perms = permissions if permissions is not None else frozenset({NodePermission.COMPONENT_READ})
+        perms = (
+            permissions
+            if permissions is not None
+            else frozenset({NodePermission.COMPONENT_READ})
+        )
         return CapabilityElevationRequest(
             caller_node_id=NodeId(caller),
             identity_fingerprint="fp-id",
@@ -1204,11 +1206,13 @@ class Phase10ThreadingTests(unittest.TestCase):
             permissions=frozenset(),
         )
         window._cluster_state = ClusterState(peer_grants=(grant,))
+
         # Stub out _save_cluster_state so the full peer-listener/TLS chain
         # is not triggered by these threading-focused tests.
         def _save(state: Any) -> bool:
             window._cluster_state = state
             return True
+
         window._save_cluster_state = _save
         return window
 
@@ -1308,8 +1312,10 @@ class Phase10ThreadingTests(unittest.TestCase):
             permissions=frozenset({NodePermission.COMPONENT_READ}),
         )
         gate = threading.Event()
+        submitted = threading.Event()
 
         def blocking_submit_ui(cb: Any) -> None:
+            submitted.set()
             gate.wait()  # hold until test releases
             cb()
 
@@ -1326,8 +1332,7 @@ class Phase10ThreadingTests(unittest.TestCase):
         t1 = threading.Thread(target=first)
         t1.start()
         # Let t1 acquire the lock before t2 tries.
-        import time as _time
-        _time.sleep(0.05)
+        self.assertTrue(submitted.wait(timeout=2.0))
         t2 = threading.Thread(target=second)
         t2.start()
         t2.join(timeout=2.0)
@@ -1338,6 +1343,7 @@ class Phase10ThreadingTests(unittest.TestCase):
         # unblock first
         gate.set()
         t1.join(timeout=2.0)
+        self.assertFalse(t1.is_alive(), "first call should return")
 
     # ------------------------------------------------------------------ #
     # Endpoint verify async / stale-result tests                          #
@@ -1428,7 +1434,9 @@ class Phase10ThreadingTests(unittest.TestCase):
             }
             return p
 
-        def _make_candidate(addresses: tuple[str, ...], port: int) -> DiscoveredNodeCandidate:
+        def _make_candidate(
+            addresses: tuple[str, ...], port: int
+        ) -> DiscoveredNodeCandidate:
             return DiscoveredNodeCandidate(
                 stable_id="peer-a",
                 hostname="host",

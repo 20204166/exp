@@ -359,7 +359,9 @@ class UICoordinatorTransitionTests(unittest.TestCase):
         coordinator.schedule_transition("status", 200, lambda: None)
         coordinator.schedule_transition("peer", 100, lambda: None)
 
-        self.assertEqual(len(cancelled), 0, "different names must not cancel each other")
+        self.assertEqual(
+            len(cancelled), 0, "different names must not cancel each other"
+        )
         self.assertEqual(len(scheduled), 2)
 
     def test_cancel_transition_cancels_the_timer(self) -> None:
@@ -370,21 +372,25 @@ class UICoordinatorTransitionTests(unittest.TestCase):
 
         self.assertEqual(len(scheduled), 1)
         self.assertEqual(len(cancelled), 1)
-        self.assertEqual(cancelled[0], 1, "cancel must be called with the scheduled timer id")
+        self.assertEqual(
+            cancelled[0], 1, "cancel must be called with the scheduled timer id"
+        )
 
     def test_cancel_transition_unknown_name_is_safe(self) -> None:
         coordinator, _, _ = self._make_coordinator()
         coordinator.cancel_transition("nonexistent")  # must not raise
 
     def test_shutdown_cancels_all_pending_transitions(self) -> None:
-        coordinator, scheduled, cancelled = self._make_coordinator()
+        coordinator, _, cancelled = self._make_coordinator()
 
         coordinator.schedule_transition("status", 200, lambda: None)
         coordinator.schedule_transition("peer", 100, lambda: None)
 
         coordinator.shutdown()
 
-        self.assertEqual(len(cancelled), 2, "shutdown must cancel all pending transitions")
+        self.assertEqual(
+            len(cancelled), 2, "shutdown must cancel all pending transitions"
+        )
 
     def test_no_schedule_callable_means_transitions_are_noop(self) -> None:
         coordinator = UICoordinator()  # no schedule/cancel injected
@@ -402,7 +408,9 @@ class UICoordinatorTransitionTests(unittest.TestCase):
 
         coordinator.cancel_transition("completion")
 
-        self.assertEqual(len(cancelled), 1, "cancel must be called when a new scan starts")
+        self.assertEqual(
+            len(cancelled), 1, "cancel must be called when a new scan starts"
+        )
 
 
 if __name__ == "__main__":

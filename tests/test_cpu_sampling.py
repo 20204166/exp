@@ -193,7 +193,7 @@ class CpuSamplingTests(unittest.TestCase):
         self.assertEqual(result.value, "Unavailable")
         self.assertIsNone(scanner._cpu_worker)
 
-    def test_strap_value_is_discarded_until_first_request(self) -> None:
+    def test_startup_value_is_discarded_until_first_request(self) -> None:
         state: dict[str, float] = {"value": 12.3}
 
         def cpu_percent(interval: float | None = None) -> float:
@@ -235,11 +235,13 @@ class CpuSamplingTests(unittest.TestCase):
     def test_cancel_event_interrupts_cpu_sample_wait(self) -> None:
         scanner = self._new_scanner()
         cancel_event = threading.Event()
+        wait_timeouts: list[float | None] = []
 
         def cpu_percent(interval: float | None = None) -> float:
             return 12.3
 
         def blocked_wait(timeout: float | None = None) -> bool:
+            wait_timeouts.append(timeout)
             cancel_event.set()
             return False
 
@@ -250,12 +252,10 @@ class CpuSamplingTests(unittest.TestCase):
             scanner.scan_component("cpu")
             result_event.wait.side_effect = blocked_wait
 
-            started = time.monotonic()
             with self.assertRaises(ScanCancelled):
                 scanner.scan_component("cpu", cancel_event=cancel_event)
-            elapsed = time.monotonic() - started
 
-        self.assertLess(elapsed, 1.0)
+        self.assertEqual(wait_timeouts, [SystemScanner.CPU_CANCEL_POLL_SECONDS])
 
     def test_no_cancel_event_keeps_single_timed_wait(self) -> None:
         scanner = self._new_scanner()

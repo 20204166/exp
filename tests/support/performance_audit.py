@@ -97,7 +97,7 @@ class FakeScanner:
     ) -> dict[str, object]:
         if use_cache and self.profile.name in self._cache:
             self.counters.cache_hits += 1
-            return dict(self._cache[self.profile.name])
+            return self._copy_result(self._cache[self.profile.name])
         if cancel_event is not None and cancel_event.is_set():
             result = self._failure_result("cancellation")
         elif self.failure is not None:
@@ -111,8 +111,15 @@ class FakeScanner:
                 "error_classification": None,
             }
         if result["status"] == "ok":
-            self._cache[self.profile.name] = dict(result)
-        return result
+            self._cache[self.profile.name] = self._copy_result(result)
+        return self._copy_result(result)
+
+    @staticmethod
+    def _copy_result(result: dict[str, object]) -> dict[str, object]:
+        copied = dict(result)
+        if isinstance(items := copied.get("items"), list):
+            copied["items"] = list(items)
+        return copied
 
     def _failure_result(self, classification: str) -> dict[str, object]:
         return {

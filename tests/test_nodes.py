@@ -19,7 +19,8 @@ from maintenance.nodes import (
     node_identity_fingerprint,
     node_operation_key,
 )
-from tests.support.nodes import make_candidate, make_local_context, make_remote_context
+from tests.support.nodes import make_candidate, make_remote_context
+from tests.support.nodes import make_local_context as _local_context
 
 
 def _candidate(
@@ -44,10 +45,6 @@ def _candidate(
         identity_fingerprint=identity_fingerprint
         or node_identity_fingerprint(stable_id),
     )
-
-
-def _local_context() -> NodeContext:
-    return make_local_context()
 
 
 def _peer_context(

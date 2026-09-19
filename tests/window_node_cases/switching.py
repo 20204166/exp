@@ -340,6 +340,7 @@ class WindowNodeSwitchingTests(unittest.TestCase):
 
         self.assertEqual(window._cluster_state.role_assignments, before_assignments)
         self.assertEqual(window._cluster_state.peer_grants, before_grants)
+        window._activate_remote_node.assert_not_called()
         window._show_dashboard_page.assert_called()
 
     def test_revoke_confirmation_cancel_keeps_state(self) -> None:

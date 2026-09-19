@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
 
-from maintenance.components.temperature import TemperatureSample
 from maintenance.models import CapabilityState
 from maintenance.nodes import NodeRegistry
 from maintenance.ui.window_components import thermal_render_state
 from tests.support.models import make_summary
 from tests.support.nodes import make_local_context, make_remote_context
+from tests.support.temperature import make_temperature_sample
 from tests.support.window import make_window as make_bare_window
 
 
@@ -26,12 +25,11 @@ class ThermalNodeIsolationTests(unittest.TestCase):
         window._node_registry = registry
         window._selected_node_id = registry.selected_id()
 
-        sample = TemperatureSample(
-            component="cpu",
+        sample = make_temperature_sample(
+            "cpu",
+            55.0,
             sensor_id="cpu0",
             sensor_name="cpu0",
-            value_celsius=55.0,
-            sampled_at=datetime.now(timezone.utc),
             sampled_monotonic=0.0,
         )
         local_ctx.telemetry.record_summary(

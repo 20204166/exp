@@ -266,13 +266,22 @@ class WindowNodeSelectorTests(unittest.TestCase):
             window._node_registry.context(NodeId("peer")).descriptor.color,
             "rose",
         )
+        window._save_cluster_state.assert_called_once()
+        window._nodes_error.assert_called_once()
 
     def _setup_manual_host(
         self, window: object, display_name: str, host: str, port: int | None
     ) -> str:
-        from maintenance.nodes import NodeContext, NodeDescriptor, NodeId, NodeTrustState, NodeStatus
+        from maintenance.nodes import (
+            READ_PERMISSIONS,
+            NodeContext,
+            NodeDescriptor,
+            NodeId,
+            NodeStatus,
+            NodeTrustState,
+        )
         from maintenance.remote_support.protocol import READ_CAPABILITIES
-        from maintenance.nodes import READ_PERMISSIONS
+
         node_id = f"manual-{host}:{port}" if port is not None else f"manual-{host}"
         descriptor = NodeDescriptor(
             id=NodeId(node_id),

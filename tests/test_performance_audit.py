@@ -231,8 +231,18 @@ class PerformanceAuditFixtureTests(unittest.TestCase):
     def test_factory_state_is_fresh_and_cache_is_counted(self) -> None:
         scanner, _coordinator, counters = make_performance_fixtures()
         self.assertEqual(scanner.scan()["status"], "ok")
-        self.assertEqual(scanner.scan(use_cache=True)["status"], "ok")
-        self.assertEqual(counters.cache_hits, 1)
+        cached = scanner.scan(use_cache=True)
+        self.assertEqual(cached["status"], "ok")
+        items = cached["items"]
+        self.assertIsInstance(items, list)
+        assert isinstance(items, list)
+        items.append("mutated")
+        next_cached = scanner.scan(use_cache=True)
+        next_items = next_cached["items"]
+        self.assertIsInstance(next_items, list)
+        assert isinstance(next_items, list)
+        self.assertNotIn("mutated", next_items)
+        self.assertEqual(counters.cache_hits, 2)
         other, _other_coordinator, other_counters = make_performance_fixtures()
         self.assertIsNot(scanner, other)
         self.assertEqual(other_counters.cache_hits, 0)

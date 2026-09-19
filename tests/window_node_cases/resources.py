@@ -15,7 +15,8 @@ class WindowOpenResourceNodeTests(unittest.TestCase):
         window._feature_catalog.get = Mock(return_value=Mock(action_kind="process"))
         with patch("window.ProcessDialog") as dialog:
             window.open_resource("cpu")
-        self.assertEqual(dialog.call_args.kwargs["read_only"], False)
+        dialog.assert_called_once()
+        self.assertFalse(dialog.call_args.kwargs["read_only"])
         self.assertEqual(dialog.call_args.kwargs["node_id"], NodeId(LOCAL_NODE_ID))
         self.assertIs(dialog.call_args.kwargs["provider"], window.analyzer)
 
@@ -35,7 +36,8 @@ class WindowOpenResourceNodeTests(unittest.TestCase):
         window._feature_catalog.get = Mock(return_value=Mock(action_kind="process"))
         with patch("window.ProcessDialog") as dialog:
             window.open_resource("cpu")
-        self.assertEqual(dialog.call_args.kwargs["read_only"], True)
+        dialog.assert_called_once()
+        self.assertTrue(dialog.call_args.kwargs["read_only"])
         self.assertEqual(dialog.call_args.kwargs["node_title"], "Dev Node")
         self.assertIs(dialog.call_args.kwargs["provider"], window.analyzer)
 
@@ -57,7 +59,8 @@ class WindowOpenResourceNodeTests(unittest.TestCase):
         window._feature_catalog.get = Mock(return_value=Mock(action_kind="storage"))
         with patch("window.StorageDialog") as dialog:
             window.open_resource("storage")
-        self.assertEqual(dialog.call_args.kwargs["read_only"], True)
+        dialog.assert_called_once()
+        self.assertTrue(dialog.call_args.kwargs["read_only"])
 
     def test_remote_storage_dialog_never_gets_a_scan_root(self) -> None:
         window = _make_window(
@@ -76,6 +79,7 @@ class WindowOpenResourceNodeTests(unittest.TestCase):
         window._feature_catalog.get = Mock(return_value=Mock(action_kind="storage"))
         with patch("window.StorageDialog") as dialog:
             window.open_resource("storage")
+        dialog.assert_called_once()
         self.assertIsNone(dialog.call_args.kwargs["scan_root"])
 
     def test_dialog_change_callback_does_not_rescan_a_newly_selected_node(self) -> None:
@@ -88,6 +92,7 @@ class WindowOpenResourceNodeTests(unittest.TestCase):
         window._rescan_after_change = Mock()
         with patch("window.ProcessDialog") as dialog:
             window.open_resource("cpu")
+        dialog.assert_called_once()
         on_changed = dialog.call_args.kwargs["on_changed"]
 
         window._switch_selected_node(NodeId("dev"))

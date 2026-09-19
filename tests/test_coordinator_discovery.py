@@ -9,13 +9,8 @@ import unittest
 from typing import Any
 
 from maintenance.components.coordinator import AppCoordinator
-from maintenance.nodes import DiscoveredNodeCandidate
 from tests.support.discovery import FakeDiscovery
 from tests.support.nodes import make_candidate
-
-
-def _candidate() -> DiscoveredNodeCandidate:
-    return make_candidate(last_seen=1.0)
 
 
 class AppCoordinatorDiscoveryTests(unittest.TestCase):
@@ -48,7 +43,7 @@ class AppCoordinatorDiscoveryTests(unittest.TestCase):
         )
         self.assertTrue(discovery.started)
 
-        discovery.emit("candidate", _candidate())
+        discovery.emit("candidate", make_candidate(last_seen=1.0))
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0].stable_id, "peer-a")
 
@@ -115,7 +110,7 @@ class AppCoordinatorDiscoveryTests(unittest.TestCase):
         self.assertTrue(discovery.stopped)
 
         # Late events after stop must not reach the registry handlers.
-        discovery.emit("candidate", _candidate())
+        discovery.emit("candidate", make_candidate(last_seen=1.0))
         self.assertEqual(delivered, [])
 
     def test_queued_event_is_dropped_after_stop_and_restart(self) -> None:
@@ -131,7 +126,7 @@ class AppCoordinatorDiscoveryTests(unittest.TestCase):
                 on_lost=lambda _node_id: None,
             )
         )
-        discovery.emit("candidate", _candidate())
+        discovery.emit("candidate", make_candidate(last_seen=1.0))
         self.assertEqual(len(queued), 1)
         coordinator.stop_discovery()
         self.assertTrue(
@@ -144,7 +139,7 @@ class AppCoordinatorDiscoveryTests(unittest.TestCase):
 
         queued.pop(0)()
         self.assertEqual(candidates, [])
-        discovery.emit("candidate", _candidate())
+        discovery.emit("candidate", make_candidate(last_seen=1.0))
         queued.pop(0)()
         self.assertEqual(len(candidates), 1)
 

@@ -568,7 +568,9 @@ class PeerOfflineDebounceTests(unittest.TestCase):
             len(cancelled)
         )
 
-        ui_window_discovery.attach_peer(window, context, (provider, frozenset(), "fp-1"))
+        ui_window_discovery.attach_peer(
+            window, context, (provider, frozenset(), "fp-1")
+        )
 
         self.assertEqual(cancelled, ["peer-offline:peer-a"])
         self.assertEqual(refreshed, [1], "refresh must happen after cancel")

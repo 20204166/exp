@@ -226,7 +226,7 @@ class PageRouterLoaderTests(unittest.TestCase):
 
         self.assertIsNotNone(first)
         self.assertIsNone(second)
-        self.assertEqual(len(runner.workers), 1)
+        self.assertEqual(runner.pending, 1)
         runner.run_next()
         runner.run_next()
         self.assertEqual(received, ["fresh", "fresh"])

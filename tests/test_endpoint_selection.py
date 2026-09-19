@@ -16,7 +16,8 @@ import struct
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from typing import Literal, Self
+from unittest.mock import patch
 
 from maintenance.nodes import (
     LOCAL_NODE_ID,
@@ -69,9 +70,7 @@ class PreferredAddressTests(unittest.TestCase):
         )
 
     def test_vpn_address_returned_when_only_option(self) -> None:
-        self.assertEqual(
-            _preferred_candidate_address(["100.64.0.1"]), "100.64.0.1"
-        )
+        self.assertEqual(_preferred_candidate_address(["100.64.0.1"]), "100.64.0.1")
 
     def test_address_order_independent(self) -> None:
         addresses = ["100.64.0.1", "10.8.0.5", "192.168.55.107", "172.16.0.5"]
@@ -81,7 +80,7 @@ class PreferredAddressTests(unittest.TestCase):
     def test_first_element_wins_when_ranks_are_equal(self) -> None:
         # Two 192.168 addresses — min() picks the lexicographically first one.
         result = _preferred_candidate_address(["192.168.55.107", "192.168.1.1"])
-        self.assertIn(result, {"192.168.55.107", "192.168.1.1"})
+        self.assertEqual(result, "192.168.55.107")
 
     def test_non_ipv4_address_treated_as_lowest_preference(self) -> None:
         result = _preferred_candidate_address(["not.an.ip", "192.168.55.107"])
@@ -107,16 +106,22 @@ class SocketTransportTimeoutTests(unittest.TestCase):
             connect_calls.append(timeout)
             raise OSError("connection refused")
 
-        with patch(
-            "maintenance.remote_support.transport.socket_module.create_connection",
-            side_effect=fake_create_connection,
+        with (
+            patch(
+                "maintenance.remote_support.transport.socket_module.create_connection",
+                side_effect=fake_create_connection,
+            ),
+            self.assertRaises(RemoteTransportError),
         ):
-            with self.assertRaises(RemoteTransportError):
-                transport.request("x", cancel_event=cancel_event)
+            transport.request("x", cancel_event=cancel_event)
 
         self.assertEqual(len(connect_calls), 1)
-        self.assertAlmostEqual(connect_calls[0], 5.0, places=3,
-                               msg="connect timeout must equal self._timeout, not 0.25")
+        self.assertAlmostEqual(
+            connect_calls[0],
+            5.0,
+            places=3,
+            msg="connect timeout must equal self._timeout, not 0.25",
+        )
 
     def test_full_timeout_used_without_cancel_event(self) -> None:
         transport = self._make_transport(timeout=10.0)
@@ -126,28 +131,35 @@ class SocketTransportTimeoutTests(unittest.TestCase):
             connect_calls.append(timeout)
             raise OSError("connection refused")
 
-        with patch(
-            "maintenance.remote_support.transport.socket_module.create_connection",
-            side_effect=fake_create_connection,
+        with (
+            patch(
+                "maintenance.remote_support.transport.socket_module.create_connection",
+                side_effect=fake_create_connection,
+            ),
+            self.assertRaises(RemoteTransportError),
         ):
-            with self.assertRaises(RemoteTransportError):
-                transport.request("x", cancel_event=None)
+            transport.request("x", cancel_event=None)
 
         self.assertAlmostEqual(connect_calls[0], 10.0, places=3)
 
     def test_error_message_includes_exception_type(self) -> None:
         transport = self._make_transport()
 
-        with patch(
-            "maintenance.remote_support.transport.socket_module.create_connection",
-            side_effect=ConnectionRefusedError("Connection refused"),
+        with (
+            patch(
+                "maintenance.remote_support.transport.socket_module.create_connection",
+                side_effect=ConnectionRefusedError("Connection refused"),
+            ),
+            self.assertRaises(RemoteTransportError) as ctx,
         ):
-            with self.assertRaises(RemoteTransportError) as ctx:
-                transport.request("x")
+            transport.request("x")
 
         msg = str(ctx.exception)
-        self.assertIn("ConnectionRefusedError", msg,
-                      "error message must include the exception type for diagnosis")
+        self.assertIn(
+            "ConnectionRefusedError",
+            msg,
+            "error message must include the exception type for diagnosis",
+        )
         self.assertIn("Connection refused", msg)
 
 
@@ -184,7 +196,9 @@ class PeerFailureClassificationTests(unittest.TestCase):
         from maintenance.remote_support.protocol import RemoteAuthError
 
         self.assertIs(
-            classify_peer_failure(RemoteAuthError("peer certificate fingerprint changed")),
+            classify_peer_failure(
+                RemoteAuthError("peer certificate fingerprint changed")
+            ),
             PeerFailure.AUTHENTICATION_FAILED,
         )
 
@@ -317,14 +331,18 @@ class SelfDiscoveryFilterTests(unittest.TestCase):
     def test_self_node_id_rejected(self) -> None:
         """The local node's own stable_id must be filtered out."""
         registry = self._registry(local_id="node-real-abc123")
-        candidate = make_candidate(stable_id="node-real-abc123", port=PEER_SERVICE_DEFAULT_PORT)
+        candidate = make_candidate(
+            stable_id="node-real-abc123", port=PEER_SERVICE_DEFAULT_PORT
+        )
         result = registry.update_discovered(candidate)
         self.assertIsNone(result)
         self.assertEqual(len(registry.discovered_candidates()), 0)
 
     def test_valid_remote_candidate_accepted(self) -> None:
         registry = self._registry()
-        candidate = make_candidate(stable_id="node-peer-xyz", port=PEER_SERVICE_DEFAULT_PORT)
+        candidate = make_candidate(
+            stable_id="node-peer-xyz", port=PEER_SERVICE_DEFAULT_PORT
+        )
         result = registry.update_discovered(candidate)
         self.assertIsNotNone(result)
         self.assertEqual(len(registry.discovered_candidates()), 1)
@@ -332,7 +350,9 @@ class SelfDiscoveryFilterTests(unittest.TestCase):
     def test_port_none_accepted_for_non_connectable(self) -> None:
         """port=None is valid for a non-connectable advertisement."""
         registry = self._registry()
-        candidate = make_candidate(stable_id="node-peer-xyz", port=None, connectable=False)
+        candidate = make_candidate(
+            stable_id="node-peer-xyz", port=None, connectable=False
+        )
         result = registry.update_discovered(candidate)
         self.assertIsNotNone(result)
 
@@ -395,10 +415,10 @@ class SocketTransportCancellationTests(unittest.TestCase):
         settimeout_calls: list[float] = []
 
         class FakeSocket:
-            def __enter__(self) -> "FakeSocket":
+            def __enter__(self) -> Self:
                 return self
 
-            def __exit__(self, *_: object) -> bool:
+            def __exit__(self, *_: object) -> Literal[False]:
                 return False
 
             def settimeout(self, t: float) -> None:
@@ -411,12 +431,14 @@ class SocketTransportCancellationTests(unittest.TestCase):
                 cancel_event.set()
                 raise TimeoutError
 
-        with patch(
-            "maintenance.remote_support.transport.socket_module.create_connection",
-            return_value=FakeSocket(),
+        with (
+            patch(
+                "maintenance.remote_support.transport.socket_module.create_connection",
+                return_value=FakeSocket(),
+            ),
+            self.assertRaises(RemoteExecutionError),
         ):
-            with self.assertRaises(RemoteExecutionError):
-                transport.request("x", cancel_event=cancel_event)
+            transport.request("x", cancel_event=cancel_event)
 
         self.assertTrue(
             any(abs(t - 0.25) < 0.01 for t in settimeout_calls),
@@ -432,10 +454,10 @@ class SocketTransportCancellationTests(unittest.TestCase):
         settimeout_calls: list[float] = []
 
         class FakeSocket:
-            def __enter__(self) -> "FakeSocket":
+            def __enter__(self) -> Self:
                 return self
 
-            def __exit__(self, *_: object) -> bool:
+            def __exit__(self, *_: object) -> Literal[False]:
                 return False
 
             def settimeout(self, t: float) -> None:
@@ -444,12 +466,14 @@ class SocketTransportCancellationTests(unittest.TestCase):
             def sendall(self, _: bytes) -> None:
                 raise OSError("abort")
 
-        with patch(
-            "maintenance.remote_support.transport.socket_module.create_connection",
-            return_value=FakeSocket(),
+        with (
+            patch(
+                "maintenance.remote_support.transport.socket_module.create_connection",
+                return_value=FakeSocket(),
+            ),
+            self.assertRaises(RemoteTransportError),
         ):
-            with self.assertRaises(RemoteTransportError):
-                transport.request("x", cancel_event=None)
+            transport.request("x", cancel_event=None)
 
         self.assertTrue(
             any(abs(t - 7.0) < 0.01 for t in settimeout_calls),
@@ -466,16 +490,20 @@ class SocketTransportCancellationTests(unittest.TestCase):
             connect_calls.append(timeout)
             raise OSError("refused")
 
-        with patch(
-            "maintenance.remote_support.transport.socket_module.create_connection",
-            side_effect=fake_connect,
+        with (
+            patch(
+                "maintenance.remote_support.transport.socket_module.create_connection",
+                side_effect=fake_connect,
+            ),
+            self.assertRaises(RemoteTransportError),
         ):
-            with self.assertRaises(RemoteTransportError):
-                transport.request("x", cancel_event=cancel_event)
+            transport.request("x", cancel_event=cancel_event)
 
         self.assertEqual(len(connect_calls), 1)
         self.assertAlmostEqual(
-            connect_calls[0], 5.0, places=3,
+            connect_calls[0],
+            5.0,
+            places=3,
             msg="connect must use full timeout even when cancel_event is present",
         )
 
@@ -483,14 +511,13 @@ class SocketTransportCancellationTests(unittest.TestCase):
         """Total operation time must not exceed configured timeout significantly."""
         cancel_event = threading.Event()
         transport = self._make_transport(timeout=0.35)
-        call_times: list[float] = []
         start = time.monotonic()
 
         class SlowSocket:
-            def __enter__(self) -> "SlowSocket":
+            def __enter__(self) -> Self:
                 return self
 
-            def __exit__(self, *_: object) -> bool:
+            def __exit__(self, *_: object) -> Literal[False]:
                 return False
 
             def settimeout(self, _: float) -> None:
@@ -500,16 +527,19 @@ class SocketTransportCancellationTests(unittest.TestCase):
                 pass
 
             def recv(self, _: int) -> bytes:
-                call_times.append(time.monotonic() - start)
                 time.sleep(0.12)
                 raise TimeoutError
 
-        with patch(
-            "maintenance.remote_support.transport.socket_module.create_connection",
-            return_value=SlowSocket(),
+        with (
+            patch(
+                "maintenance.remote_support.transport.socket_module.create_connection",
+                return_value=SlowSocket(),
+            ),
+            self.assertRaises(
+                (TimeoutError, RemoteTransportError, RemoteExecutionError)
+            ),
         ):
-            with self.assertRaises((TimeoutError, RemoteTransportError, RemoteExecutionError)):
-                transport.request("x", cancel_event=cancel_event)
+            transport.request("x", cancel_event=cancel_event)
 
         elapsed = time.monotonic() - start
         self.assertLess(elapsed, 1.5, "deadline must terminate loop; got long wait")
@@ -545,7 +575,9 @@ class SocketTransportRealSocketTests(unittest.TestCase):
     response arriving after 0.25 s must now SUCCEED (old cap would fail it)."""
 
     @staticmethod
-    def _echo_server(delay_s: float, response_payload: bytes) -> tuple[int, threading.Thread]:
+    def _echo_server(
+        delay_s: float, response_payload: bytes
+    ) -> tuple[int, threading.Thread]:
         """Start a server that sends one framed response after delay_s, returns port."""
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -585,8 +617,6 @@ class SocketTransportRealSocketTests(unittest.TestCase):
 
         Old 0.25 s cap would fail this; current code must pass it.
         """
-        from contextlib import suppress as suppress_os_error  # noqa: PLC0415
-
         payload = b'{"ok": true}'
         port, t = self._echo_server(0.3, payload)
         try:
@@ -598,8 +628,6 @@ class SocketTransportRealSocketTests(unittest.TestCase):
 
     def test_response_after_500ms_succeeds_with_cancel_event(self) -> None:
         """Cancel event must not shorten the deadline when not set."""
-        from contextlib import suppress as suppress_os_error  # noqa: PLC0415
-
         cancel_event = threading.Event()
         payload = b'{"ok": true}'
         port, t = self._echo_server(0.5, payload)
