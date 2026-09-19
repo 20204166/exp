@@ -44,6 +44,16 @@ def trusted_node_specs(
     disconnected = frozenset(disconnected_ids)
     selectable = {descriptor.id for descriptor in registry.selectable_descriptors()}
     actor = cluster_state.local_assignment
+    # When this node is a joined Worker, coordinator_epoch names its Coordinator.
+    # Use this as an authoritative fallback when role_assignments lacks an entry
+    # for that peer (possible with older persisted join data).
+    _epoch = cluster_state.coordinator_epoch
+    _local_id = cluster_state.local_node_id
+    joined_coordinator_id: str | None = (
+        _epoch.coordinator_id.value
+        if _epoch is not None and _epoch.coordinator_id.value != _local_id
+        else None
+    )
     specs: list[ui_nodes.TrustedNodeSpec] = []
     for context in registry.contexts():
         descriptor = context.descriptor
@@ -63,6 +73,32 @@ def trusted_node_specs(
             ),
             None,
         )
+        # Resolve role and membership.  A non-revoked assignment is canonical.
+        # When no assignment exists, coordinator_epoch identifies the Coordinator
+        # peer so it is not shown as "Not in cluster" on a joined Worker.
+        # An explicit revoked assignment always wins (is_member stays False).
+        if assignment is not None and not assignment.revoked:
+            node_role = (
+                "coordinator"
+                if any(item.value == "coordinator" for item in assignment.roles)
+                else "subcoordinator"
+                if any(item.value == "subcoordinator" for item in assignment.roles)
+                else "worker"
+            )
+            node_roles = tuple(sorted(item.value for item in assignment.roles))
+            is_member = True
+        elif (
+            assignment is None
+            and joined_coordinator_id is not None
+            and descriptor.id.value == joined_coordinator_id
+        ):
+            node_role = "coordinator"
+            node_roles = ("coordinator", "worker")
+            is_member = True
+        else:
+            node_role = "worker"
+            node_roles = ("worker",)
+            is_member = False
         specs.append(
             ui_nodes.TrustedNodeSpec(
                 node_id=descriptor.id.value,
@@ -86,20 +122,8 @@ def trusted_node_specs(
                 ),
                 pairing_state=descriptor.pairing_state.value,
                 target_state=render_target_state(descriptor, context.snapshot).label,
-                role=(
-                    "coordinator"
-                    if assignment is not None
-                    and any(item.value == "coordinator" for item in assignment.roles)
-                    else "subcoordinator"
-                    if assignment is not None
-                    and any(item.value == "subcoordinator" for item in assignment.roles)
-                    else "worker"
-                ),
-                roles=tuple(
-                    sorted(item.value for item in assignment.roles)
-                    if assignment is not None
-                    else ("worker",)
-                ),
+                role=node_role,
+                roles=node_roles,
                 role_editable=any(item.value == "coordinator" for item in actor.roles),
                 paused=assignment.paused if assignment is not None else False,
                 has_active_job=(
@@ -108,9 +132,7 @@ def trusted_node_specs(
                 connection_status=context.connection.status.value,
                 manual_disconnected=descriptor.id in disconnected,
                 retry_automatic=context.retry.automatic_retry,
-                is_cluster_member=(
-                    assignment is not None and not assignment.revoked
-                ),
+                is_cluster_member=is_member,
             )
         )
     return specs
@@ -171,6 +193,18 @@ def cluster_node_specs(
     """Project registered contexts and untrusted observations for All Systems."""
 
     selectable = {descriptor.id for descriptor in registry.selectable_descriptors()}
+    # When this node is a joined Worker, coordinator_epoch names its Coordinator.
+    # Use this as an authoritative fallback when role_assignments lacks an entry
+    # for that peer (possible with older persisted join data).
+    _cs_epoch = cluster_state.coordinator_epoch if cluster_state is not None else None
+    _cs_local_id = cluster_state.local_node_id if cluster_state is not None else None
+    cs_joined_coordinator_id: str | None = (
+        _cs_epoch.coordinator_id.value
+        if _cs_epoch is not None
+        and _cs_local_id is not None
+        and _cs_epoch.coordinator_id.value != _cs_local_id
+        else None
+    )
     specs: list[ui_cluster.ClusterNodeSpec] = []
     for context in registry.contexts():
         descriptor = context.descriptor
@@ -189,6 +223,26 @@ def cluster_node_specs(
             if cluster_state is not None
             else None
         )
+        # Resolve role and membership (same logic as trusted_node_specs).
+        if assignment is not None and not assignment.revoked:
+            cs_role = (
+                "coordinator"
+                if any(r.value == "coordinator" for r in assignment.roles)
+                else "subcoordinator"
+                if any(r.value == "subcoordinator" for r in assignment.roles)
+                else "worker"
+            )
+            cs_is_member = True
+        elif (
+            assignment is None
+            and cs_joined_coordinator_id is not None
+            and descriptor.id.value == cs_joined_coordinator_id
+        ):
+            cs_role = "coordinator"
+            cs_is_member = True
+        else:
+            cs_role = descriptor.role
+            cs_is_member = False
         specs.append(
             ui_cluster.ClusterNodeSpec(
                 node_id=descriptor.id.value,
@@ -209,26 +263,12 @@ def cluster_node_specs(
                 ),
                 target_state=presentation.label,
                 share_active=dashboard_share_active if descriptor.is_local else False,
-                role=(
-                    "coordinator"
-                    if assignment is not None
-                    and not assignment.revoked
-                    and any(r.value == "coordinator" for r in assignment.roles)
-                    else "subcoordinator"
-                    if assignment is not None
-                    and not assignment.revoked
-                    and any(r.value == "subcoordinator" for r in assignment.roles)
-                    else "worker"
-                    if assignment is not None and not assignment.revoked
-                    else descriptor.role
-                ),
+                role=cs_role,
                 role_editable=role_editable,
                 has_active_job=(
                     assignment.has_active_job if assignment is not None else False
                 ),
-                is_cluster_member=(
-                    assignment is not None and not assignment.revoked
-                ),
+                is_cluster_member=cs_is_member,
             )
         )
     for candidate in registry.discovered_candidates():

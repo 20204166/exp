@@ -83,20 +83,21 @@ class ButtonCoordinator:
                     "rejected",  # type: ignore[arg-type]
                 )
             return False
+        observer = self._observer
         token = (
-            self._observer.begin(f"ui:action:{action_id}")
-            if self._observer is not None
+            observer.begin(f"ui:action:{action_id}")
+            if observer is not None
             else None
         )
         try:
             record.callback()
         except Exception as error:
-            if token is not None:
-                self._observer.finish(token, outcome="failure", detail=type(error).__name__)
+            if observer is not None and token is not None:
+                observer.finish(token, outcome="failure", detail=type(error).__name__)
             raise
         else:
-            if token is not None:
-                self._observer.finish(token)
+            if observer is not None and token is not None:
+                observer.finish(token)
         return True
 
     def set_enabled(self, action_id: str, enabled: bool) -> None:

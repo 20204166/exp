@@ -17,12 +17,12 @@ from maintenance.nodes import ProcessActionKind, ProcessTerminationRequest
 from maintenance.scanner import SystemScanner
 
 try:
-    import psutil
+    import psutil  # type: ignore[import-untyped]
 except ImportError:
     psutil = None  # type: ignore[assignment]
 
 try:
-    from send2trash import send2trash
+    from send2trash import send2trash  # type: ignore[import-untyped]
 except ImportError:
     send2trash = None
 

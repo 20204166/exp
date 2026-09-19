@@ -85,12 +85,12 @@ from maintenance.models import (
 )
 
 try:
-    import psutil
+    import psutil  # type: ignore[import-untyped]
 except ImportError:
     psutil = None  # type: ignore[assignment]
 
 try:
-    import pynvml
+    import pynvml  # type: ignore[import-untyped]
 except ImportError:
     pynvml = None
 

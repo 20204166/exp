@@ -29,7 +29,7 @@ class InstanceLock:
         if f is not None:
             self._file = None
             try:
-                f.close()  # type: ignore[union-attr]
+                f.close()  # type: ignore[attr-defined]
             except OSError:
                 pass
 

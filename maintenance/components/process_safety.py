@@ -224,7 +224,7 @@ class ProcessSafetyPolicy:
     @staticmethod
     def _default_process_loader(pid: int) -> Any:
         try:
-            import psutil
+            import psutil  # type: ignore[import-untyped]
         except ImportError as error:
             raise RuntimeError(PSUTIL_INSTALL_HINT) from error
         return psutil.Process(pid)

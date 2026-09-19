@@ -17,6 +17,7 @@ Rules under test:
     §21 remove_connection does not mutate canonical role_assignments.
 """
 
+import secrets
 import time
 import unittest
 from dataclasses import replace
@@ -30,12 +31,14 @@ from maintenance.components.cluster_roles import (
     RoleAssignment,
 )
 from maintenance.nodes import (
+    NodeConnectionStatus,
     NodeContext,
     NodeId,
     NodeRegistry,
     NodeStatus,
     NodeTrustState,
 )
+from maintenance.remote_support.server import PEER_SERVICE_DEFAULT_PORT
 from maintenance.ui import window_node_actions
 from maintenance.ui.window_supports import node_specs
 from tests.support.nodes import make_local_context, make_remote_context
@@ -457,7 +460,6 @@ class ConnectionVsMembershipTests(unittest.TestCase):
         self.assertTrue(peer_online.is_cluster_member)
 
         # Simulate offline — only connection_status changes, not role_assignments
-        from maintenance.nodes import NodeConnectionStatus
         peer.connection = replace(
             peer.connection, status=NodeConnectionStatus.OFFLINE
         )
@@ -474,7 +476,6 @@ class ConnectionVsMembershipTests(unittest.TestCase):
         registry, peer = _registry_with_trusted_peer("peer-a")
         state = _cluster_state_with_worker("local", "peer-a")
 
-        from maintenance.nodes import NodeConnectionStatus
         peer.connection = replace(
             peer.connection, status=NodeConnectionStatus.OFFLINE
         )
@@ -484,3 +485,211 @@ class ConnectionVsMembershipTests(unittest.TestCase):
 
         self.assertTrue(peer_specs[0].is_cluster_member)
         self.assertEqual(peer_specs[0].role, "worker")
+
+
+# ---------------------------------------------------------------------------
+# Phase 13B — Worker-side view of its Coordinator
+# ---------------------------------------------------------------------------
+
+def _registry_with_coord_peer(coordinator_id: str = "coord") -> tuple[NodeRegistry, NodeContext]:
+    """Registry with a local node and one trusted remote Coordinator peer."""
+    registry = NodeRegistry()
+    local = make_local_context()
+    registry.register_context(local)
+    coord = make_remote_context(
+        coordinator_id,
+        trust=NodeTrustState.TRUSTED,
+        status=NodeStatus.ONLINE,
+        display_name=f"Coordinator {coordinator_id}",
+        hostname=coordinator_id,
+    )
+    registry.register_context(coord)
+    return registry, coord
+
+
+def _joined_worker_state(
+    local_id: str = "local",
+    coordinator_id: str = "coord",
+    *,
+    coordinator_in_assignments: bool = True,
+    coordinator_revoked: bool = False,
+) -> ClusterState:
+    """ClusterState for a Worker that has joined a remote Coordinator's cluster.
+
+    ``coordinator_in_assignments=False`` simulates an older persisted join where
+    only the local worker entry was written; the epoch still identifies the
+    Coordinator so the epoch-fallback path in node_specs is exercised.
+    """
+    now = time.time()
+    epoch = CoordinatorEpoch(
+        epoch=3,
+        coordinator_id=NodeId(coordinator_id),
+        fencing_token=secrets.token_hex(16),
+        issued_at=now,
+        lease_expires_at=now + 300.0,
+    )
+    assignments: list[RoleAssignment] = [
+        RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId(local_id)),
+    ]
+    if coordinator_in_assignments:
+        assignments.insert(
+            0,
+            RoleAssignment(
+                frozenset({ClusterRole.COORDINATOR, ClusterRole.WORKER}),
+                node_id=NodeId(coordinator_id),
+                revoked=coordinator_revoked,
+            ),
+        )
+    return ClusterState(
+        local_node_id=local_id,
+        cluster_id="coordinator-cluster",
+        role_assignments=tuple(assignments),
+        coordinator_epoch=epoch,
+        trusted_nodes=(
+            trusted_node_record(
+                node_id=coordinator_id,
+                display_name=f"Coordinator {coordinator_id}",
+                hostname=coordinator_id,
+                host="192.0.2.20",
+                port=PEER_SERVICE_DEFAULT_PORT,
+            ),
+        ),
+    )
+
+
+class WorkerViewCoordinatorTests(unittest.TestCase):
+    """After joining, the Worker must see its Coordinator as a cluster member.
+
+    Tests cover both the case where role_assignments contains the coordinator
+    entry (current _apply_cluster_join) and the epoch-only fallback path where
+    the assignment is absent (older persisted join data).
+    """
+
+    def test_coordinator_is_cluster_member_via_assignment(self) -> None:
+        """Coordinator in role_assignments -> is_cluster_member=True."""
+        registry, _coord = _registry_with_coord_peer("coord")
+        state = _joined_worker_state("local", "coord", coordinator_in_assignments=True)
+
+        specs = node_specs.trusted_node_specs(registry, state)
+        coord_specs = [s for s in specs if s.node_id == "coord"]
+
+        self.assertEqual(len(coord_specs), 1)
+        self.assertTrue(coord_specs[0].is_cluster_member)
+        self.assertEqual(coord_specs[0].role, "coordinator")
+
+    def test_coordinator_is_cluster_member_via_epoch_only(self) -> None:
+        """Coordinator absent from role_assignments -> epoch fallback marks it member."""
+        registry, _coord = _registry_with_coord_peer("coord")
+        state = _joined_worker_state("local", "coord", coordinator_in_assignments=False)
+
+        specs = node_specs.trusted_node_specs(registry, state)
+        coord_specs = [s for s in specs if s.node_id == "coord"]
+
+        self.assertTrue(coord_specs[0].is_cluster_member)
+        self.assertEqual(coord_specs[0].role, "coordinator")
+
+    def test_cluster_spec_coordinator_via_assignment(self) -> None:
+        registry, _coord = _registry_with_coord_peer("coord")
+        state = _joined_worker_state("local", "coord", coordinator_in_assignments=True)
+
+        specs = node_specs.cluster_node_specs(registry, cluster_state=state)
+        coord_specs = [s for s in specs if s.node_id == "coord"]
+
+        self.assertTrue(coord_specs[0].is_cluster_member)
+        self.assertEqual(coord_specs[0].role, "coordinator")
+
+    def test_cluster_spec_coordinator_via_epoch_only(self) -> None:
+        """All Systems: epoch-only path marks Coordinator as cluster member."""
+        registry, _coord = _registry_with_coord_peer("coord")
+        state = _joined_worker_state("local", "coord", coordinator_in_assignments=False)
+
+        specs = node_specs.cluster_node_specs(registry, cluster_state=state)
+        coord_specs = [s for s in specs if s.node_id == "coord"]
+
+        self.assertTrue(coord_specs[0].is_cluster_member)
+        self.assertEqual(coord_specs[0].role, "coordinator")
+
+    def test_revoked_coordinator_assignment_overrides_epoch(self) -> None:
+        """Explicit revocation must win over epoch fallback."""
+        registry, _coord = _registry_with_coord_peer("coord")
+        state = _joined_worker_state(
+            "local", "coord",
+            coordinator_in_assignments=True,
+            coordinator_revoked=True,
+        )
+
+        trusted_specs = node_specs.trusted_node_specs(registry, state)
+        coord_spec = next(s for s in trusted_specs if s.node_id == "coord")
+        self.assertFalse(coord_spec.is_cluster_member)
+
+        cluster_specs = node_specs.cluster_node_specs(registry, cluster_state=state)
+        coord_cluster = next(s for s in cluster_specs if s.node_id == "coord")
+        self.assertFalse(coord_cluster.is_cluster_member)
+
+    def test_coordinator_offline_membership_persists(self) -> None:
+        """Coordinator going offline must not erase cluster membership."""
+        registry, coord_ctx = _registry_with_coord_peer("coord")
+        state = _joined_worker_state("local", "coord", coordinator_in_assignments=False)
+
+        coord_ctx.connection = replace(
+            coord_ctx.connection, status=NodeConnectionStatus.OFFLINE
+        )
+
+        trusted_specs = node_specs.trusted_node_specs(registry, state)
+        coord_spec = next(s for s in trusted_specs if s.node_id == "coord")
+        self.assertTrue(coord_spec.is_cluster_member)
+        self.assertEqual(coord_spec.role, "coordinator")
+        self.assertEqual(coord_spec.connection_status, "offline")
+
+        cluster_specs = node_specs.cluster_node_specs(registry, cluster_state=state)
+        coord_cluster = next(s for s in cluster_specs if s.node_id == "coord")
+        self.assertTrue(coord_cluster.is_cluster_member)
+        self.assertEqual(coord_cluster.role, "coordinator")
+
+    def test_non_coordinator_peer_still_not_member(self) -> None:
+        """A trusted peer that is NOT the coordinator must remain not-in-cluster."""
+        registry = NodeRegistry()
+        local = make_local_context()
+        registry.register_context(local)
+        other = make_remote_context(
+            "other-peer",
+            trust=NodeTrustState.TRUSTED,
+            status=NodeStatus.ONLINE,
+        )
+        registry.register_context(other)
+        # epoch names "coord" not "other-peer"
+        state = _joined_worker_state("local", "coord", coordinator_in_assignments=False)
+
+        specs = node_specs.trusted_node_specs(registry, state)
+        other_specs = [s for s in specs if s.node_id == "other-peer"]
+        self.assertFalse(other_specs[0].is_cluster_member)
+
+
+class WorkerLocalRoleTests(unittest.TestCase):
+    """After joining, the local node must present as Worker, not Coordinator."""
+
+    def test_local_worker_role_in_cluster_specs(self) -> None:
+        registry = NodeRegistry()
+        local = make_local_context()
+        registry.register_context(local)
+        state = _joined_worker_state("local", "coord")
+
+        specs = node_specs.cluster_node_specs(registry, cluster_state=state)
+        local_specs = [s for s in specs if s.is_local]
+
+        self.assertEqual(len(local_specs), 1)
+        self.assertTrue(local_specs[0].is_cluster_member)
+        self.assertEqual(local_specs[0].role, "worker")
+
+    def test_local_worker_role_solo_coordinator_unchanged(self) -> None:
+        """Solo coordinator bootstrap must still show coordinator role."""
+        registry = NodeRegistry()
+        local = make_local_context()
+        registry.register_context(local)
+        state = _solo_cluster_state("local")
+
+        specs = node_specs.cluster_node_specs(registry, cluster_state=state)
+        local_specs = [s for s in specs if s.is_local]
+
+        self.assertEqual(local_specs[0].role, "coordinator")
+        self.assertTrue(local_specs[0].is_cluster_member)
