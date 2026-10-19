@@ -181,7 +181,7 @@ Each subtask is one agent-owned section after Task 2 establishes the Qt primitiv
 - [x] Qt Nodes now exposes and wires rename, color, permissions, roles, manual-host removal, discovery/help, pairing, node details, sharing, revoke, pause/resume, connection/job removal, and legacy Test dispatch through injected callbacks and existing policy owners. Qt Cluster invite creation/join and dashboard-share actions dispatch through the existing policy/controller owners. Toolkit-neutral `ApplicationController` owns dashboard-share expiry and cleanup lifecycle. Focused Qt/legacy/security coverage passed 210 tests; independent source-contract reviews approved the node behavior and sharing lifecycle.
 - [x] A fresh wheel was built into `/tmp/opencode/qt-migration-wheel` without replacing the existing untracked `dist/` wheel. Deployment-validation tests can target it via `SYSTEM_ANALYZER_TEST_WHEEL`; the fresh-wheel validation group passed.
 - [x] Qt Cluster's local dashboard-share action now opens a retained `QtSharingDialog`, reflects the current active state, dispatches start/stop through the toolkit-neutral controller, and releases its retained reference on close. Shell integration tests cover the action and dialog dispatch.
-- [ ] Legacy test conversion, repository-wide static gates, and rendered/accessibility acceptance remain incomplete. The configured full suite completed with 2,172 passing tests after fixing the thermal test's deferred-delete lifecycle; see `.ui/qt-ui-migration/reports/` for the still-blocked UI acceptance decision.
+- [ ] Legacy test conversion, repository-wide static gates, and rendered/accessibility acceptance remain incomplete. The latest configured full suite completed with 2,174 passing tests after fixing the thermal test's deferred-delete lifecycle; see `.ui/qt-ui-migration/reports/` for the still-blocked UI acceptance decision.
 - [x] Qt shell adapters and action dispatch are integrated for current page/dialog workflows, including async resource task delivery/cancellation and close guards; continue end-to-end lifecycle acceptance across startup, active work, and shutdown before removing legacy owners.
 
 ## Task 6: Integrate, remove Tk, and validate release surface
@@ -204,7 +204,7 @@ Each subtask is one agent-owned section after Task 2 establishes the Qt primitiv
 - [x] Add/update package/import-boundary tests for the toolkit-neutral component package and active app startup. `tests.test_package_structure.PackageImportChainTests.test_component_package_import_does_not_require_tkinter` and `tests.test_qt_import_boundary` verify those boundaries; they intentionally do not assert that legacy compatibility modules are Tk-free before their removal.
 - [ ] Remove Tk-only test helpers and live-Tk tests after equivalent Qt/offscreen coverage exists. Replace UI dump/render evidence harness with a Qt-compatible test helper only if still needed; do not delete evidence coverage without replacement.
 - [ ] Remove active Tk imports, Tk symbols, obsolete Tk adapters, and Tk dependency references from production/tests/docs/package metadata. Keep only historical mentions when clearly labeled as migration history.
-- [x] Run the full suite with the migration Python and fresh-wheel override: `QT_QPA_PLATFORM=offscreen PYTHON=/tmp/opencode/system-analyzer-qt-migration-venv/bin/python SYSTEM_ANALYZER_TEST_WHEEL=/tmp/opencode/qt-migration-wheel/system_analyzer-1.6.5.0-py3-none-any.whl scripts/run_tests.sh` — latest run: 2,174 tests passed in 171.273s. The fresh wheel override is required because the preserved `dist/` wheel predates these source files.
+- [x] Run the full suite with the migration Python and fresh-wheel override: `QT_QPA_PLATFORM=offscreen PYTHON=/tmp/opencode/system-analyzer-qt-migration-venv/bin/python SYSTEM_ANALYZER_TEST_WHEEL=/tmp/opencode/qt-migration-wheel/system_analyzer-1.6.5.0-py3-none-any.whl scripts/run_tests.sh` — latest recorded run: 2,174 tests passed in 172.590s. The fresh wheel override is required because the preserved `dist/` wheel predates these source files.
 - [ ] Capture matched synthetic Qt after-renders at 900/1280/1600px for each materially different page and representative dense/error/empty states; include long dialog/table/form content. Compare with the Tk baselines and record Qt style/platform differences.
 - [ ] Verify keyboard focus order/visibility, dialog focus entry/return, accessible names/roles, status/progress notifications, and graph text alternatives with Qt accessibility inspection; document screen-reader and elevated-DPI platforms not available in the environment.
 - [ ] Run `ruff check .`, `ruff format --check .`, `pyright`, and `mypy --ignore-missing-imports .`; fix failures attributable to touched code and record unrelated baseline failures explicitly.
@@ -218,6 +218,283 @@ Each subtask is one agent-owned section after Task 2 establishes the Qt primitiv
 - [x] `main.py` now creates `QApplication` before constructing `QtAppWindow`; the Qt window is shown before entering the Qt event loop. A transitional `QtAppController` composes existing domain orchestration with the standalone Qt pages, and focused construction/navigation/scan-state tests pass.
 - [ ] Migration acceptance is still incomplete: `QtAppController` now uses the toolkit-neutral `ApplicationController`, and fresh-process import tests show the active `main`/Qt-window path does not load Tk. However, legacy Tk production code and tests remain; rendered parity/accessibility, repository-wide static gates, and final regression conversion are still open. Do not remove Tk until all final gates pass.
 - [x] Full-suite order-dependent crash investigated and resolved at the test-lifecycle boundary. `test_render_recovery_events_bounds_and_node_independent_input` now drains pending `deleteLater()` row events while the owning thermal page is retained; the configured full suite completes with 2,174 passing tests after the import-boundary additions.
+
+## Remaining completion plan — execute this section in order
+
+This section is the canonical plan for the unfinished migration. Earlier checked
+items record completed work; unchecked items above remain open until the matching
+acceptance evidence below is recorded. Keep each existing Tk implementation
+available while a live caller still uses it. Do not delete the legacy shell,
+test helpers, or packaging entry until the final cutover phase. The intended end
+state is Qt-only production, tests, and package contents—not a dual-toolkit
+fallback. Clearly labeled historical migration notes may still mention Tk.
+
+### Completion baseline and ownership map
+
+| Concern | Current owner/evidence | Completion action |
+|---|---|---|
+| Active entry | `main.py`, `maintenance/ui/qt_application.py`, `maintenance/ui/qt_app_window.py`; fresh-process boundaries in `tests/test_qt_import_boundary.py` | Preserve Qt-only import/start behavior and extend lifecycle characterization before deleting compatibility owners. |
+| Legacy shell/composition | `window.py`, `maintenance/ui/window_pages.py`, `window_lifecycle.py`, `window_presentation.py`, `window_node_runtime.py`, `window_supports/timer_delivery.py`; shared seams in `window_components.py`, `window_context.py`, `styles.py`, and `action_coordinator.py` | Replace or retire only after equivalent Qt/controller coverage and caller search; adapt shared modules rather than deleting Qt-used owners. |
+| Tk pages/dialogs | `maintenance/dialogs.py`; `dashboard_page.py`, `layout.py`, `settings_home.py`, `preferences_page.py`, `nodes_connections.py`, `cluster_page.py`, `thermals_page.py`, `thermal_graph.py`, `diagnostics_page.py`, `help_page.py`; `connection_dialog.py`, `node_details_dialog.py`, `pairing_dialog.py`, `sharing_dialog.py` | Keep each until its behavior has Qt coverage and the legacy shell no longer imports it; then delete the Tk-only implementation instead of retaining a fallback. |
+| Tk async/timer adapters | `maintenance/components/tk_delivery.py`; `BackgroundTaskRunner.run` / `run_in_thread` in `maintenance/components/background.py`; `maintenance/ui/window_supports/timer_delivery.py` | Preserve close, cancellation, delivery-thread, and stale-result contracts in Qt tests; remove these adapters only after all Tk consumers are gone. |
+| Qt counterparts | `qt_dashboard.py`, `qt_layout.py`, `qt_settings.py`, `qt_nodes_connections.py`, `qt_cluster.py`, `qt_thermals_page.py`, `qt_thermal_graph.py`, `qt_diagnostics_page.py`, `qt_help_page.py`, `qt_node_dialogs.py`, `qt_resource_dialogs.py`, and `qt_window.py` | Treat these as the UI implementation to integrate and validate; keep policy in existing domain/controller owners. |
+| Tk-bound evidence | `tests/test_window.py`, `test_window_extraction.py`, `test_window_placement.py`, `test_window_supports.py`, `test_window_scan_runtime.py`, `test_window_nodes.py`, legacy page/dialog tests, `test_page_wiring_consistency.py`, `test_live_tk_resize.py`, `tests/support/live_tk.py`, `tests/dump_ui.py` | Convert behavior assertions to Qt or toolkit-neutral tests before removing their Tk fixtures. Retain only tests that still prove a non-UI contract. |
+| Packaging/docs | `pyproject.toml` includes top-level `window`; `README.md`, `AGENTS.md`, and `maintenance/ui/help_content.py` retain legacy references | Remove active compatibility and Tk-availability wording at final cutover; preserve only explicit historical context. |
+
+The inventory is a starting map, not permission to delete by filename. Before
+each deletion, search all source, tests, package metadata, and docs for imports,
+dynamic lookups, patch seams, and command-entry references. Source files under
+`build/` are generated build artifacts and are not migration owners; build into
+`/tmp/opencode/qt-migration-wheel` and do not replace the preserved `dist/` wheel.
+At this plan revision, the configured full suite has passed 2,174 tests; the
+repository-wide static gates are not yet green (Ruff reports one unused import,
+format reports 17 files, Pyright reports zero errors plus one `__all__` warning,
+and Mypy is not installed in the migration venv). Re-run these gates at final
+acceptance rather than treating this snapshot as completion evidence. Commit
+and push each coherent migration-owned batch as requested, while staging only
+the files for that batch and preserving any unrelated future working-tree edits.
+
+### Phase A — close lifecycle and behavior-coverage gaps
+
+**Files:** `tests/test_qt_app_window.py`, `tests/test_qt_application.py`,
+`tests/test_application_controller.py`, `tests/test_qt_window_shell.py`,
+`tests/test_qt_import_boundary.py`; implementation only if a test exposes a
+missing Qt integration behavior: `main.py`, `maintenance/ui/qt_application.py`,
+`maintenance/ui/qt_app_window.py`, `maintenance/ui/qt_window.py`, and the
+toolkit-neutral `maintenance/application_controller.py`.
+
+- [ ] Build a behavior crosswalk from legacy `tests/test_window*.py`,
+  `tests/test_window_supports.py`, `tests/test_window_scan_runtime.py`, and
+  `tests/test_window_nodes.py` to Qt integration tests or toolkit-neutral
+  controller tests. Mark each legacy assertion `covered`, `retained as a
+  domain-contract test`, or `not applicable with evidence`; do not delete
+  assertions merely because their test imports Tk.
+- [ ] Add test-first Qt startup-order assertions for preferences and cluster
+  restoration before scheduler/node setup, listener startup independent of the
+  discovery preference, discovery enable/disable behavior, and first scan
+  deferred until after the window can paint. Use temporary preference/cluster
+  stores and injected fakes; do not bind real listeners or write user state.
+- [ ] Add test-first close/shutdown assertions for repeated close, pending timer
+  cancellation, worker completion after close, cancellation propagation, and
+  no callback touching a closed/deleted widget. Use controlled worker/delivery
+  fakes and Qt offscreen mode; avoid timing-only sleeps where a synchronization
+  event or deferred runner can prove ordering.
+- [ ] Run focused tests before and after any implementation change:
+  `QT_QPA_PLATFORM=offscreen PYTHON=/tmp/opencode/system-analyzer-qt-migration-venv/bin/python scripts/run_tests.sh tests.test_qt_app_window tests.test_qt_application tests.test_application_controller tests.test_qt_window_shell tests.test_qt_import_boundary -v`.
+  Expected: all tests pass and fresh-process `main` import/window construction
+  still leaves every `tkinter` module absent from `sys.modules`.
+- [ ] Update the crosswalk/checkpoint in this plan with exact test names and
+  commands. Do not change domain, trust, persistence, process, or cleanup policy
+  to make Qt tests pass.
+
+### Phase B — matched visual evidence and rendered opposition
+
+**Files:** existing Tk capture harness `tests/dump_ui.py` (read-only baseline
+until final removal), new Qt capture harness `tests/dump_qt_ui.py`,
+`tests/support/qt.py` and shared model fixtures only if needed, screenshots under
+`.ui/qt-ui-migration/evidence/screenshots/`, and
+`.ui/qt-ui-migration/reports/ui-validation-report.md` plus
+`ui-opposition-report.md`.
+
+- [ ] Define deterministic shared fixture data for both harnesses so Tk/Qt
+  captures have identical viewport, content, node roles/trust/connection state,
+  scan state, and dialog state. Capture Tk before deleting any Tk harness; use
+  only synthetic fixture data and temporary stores.
+- [ ] Capture paired Tk and Qt dashboard, Settings, Preferences, Nodes,
+  Cluster, Thermals, Diagnostics, Help hub/topic, and resource/dialog surfaces
+  at 900, 1280, and 1600 pixel widths. Include empty, representative populated,
+  dense/long-content, error/recovery, scan busy/progress/complete, trust/action,
+  and open-dialog states wherever those states exist. Record unavailable or
+  inapplicable combinations explicitly rather than comparing unlike states.
+- [ ] Inspect matched screenshots for clipping, overflow, scrolling, density,
+  hierarchy, focus indication, and action visibility. Resolve confirmed Qt
+  defects with test-first changes; record native-platform differences as
+  differences, not automatically as defects.
+- [ ] Update both UI reports with capture paths, matched-state mapping,
+  viewport results, confirmed defects/fixes, unresolved concerns, and an explicit
+  parity decision. Obtain an independent rendered-evidence opposition review.
+  **Gate:** no unresolved parity concern that could hide a behavior regression.
+
+### Phase C — keyboard and accessibility acceptance
+
+**Files:** relevant Qt tests under `tests/test_qt_*.py`, Qt UI modules only when
+tests demonstrate a defect, and `.ui/qt-ui-migration/reports/ui-validation-report.md`.
+
+- [ ] Record a keyboard-only walkthrough for primary navigation, dashboard
+  actions, settings forms, node/cluster actions, thermal/help/diagnostic routes,
+  and each modal dialog: initial focus, tab order, visible focus, activation,
+  validation/error announcement, Escape/close, and focus return to the opener.
+- [ ] Inspect accessible names, roles, and states across the Qt widget tree;
+  add automated assertions for missing names, focusability, disabled/busy state,
+  and graph text alternatives. Do not treat selected widget-name tests as a
+  whole-surface inspection.
+- [ ] Run a Linux Orca spot-check if Orca and a usable display are available.
+  Record platform/tool availability, contrast results for the active palette,
+  reduced-motion findings, and any screen-reader/elevated-DPI limitations.
+- [ ] Fix confirmed issues test-first, rerun affected Qt tests and the keyboard
+  flow, then record pass/fail/limitations in the validation report. **Gate:**
+  keyboard flow and accessible-tree review complete; no unaddressed blocker.
+
+### Phase D — convert legacy regressions while Tk remains available
+
+Keep the legacy implementation executable throughout these conversions. For
+each behavior group, add/adapt the Qt or toolkit-neutral assertion first, run it
+to prove it detects the missing contract where applicable, then compare it with
+the legacy characterization. Preserve domain and safety tests even when the
+Tk fixture is removed.
+
+#### D1 — reusable layout, routing, and dashboard
+
+**Files:** `tests/test_ui_primitives.py`, `tests/test_navigation.py`,
+`tests/test_dashboard_ui.py`, `tests/test_qt_dashboard.py`,
+`maintenance/ui/qt_layout.py`, `maintenance/ui/qt_window.py`.
+
+- [ ] Port assertions for retained page identity, unknown-page behavior,
+  navigation rollback, resize-aware wrapping/scrolling, card ordering/visibility,
+  scan status, and dashboard actions to Qt widgets and `QtWindowShell`.
+- [ ] Keep toolkit-neutral scan/coordinator tests independent of either widget
+  toolkit. Do not preserve Tk geometry-manager assertions as the only evidence
+  for user-visible behavior.
+- [ ] Run `QT_QPA_PLATFORM=offscreen PYTHON=/tmp/opencode/system-analyzer-qt-migration-venv/bin/python scripts/run_tests.sh tests.test_ui_primitives tests.test_navigation tests.test_dashboard_ui tests.test_qt_dashboard tests.test_qt_window_shell -v`.
+
+#### D2 — pages and graphs
+
+**Files:** legacy page tests `tests/test_settings_home.py`,
+`test_preferences_page.py`, `test_nodes_connections_page.py`,
+`test_cluster_page.py`, `test_thermals_page.py`, `test_telemetry_graph.py`,
+`test_diagnostics_page.py`, `test_help_page.py`, `test_help_content.py`;
+Qt tests `tests/test_qt_settings.py`, `test_qt_nodes_connections.py`,
+`test_qt_cluster.py`, `test_qt_thermals.py`, `test_qt_diagnostics_page.py`,
+`test_qt_help_page.py`; shared contracts in `page_specs.py` and
+`window_page_data.py`.
+
+- [ ] Crosswalk and retain assertions for persisted preferences, refresh
+  bounds, visibility/auto-hide, node axes and identity, cluster action policy,
+  thermal unsupported/recovery semantics, diagnostics partial/error states,
+  and Help content/callback behavior.
+- [ ] Replace any test that only asserts Tk widget construction with a Qt
+  behavior/accessibility assertion. Leave domain projection/telemetry tests in
+  toolkit-neutral suites. Do not delete legacy page modules while `window.py`
+  still imports them.
+- [ ] Run the listed legacy/Qt page suites together with
+  `QT_QPA_PLATFORM=offscreen PYTHON=/tmp/opencode/system-analyzer-qt-migration-venv/bin/python scripts/run_tests.sh tests.test_qt_settings tests.test_qt_nodes_connections tests.test_qt_cluster tests.test_qt_thermals tests.test_qt_diagnostics_page tests.test_qt_help_page tests.test_settings_home tests.test_preferences_page tests.test_nodes_connections_page tests.test_cluster_page tests.test_thermals_page tests.test_telemetry_graph tests.test_diagnostics_page tests.test_help_page tests.test_help_content -v`.
+
+#### D3 — dialogs, actions, and safety boundaries
+
+**Files:** `tests/test_info_dialog.py`, `test_process_table.py`,
+`test_storage_dialog.py`, `test_node_toplevel_dialogs.py`, relevant cases in
+`test_window_nodes.py`; Qt suites `test_qt_resource_dialogs.py`,
+`test_qt_node_dialogs.py`, `test_qt_app_window.py`; production counterparts
+`qt_resource_dialogs.py`, `qt_node_dialogs.py`, and `window_node_actions*`.
+
+- [ ] Retain confirmation intent, validation, busy/read-only/unknown states,
+  cancellation, close guards, and action dispatch to existing policy owners.
+  Keep process/file cleanup, trust, pairing, and authorization tests even if
+  their original UI harness is removed.
+- [ ] Replace Tk-only layout/wrap assertions with Qt rendered/interaction
+  evidence; keep formatters and controller behavior tested without widgets.
+- [ ] Run `QT_QPA_PLATFORM=offscreen PYTHON=/tmp/opencode/system-analyzer-qt-migration-venv/bin/python scripts/run_tests.sh tests.test_qt_resource_dialogs tests.test_qt_node_dialogs tests.test_qt_app_window tests.test_info_dialog tests.test_process_table tests.test_storage_dialog tests.test_node_toplevel_dialogs -v` and the relevant remote/security/action tests named by the crosswalk.
+
+#### D4 — app shell and miscellaneous legacy-only harnesses
+
+**Files:** `tests/test_window.py`, `test_window_extraction.py`,
+`test_window_placement.py`, `test_window_supports.py`,
+`test_window_scan_runtime.py`, `test_window_nodes.py`,
+`test_page_wiring_consistency.py`, `test_action_coordinator.py`, `test_live_tk_resize.py`,
+`tests/support/live_tk.py`, `tests/dump_ui.py`.
+
+- [ ] Move each remaining non-UI invariant to `ApplicationController`,
+  `QtAppController`, or a toolkit-neutral owner test. Replace page-wiring
+  reflection with explicit Qt shell/page registration assertions.
+- [ ] Preserve live-resize evidence through the matched Qt screenshots and
+  offscreen resize tests before deleting `tests/support/live_tk.py` and
+  `tests/test_live_tk_resize.py`.
+- [ ] Keep `tests/dump_ui.py` until Phase B evidence is accepted; then replace
+  any still-needed structural evidence with `tests/dump_qt_ui.py` and remove the
+  Tk harness. Do not delete a test/helper until its replacement evidence is
+  present and recorded.
+- [ ] Run the converted shell/controller suites plus the full focused Qt suite;
+  verify no tests outside the legacy compatibility tests import `window` or a
+  Tk page/dialog module.
+
+### Phase E — final Qt cutover and Tk deletion
+
+**Precondition:** Phases A–D are complete; the matched-render and accessibility
+gates in B/C are explicitly accepted; every retained behavioral contract has a
+Qt/toolkit-neutral test owner. Do not start this phase while a required gate is
+open.
+
+**Files to review/remove or adapt after caller search:** top-level `window.py`;
+Tk-only `maintenance/dialogs.py`, `maintenance/components/tk_delivery.py`,
+legacy page/dialog modules listed in the ownership map, `window_pages.py`,
+Tk-only lifecycle/timer support; shared `styles.py`, `action_coordinator.py`,
+`window_components.py`, `window_node_runtime.py`, and `window_presentation.py`
+must have their remaining Tk-only seams removed without deleting Qt-used code;
+`tests/support/live_tk.py`,
+`tests/test_live_tk_resize.py`, `tests/dump_ui.py`, and any fully superseded Tk
+tests; `pyproject.toml`, `README.md`, `AGENTS.md`, `maintenance/ui/help_content.py`,
+package/layout tests and wheel validation.
+
+- [ ] Re-run whole-repository source/caller searches for `window`, legacy
+  page/dialog symbols, `tkinter`, `ttk`, `.after`, `.pack`, and Tk error types.
+  Classify every match as a live Qt use, a contract still needing conversion,
+  or a deletion candidate; update this plan's inventory before editing.
+- [ ] Add a final import/build regression first: fresh processes must import
+  `main` and construct/close the Qt app without loading Tk; the wheel must omit
+  `window.py` and deleted Tk-only modules. Observe expected failure against the
+  current wheel/source before deleting the owners.
+- [ ] Remove the legacy `window.AppWindow` shell and its Tk-only composition
+  modules only after all callers/tests have migrated. Preserve `main.py` as the
+  sole GUI entry and preserve CLI, instance lock, logging, exit code, and
+  shutdown order. Do not add a fallback or dynamic import of Tk.
+- [ ] Remove Tk-only page/dialog implementations and adapters only when the
+  post-shell import search proves no production caller remains. Remove the Tk
+  methods from `BackgroundTaskRunner` after legacy dialog callers are gone;
+  keep the Qt injected-delivery runner and its cancellation/close tests.
+- [ ] Remove `window` from `pyproject.toml` `py-modules`; remove obsolete Tk
+  source modules from package contents; update package-structure, import-boundary,
+  and deployment-wheel tests. PySide6 remains the required GUI dependency.
+- [ ] Update `README.md`, `AGENTS.md`, and user-facing Help content to describe
+  Qt-only startup and remove instructions that Tkinter/python3-tk must be
+  available. Preserve historical migration reports only when explicitly labeled
+  as history; do not claim compatibility with the deleted Tk API.
+- [ ] Delete Tk-only test helpers and tests only after D1–D4 replacements and
+  Phase B visual evidence are recorded. Final source/docs/tests/package scan must
+  find no active Tk UI imports, runtime path, dependency, or shipped module.
+
+### Phase F — final static, wheel, regression, and handoff gates
+
+- [ ] Ensure Mypy exists in the validation environment using the repository's
+  pinned dev dependency (`/tmp/opencode/system-analyzer-qt-migration-venv/bin/python -m pip install -e '.[dev]'`); do not silently skip the gate because the prior venv lacked it. Resolve repository-wide Ruff/format and Pyright findings required to make the listed gates green; review any broader cleanup for semantic changes and keep it in a separate, clearly scoped commit when it is unrelated to Tk retirement.
+- [ ] Run `ruff check .`, `ruff format --check .`, `pyright`, and
+  `mypy --ignore-missing-imports .`; all must exit successfully for completion.
+- [ ] Build a fresh wheel outside the repository:
+  `mkdir -p /tmp/opencode/qt-migration-wheel/final && PYTHON=/tmp/opencode/system-analyzer-qt-migration-venv/bin/python && "$PYTHON" -m build --wheel --no-isolation --outdir /tmp/opencode/qt-migration-wheel/final`.
+  Use the wheel emitted in that empty `final/` directory for deployment tests,
+  not the preserved `dist/` artifact.
+- [ ] Run the full release validation:
+  `FRESH_WHEEL="$(find /tmp/opencode/qt-migration-wheel/final -maxdepth 1 -type f -name 'system_analyzer-*.whl' -print -quit)" && test -n "$FRESH_WHEEL" && QT_QPA_PLATFORM=offscreen PYTHONFAULTHANDLER=1 PYTHON=/tmp/opencode/system-analyzer-qt-migration-venv/bin/python SYSTEM_ANALYZER_TEST_WHEEL="$FRESH_WHEEL" scripts/run_tests.sh`.
+  Expected: zero failures/errors; deployment tests confirm no removed Tk module
+  is shipped and the `main` import/construct boundary is Tk-free.
+- [ ] Review `git diff --check`, `git status --short`, the complete migration
+  diff, and the final search results. Confirm no domain/trust/process/file
+  cleanup policy changed, no preserved wheel/user artifact was overwritten, and
+  only intended migration files are staged/committed/pushed.
+- [ ] Update `.ui/qt-ui-migration/reports/ui-validation-report.md`,
+  `ui-opposition-report.md`, and this plan with exact commands, test counts,
+  wheel path, static results, accessibility limitations, and a final accepted
+  or blocked decision. Mark the final checklist complete only after all gates
+  pass and the source/package scan proves Tk removal.
+- [ ] Update `docs/specs/2026-10-18-qt-ui-migration-design.md` status from
+  “implementation not started” to the verified final migration status; keep the
+  approved architecture and original non-goals unchanged.
+
+**Completion definition:** the app launches and exits only through Qt; no
+production, test-runtime, or packaged Tk path remains; Qt/toolkit-neutral tests
+preserve the old behavior contracts; matched rendering and accessibility
+acceptance are documented; full tests, lint, format, Pyright, Mypy, and fresh
+wheel validation pass. If any gate fails, leave the migration incomplete and
+report the exact blocker rather than removing the remaining Tk path prematurely.
 
 ## Final acceptance checklist
 
