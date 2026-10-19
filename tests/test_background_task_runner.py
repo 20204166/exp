@@ -1,11 +1,34 @@
+import subprocess
+import sys
 import threading
 import unittest
+from pathlib import Path
 from typing import Any
 
 from tests.support.qt import get_qapplication
 
 
 class QtBackgroundTaskRunnerTests(unittest.TestCase):
+    def test_importing_background_task_runner_does_not_import_tkinter(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; import maintenance.components.background; "
+                    "from maintenance.components import BackgroundTaskRunner; "
+                    "assert BackgroundTaskRunner is not None; "
+                    "assert not any(name == 'tkinter' or "
+                    "name.startswith('tkinter.') for name in sys.modules)"
+                ),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parents[1],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_worker_results_progress_and_errors_are_delivered_via_qt_queue(
         self,
     ) -> None:

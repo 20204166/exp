@@ -1,80 +1,26 @@
-"""Background Tk task delivery shared by the dialogs."""
+"""Background task execution, with Tk dependencies loaded only on Tk use."""
+
+from __future__ import annotations
 
 import threading
-import tkinter as tk
 from collections.abc import Callable
 from queue import Empty, Queue
-from tkinter import messagebox
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .scan_support import ProgressCallback, ProgressTask
 
+if TYPE_CHECKING:
+    import tkinter as tk
 
-class TkDeliveryQueue:
-    """Queue callbacks from workers and drain them from Tk's main thread."""
 
-    def __init__(self, widget: tk.Misc) -> None:
-        self._widget = widget
-        self._callbacks: Queue[Callable[[], None]] = Queue()
-        self._closed = False
-        self._after_id: str | None = None
-        try:
-            widget.bind("<Destroy>", self._on_destroy, add="+")
-            self._after_id = widget.after(0, self._drain)
-        except (RuntimeError, tk.TclError):
-            pass
+def __getattr__(name: str) -> Any:
+    """Retain the old Tk delivery import without loading Tk for task users."""
 
-    def __call__(self, callback: Callable[[], None]) -> None:
-        if not self._closed:
-            self._callbacks.put(callback)
+    if name == "TkDeliveryQueue":
+        from .tk_delivery import TkDeliveryQueue
 
-    def _on_destroy(self, event: Any = None) -> None:
-        if (
-            event is not None
-            and getattr(event, "widget", self._widget) is not self._widget
-        ):
-            return
-        self._close()
-
-    def _close(self) -> None:
-        self._closed = True
-        after_id = self._after_id
-        self._after_id = None
-        if after_id is not None:
-            try:
-                self._widget.after_cancel(after_id)
-            except (RuntimeError, tk.TclError):
-                pass
-        while True:
-            try:
-                self._callbacks.get_nowait()
-            except Empty:
-                break
-
-    def _drain(self) -> None:
-        self._after_id = None
-        if self._closed:
-            return
-        try:
-            if not self._widget.winfo_exists():
-                self._close()
-                return
-        except (RuntimeError, tk.TclError):
-            self._close()
-            return
-        while True:
-            try:
-                callback = self._callbacks.get_nowait()
-            except Empty:
-                break
-            try:
-                callback()
-            except (RuntimeError, tk.TclError):
-                pass
-        try:
-            self._after_id = self._widget.after(25, self._drain)
-        except (RuntimeError, tk.TclError):
-            self._closed = True
+        return TkDeliveryQueue
+    raise AttributeError(name)
 
 
 class BackgroundTaskRunner:
@@ -139,6 +85,9 @@ class BackgroundTaskRunner:
         cancel_event: threading.Event | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> None:
+        import tkinter as tk
+        from tkinter import messagebox
+
         operation_cancel_event = cancel_event or threading.Event()
 
         if isinstance(widget, tk.Misc):

@@ -34,6 +34,7 @@ class ComponentPackageLayoutTests(unittest.TestCase):
             "__init__.py",
             "background.py",
             "background_orchestration.py",
+            "tk_delivery.py",
             "catalog.py",
             "cluster_roles.py",
             "cluster_storage.py",

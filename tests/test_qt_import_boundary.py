@@ -24,6 +24,7 @@ class QtImportBoundaryTests(unittest.TestCase):
             "tests.test_qt_test_support",
             "tests.test_qt_thermals",
             "tests.test_qt_window_shell",
+            "tests.test_background_task_runner",
         )
         for module in modules:
             with self.subTest(module=module):
