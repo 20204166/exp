@@ -12,12 +12,12 @@ from maintenance.components import (
     BackgroundTaskRunner,
     ProgressTask,
 )
-from maintenance.components.background import TkDeliveryQueue
 from maintenance.components.coordinator import AppCoordinator
 from maintenance.components.scan_support import (
     SCAN_CANCELLED_NOTICE,
     call_legacy_compatible,
 )
+from maintenance.components.tk_delivery import TkDeliveryQueue
 from maintenance.models import (
     FileActionResult,
     FileCandidate,

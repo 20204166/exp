@@ -18,6 +18,8 @@ class QtBackgroundTaskRunnerTests(unittest.TestCase):
                     "import sys; import maintenance.components.background; "
                     "from maintenance.components import BackgroundTaskRunner; "
                     "assert BackgroundTaskRunner is not None; "
+                    "assert not hasattr(maintenance.components.background, "
+                    "'TkDeliveryQueue'); "
                     "assert not any(name == 'tkinter' or "
                     "name.startswith('tkinter.') for name in sys.modules)"
                 ),

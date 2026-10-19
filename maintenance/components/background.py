@@ -1,4 +1,4 @@
-"""Background task execution, with Tk dependencies loaded only on Tk use."""
+"""Toolkit-neutral background task execution and UI-result delivery."""
 
 from __future__ import annotations
 
@@ -11,16 +11,6 @@ from .scan_support import ProgressCallback, ProgressTask
 
 if TYPE_CHECKING:
     import tkinter as tk
-
-
-def __getattr__(name: str) -> Any:
-    """Retain the old Tk delivery import without loading Tk for task users."""
-
-    if name == "TkDeliveryQueue":
-        from .tk_delivery import TkDeliveryQueue
-
-        return TkDeliveryQueue
-    raise AttributeError(name)
 
 
 class BackgroundTaskRunner:

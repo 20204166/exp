@@ -36,7 +36,6 @@ from maintenance.components import (
     usernames_match,
     windows_windll,
 )
-from maintenance.components.background import TkDeliveryQueue
 from maintenance.components.coordinator import (
     AppCoordinator,
     CachePolicy,
@@ -52,6 +51,7 @@ from maintenance.components.scan_support import (
     file_sha256,
     stat_fingerprint,
 )
+from maintenance.components.tk_delivery import TkDeliveryQueue
 from maintenance.nodes import NodeCapability, NodeId
 from maintenance.observability import ObservabilityWatcher
 from tests.support.scanner import make_scanner
