@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
+from maintenance.preferences import AppPreferences, PreferencesSaveError
+
+LOGGER = logging.getLogger(__name__)
+
 
 def apply_preferences(controller: Any, candidate: Any) -> None:
-    window = _window_symbols()
     try:
         controller._preferences_store.save(candidate)
-    except window.PreferencesSaveError as error:
-        window.LOGGER.warning("Failed to save preferences: %s", error)
+    except PreferencesSaveError as error:
+        LOGGER.warning("Failed to save preferences: %s", error)
         controller.preferences_page.refresh_from(controller._preferences)
         controller.preferences_page.show_error("Preferences could not be saved")
         return
@@ -70,17 +74,13 @@ def on_appearance_change(controller: Any, theme: str) -> None:
     apply_preferences(controller, candidate)
 
 
-def on_reset(controller: Any) -> None:
-    window = _window_symbols()
-    if window.messagebox.askyesno(
-        "Reset Preferences?",
-        "Reset all preferences to their defaults?",
-        parent=controller.master,
-    ):
-        apply_preferences(controller, window.AppPreferences.defaults())
+def on_reset(
+    controller: Any,
+    *,
+    confirm: Callable[[], bool],
+    defaults_factory: Callable[[], Any] = AppPreferences.defaults,
+) -> None:
+    """Confirm and apply defaults when the host owns reset interaction."""
 
-
-def _window_symbols() -> Any:
-    import window
-
-    return window
+    if confirm():
+        apply_preferences(controller, defaults_factory())

@@ -48,6 +48,8 @@ fi
 
 wheel="$(wheel_path "$version")"
 [ -n "$wheel" ] && [ -f "$wheel" ] || { echo "no wheel found; run install/build.sh first" >&2; exit 1; }
+validate_release_artifacts "$py" "$wheel"
+companion="$(companion_wheel_path)"
 
 echo "System interpreter: $py ($("$py" --version 2>&1))"
 echo "Verifying wheel: $(basename "$wheel")"
@@ -82,7 +84,7 @@ if [ "$mode" = "system" ]; then
   # The existing application is removed above. Do not force-reinstall
   # dependencies: distro-managed packages such as Debian's psutil may satisfy
   # the requirement but have no RECORD file for pip to uninstall.
-  install_pip sudo -H "$py" -m pip install "$wheel"
+  install_pip sudo -H "$py" -m pip install "$companion" "$wheel"
   verify_installed "$py" "$(wheel_version "$wheel")"
   launcher="$(command -v system-analyzer || true)"
   if [ -n "$launcher" ]; then
@@ -123,7 +125,7 @@ if [ "$mode" = "system" ]; then
 else
   echo "Installing into the user environment (no venv)..."
   clean_user_installed_package "$py"
-  install_pip "$py" -m pip install --user "$wheel"
+  install_pip "$py" -m pip install --user "$companion" "$wheel"
   verify_installed "$py" "$(wheel_version "$wheel")"
   bin_dir="$("$py" -c 'import sysconfig;print(sysconfig.get_path("scripts", scheme="posix_user"))' 2>/dev/null || echo "$HOME/.local/bin")"
   echo "Installed. Console scripts are in: $bin_dir"

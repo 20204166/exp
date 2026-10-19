@@ -1,14 +1,18 @@
-"""Shared presentation tokens and ttk style registration for the UI layer.
+"""Shared presentation tokens and UI style registration.
 
 This module owns the single source of truth for the design tokens (colours,
 fonts, style names) used by the dashboard and its dialogs. Importing it has
 no side effects: no Tk root is created and no styles are registered until
-``configure_app_styles`` is called with a real ``ttk.Style``. Widget
-construction stays in the caller, which supplies its own tkinter widget
-classes so existing test seams keep resolving.
+``configure_app_styles`` is called with a real ``ttk.Style``. The Qt
+``configure_qt_styles`` adapter applies the same semantic tokens while
+consumers move in later migration sections; the Tk registration API is
+transitional, not a second long-term UI implementation.
 """
 
 from typing import Any
+
+from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtWidgets import QApplication
 
 Font = tuple[Any, ...]
 
@@ -409,3 +413,96 @@ def configure_app_styles(
         lightcolor=c["accent"],
         darkcolor=c["accent"],
     )
+
+
+def configure_qt_styles(
+    widget: Any,
+    *,
+    colors: dict[str, str] | None = None,
+    fonts: dict[str, Font] | None = None,
+) -> None:
+    """Apply the shared semantic tokens to a Qt widget subtree.
+
+    This Qt API is introduced while Tk consumers are migrated in later
+    sections. Widgets opt into button roles with ``setProperty('role', ...)``.
+    """
+    c = COLORS if colors is None else colors
+    f = FONTS if fonts is None else fonts
+    palette = widget.palette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(c["background"]))
+    palette.setColor(QPalette.ColorRole.Base, QColor(c["card"]))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(c["text"]))
+    palette.setColor(QPalette.ColorRole.Text, QColor(c["text"]))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(c["text"]))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(c["selection"]))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(c["text"]))
+    widget.setPalette(palette)
+    widget.setAutoFillBackground(True)
+    app = QApplication.instance()
+    if isinstance(app, QApplication):
+        app.setFont(_qt_font(f["ui"]))
+    widget.setStyleSheet(
+        "QWidget { color: "
+        + c["text"]
+        + "; background-color: "
+        + c["background"]
+        + "; }"
+        "QPushButton[role='primary'] { background: "
+        + c["accent"]
+        + "; color: "
+        + c["accent_ink"]
+        + "; padding: "
+        + f"{CONTROL['primary_button_pad_y']}px {CONTROL['primary_button_pad_x']}px;"
+        " } QPushButton[role='neutral'] { background: "
+        + c["button_bg"]
+        + "; color: "
+        + c["text"]
+        + "; }"
+        " QPushButton[role='danger'] { background: "
+        + c["danger"]
+        + "; color: "
+        + c["accent_ink"]
+        + "; }"
+        " QPushButton:focus, QCheckBox:focus, QSpinBox:focus { outline: 2px solid "
+        + c["focus"]
+        + "; outline-offset: 2px; }"
+        " QLabel[role='success'] { color: "
+        + c["success"]
+        + "; } QLabel[role='warning'] { color: "
+        + c["warning"]
+        + "; } QLabel[role='danger'] { color: "
+        + c["danger"]
+        + "; }"
+    )
+    widget.setStyleSheet(widget.styleSheet() + _qt_typography_styles(f))
+
+
+def _qt_font(spec: Font) -> QFont:
+    font = QFont(str(spec[0]))
+    for part in spec[1:]:
+        if isinstance(part, int):
+            font.setPointSize(part)
+        elif part == "bold":
+            font.setBold(True)
+    return font
+
+
+def _qt_typography_styles(fonts: dict[str, Font]) -> str:
+    roles = {
+        "title": ("QLabel[role='title']", "title"),
+        "section": ("QLabel[role='section']", "section"),
+        "description": ("QLabel[role='description']", "body"),
+        "status": ("QLabel[role='status']", "status"),
+        "action": ("QPushButton", "button"),
+    }
+    rules: list[str] = []
+    for selector, token in roles.values():
+        spec = fonts[token]
+        family = str(spec[0]).replace("'", "")
+        size = next((part for part in spec[1:] if isinstance(part, int)), None)
+        weight = "700" if "bold" in spec else "400"
+        declarations = [f"font-family: '{family}'", f"font-weight: {weight}"]
+        if size is not None:
+            declarations.append(f"font-size: {size}pt")
+        rules.append(f"{selector} {{ {'; '.join(declarations)}; }}")
+    return " ".join(rules)

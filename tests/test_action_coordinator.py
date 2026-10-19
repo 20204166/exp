@@ -1,15 +1,36 @@
 """Tests for the reusable direct-action coordinator."""
 
+import os
+import subprocess
+import sys
 import tkinter as tk
 import unittest
 from unittest.mock import Mock
 
 from maintenance.observability import ObservabilityWatcher
 from maintenance.ui.action_coordinator import ButtonCoordinator
+from tests.support.qt import get_qapplication
 from tests.support.widget_recording import RecordingWidget
 
 
 class ButtonCoordinatorTests(unittest.TestCase):
+    def test_import_does_not_load_tkinter_in_fresh_process(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; import maintenance.ui.action_coordinator; "
+                    "assert 'tkinter' not in sys.modules"
+                ),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_dispatch_is_recorded_by_shared_observer(self) -> None:
         observer = ObservabilityWatcher()
         coordinator = ButtonCoordinator(observer=observer)
@@ -30,7 +51,7 @@ class ButtonCoordinatorTests(unittest.TestCase):
         self.assertEqual(metric.rejected, 1)
 
     def test_replacement_prunes_widget_that_fails_state_update(self) -> None:
-        coordinator = ButtonCoordinator()
+        coordinator = ButtonCoordinator(tk_error_type=tk.TclError)
         widget = Mock()
         widget.winfo_exists.return_value = True
         coordinator.register("open", Mock())
@@ -122,8 +143,29 @@ class ButtonCoordinatorTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             coordinator.bind(RecordingWidget(), "missing")
 
-    def test_bind_tcl_error_drops_dead_widget(self) -> None:
+
+class QtButtonCoordinatorTests(unittest.TestCase):
+    def test_qt_button_binding_preserves_enabled_and_dispatch_semantics(self) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QPushButton
+
+        get_qapplication()
+        button = QPushButton("Run")
+        calls: list[str] = []
         coordinator = ButtonCoordinator()
+        coordinator.register("run", lambda: calls.append("run"), enabled=False)
+        coordinator.bind(button, "run")
+        self.assertEqual(button.accessibleName(), "Run")
+        self.assertNotEqual(button.focusPolicy(), Qt.FocusPolicy.NoFocus)
+        self.assertFalse(button.isEnabled())
+        self.assertFalse(coordinator.dispatch("run"))
+        coordinator.set_enabled("run", True)
+        button.click()
+        self.assertTrue(button.isEnabled())
+        self.assertEqual(calls, ["run"])
+
+    def test_bind_tcl_error_drops_dead_widget(self) -> None:
+        coordinator = ButtonCoordinator(tk_error_type=tk.TclError)
         callback = Mock()
 
         class RaisingWidget:

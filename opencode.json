@@ -1,6 +1,15 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
+    "servers": {
+      "system-analyzer": {
+        "type": "local",
+        "command": [
+          "/home/btn17/Downloads/exp/tools/system_analyzer_mcp/run.sh"
+        ],
+        "cwd": "/home/btn17/Downloads/exp"
+      }
+    },
     "railrefund": {
       "type": "local",
       "command": ["python", "-m", "tools.railrefund_mcp.server", "--repo-root", "/root/railrefund"],

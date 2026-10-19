@@ -19,7 +19,10 @@ from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui import styles as ui_styles
 from maintenance.ui import window_placement as ui_window_placement
 from maintenance.ui.window_supports import card_policy, snapshot_state
-from maintenance.ui.window_supports.timer_delivery import deadline_delay_ms
+from maintenance.ui.window_supports.deadline import deadline_delay_ms
+
+_DASHBOARD_PAGE = "dashboard"
+_THERMALS_PAGE = "thermals"
 
 
 def _window_symbols() -> Any:
@@ -80,9 +83,7 @@ def run_component_cycle(controller: Any) -> None:
     if controller._is_closing:
         return
     router = controller.__dict__.get("_page_router")
-    dashboard_visible = router is None or router.is_mapped(
-        _window_symbols().DASHBOARD_PAGE
-    )
+    dashboard_visible = router is None or router.is_mapped(_DASHBOARD_PAGE)
     deferred_work = False
     for key in controller._component_scheduler.due_keys(time.monotonic()):
         operation_key = controller._operation_key(f"component:{key}")
@@ -244,7 +245,7 @@ def refresh_thermals_page(
         return
     state = state or thermal_render_state(controller, context)
     intent = ui_render.RenderIntent(
-        target=_window_symbols().THERMALS_PAGE,
+        target=_THERMALS_PAGE,
         node_id=context.node_id,
         components=frozenset({"temperature"}),
         payload=state,
@@ -333,6 +334,10 @@ def layout_dashboard_cards(controller: Any) -> None:
     features = controller.__dict__.get("_feature_catalog")
     cards = controller.__dict__.get("cards")
     if features is None or cards is None:
+        return
+    # The Qt controller has no Tk card-frame surface. Card layout is a legacy
+    # window concern; capability/polling reconciliation remains toolkit-neutral.
+    if not hasattr(controller, "cards_frame"):
         return
     visible = [
         feature

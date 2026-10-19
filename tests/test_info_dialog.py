@@ -5,8 +5,9 @@ import unittest
 from typing import Any
 from unittest.mock import Mock, patch
 
-from maintenance.dialogs import InfoDialog, detail_sections
+from maintenance.dialogs import InfoDialog
 from maintenance.models import ResourceSummary
+from maintenance.ui.resource_details import detail_sections
 from tests.support.models import make_summary
 
 

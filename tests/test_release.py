@@ -1,6 +1,7 @@
 """Focused tests for the System Analyzer release/build helpers."""
 
 import hashlib
+import shutil
 import tempfile
 import unittest
 import zipfile
@@ -38,6 +39,28 @@ def _wheel_from_package(root: Path, version: str) -> Path:
             "[console_scripts]\nsystem-analyzer = main:main\n",
         )
     return wheel
+
+
+def _connect_wheel(
+    path: Path,
+    *,
+    name: str = "expra-connect",
+    version: str = _release._COMPANION_VERSION,
+    tag: str = "py3-none-any",
+    purelib: bool = True,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dist_info = f"{name.replace('-', '_')}-{version}.dist-info"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(
+            f"{dist_info}/METADATA",
+            f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n",
+        )
+        archive.writestr(
+            f"{dist_info}/WHEEL",
+            f"Wheel-Version: 1.0\nRoot-Is-Purelib: {str(purelib).lower()}\nTag: {tag}\n",
+        )
+    return path
 
 
 class VersionHelpersTests(unittest.TestCase):
@@ -216,6 +239,195 @@ class WheelVerifyTests(unittest.TestCase):
                         archive.writestr(name, source.read(name))
             with self.assertRaises(ValueError):
                 _release.verify_wheel(rebuild)
+
+
+class CompanionWheelTests(unittest.TestCase):
+    def test_update_companion_release_updates_pins_and_checksums(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dist = root / "dist"
+            dist.mkdir()
+            _make_package(root, "1.0.0.0")
+            _wheel_from_package(root, "1.0.0.0")
+            current_name = _release._COMPANION_WHEEL_NAME
+            current_wheel = dist / current_name
+            source_wheel = Path(__file__).resolve().parents[1] / "dist" / current_name
+            current_wheel.write_bytes(source_wheel.read_bytes())
+            (dist / "SHA256SUMS").write_text("old manifest\n", encoding="utf-8")
+
+            for relative in _release._COMPANION_UPDATE_FILES:
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(Path(__file__).resolve().parents[1] / relative, target)
+
+            new_version = _release._next_version(_release._COMPANION_VERSION, "patch")
+            candidate = _connect_wheel(
+                root / "candidate" / f"expra_connect-{new_version}-py3-none-any.whl",
+                version=new_version,
+            )
+
+            self.assertEqual(
+                _release.main(
+                    ["update-companion", str(candidate), "--package-dir", str(root)]
+                ),
+                0,
+            )
+
+            new_name = f"expra_connect-{new_version}-py3-none-any.whl"
+            self.assertTrue((dist / new_name).is_file())
+            self.assertFalse(current_wheel.exists())
+            self.assertIn(new_version, (root / "pyproject.toml").read_text())
+            self.assertIn(new_name, (root / "install/_common.sh").read_text())
+            self.assertIn(new_name, (root / "install/install-online.ps1").read_text())
+            for relative in _release._COMPANION_UPDATE_FILES:
+                self.assertNotIn(
+                    _release._COMPANION_VERSION,
+                    (root / relative).read_text(encoding="utf-8"),
+                    relative.as_posix(),
+                )
+            manifest = (dist / "SHA256SUMS").read_text(encoding="utf-8")
+            self.assertIn(
+                hashlib.sha256((dist / new_name).read_bytes()).hexdigest(), manifest
+            )
+
+    def test_update_companion_release_rejects_candidate_without_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dist = root / "dist"
+            dist.mkdir()
+            current_name = _release._COMPANION_WHEEL_NAME
+            current_wheel = dist / current_name
+            source_wheel = Path(__file__).resolve().parents[1] / "dist" / current_name
+            current_wheel.write_bytes(source_wheel.read_bytes())
+            before = current_wheel.read_bytes()
+            new_version = _release._next_version(_release._COMPANION_VERSION, "patch")
+            candidate = _connect_wheel(
+                root
+                / "candidate"
+                / f"expra_connect-{new_version}-cp312-cp312-linux_x86_64.whl",
+                version=new_version,
+                tag="cp312-cp312-linux_x86_64",
+            )
+
+            with self.assertRaises(ValueError):
+                _release.update_companion_release(candidate, root)
+
+            self.assertEqual(current_wheel.read_bytes(), before)
+            self.assertEqual([path.name for path in dist.iterdir()], [current_name])
+
+    def test_checked_in_companion_matches_pinned_artifact(self) -> None:
+        wheel = (
+            Path(__file__).resolve().parents[1]
+            / "dist"
+            / _release._COMPANION_WHEEL_NAME
+        )
+        _release.validate_companion_wheel(wheel)
+
+    def test_release_cli_validates_companion_artifact(self) -> None:
+        wheel = (
+            Path(__file__).resolve().parents[1]
+            / "dist"
+            / _release._COMPANION_WHEEL_NAME
+        )
+        self.assertEqual(
+            _release.main(["verify-companion-wheel", str(wheel)]),
+            0,
+        )
+
+    def test_release_validation_rejects_app_checksum_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _make_package(root, "1.0.0.0")
+            app_wheel = _wheel_from_package(root, "1.0.0.0")
+            companion = root / "dist" / _release._COMPANION_WHEEL_NAME
+            companion.write_bytes(
+                (
+                    Path(__file__).resolve().parents[1] / "dist" / companion.name
+                ).read_bytes()
+            )
+            _release.rewrite_sha256sums(root / "dist")
+            with zipfile.ZipFile(app_wheel, "a") as archive:
+                archive.writestr("extra-member.txt", "changed after manifest")
+
+            with self.assertRaisesRegex(ValueError, "release checksum mismatch"):
+                _release.verify_release_artifacts(app_wheel, root / "dist")
+
+    def test_accepts_pinned_universal_companion_with_matching_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = _connect_wheel(Path(directory) / _release._COMPANION_WHEEL_NAME)
+            digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+            _release.validate_companion_wheel(wheel, expected_sha256=digest)
+
+    def test_rejects_wrong_companion_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = _connect_wheel(
+                Path(directory)
+                / f"expra_connect-{_release._next_version(_release._COMPANION_VERSION, 'patch')}-py3-none-any.whl",
+                version=_release._next_version(_release._COMPANION_VERSION, "patch"),
+            )
+            digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+            with self.assertRaises(ValueError):
+                _release.validate_companion_wheel(wheel, expected_sha256=digest)
+
+    def test_rejects_non_universal_companion_tag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = _connect_wheel(
+                Path(directory)
+                / f"expra_connect-{_release._COMPANION_VERSION}-cp312-cp312-linux_x86_64.whl",
+                tag="cp312-cp312-linux_x86_64",
+            )
+            digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+            with self.assertRaises(ValueError):
+                _release.validate_companion_wheel(wheel, expected_sha256=digest)
+
+    def test_rejects_wrong_companion_distribution_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = _connect_wheel(
+                Path(directory)
+                / f"other_package-{_release._COMPANION_VERSION}-py3-none-any.whl",
+                name="other-package",
+            )
+            digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+            with self.assertRaises(ValueError):
+                _release.validate_companion_wheel(wheel, expected_sha256=digest)
+
+    def test_rejects_companion_checksum_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = _connect_wheel(Path(directory) / _release._COMPANION_WHEEL_NAME)
+            with self.assertRaises(ValueError):
+                _release.validate_companion_wheel(wheel, expected_sha256="0" * 64)
+
+    def test_checksum_manifest_includes_both_app_and_companion_wheels(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _make_package(root, "1.0.0.0")
+            app_wheel = _wheel_from_package(root, "1.0.0.0")
+            companion = _connect_wheel(root / "dist" / _release._COMPANION_WHEEL_NAME)
+
+            _release.rewrite_sha256sums(root / "dist")
+
+            lines = (root / "dist" / "SHA256SUMS").read_text().splitlines()
+            self.assertEqual(
+                {line.split(maxsplit=1)[1] for line in lines},
+                {app_wheel.name, companion.name},
+            )
+
+    def test_sync_artifacts_rejects_missing_companion_before_manifest_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _make_package(root, "1.0.0.0")
+            _wheel_from_package(root, "1.0.0.0")
+            manifest = root / "dist" / "SHA256SUMS"
+            manifest.write_text("preserve prior manifest\n", encoding="utf-8")
+
+            with self.assertRaises(FileNotFoundError):
+                _release.sync_artifacts(root)
+
+            self.assertEqual(
+                manifest.read_text(encoding="utf-8"), "preserve prior manifest\n"
+            )
 
 
 if __name__ == "__main__":

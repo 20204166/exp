@@ -7,10 +7,11 @@ background work, coalescing, and cancellation to the app coordinator.
 
 from __future__ import annotations
 
-import tkinter as tk
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from PySide6.QtWidgets import QAbstractButton
 
 from maintenance.observability import ObservabilityWatcher
 
@@ -25,9 +26,19 @@ class _ActionRecord:
 class ButtonCoordinator:
     """Register stable action IDs and keep bound widgets in sync."""
 
-    def __init__(self, *, observer: ObservabilityWatcher | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        observer: ObservabilityWatcher | None = None,
+        tk_error_type: type[Exception] | None = None,
+    ) -> None:
         self._actions: dict[str, _ActionRecord] = {}
         self._observer = observer
+        self._widget_errors = (
+            (RuntimeError, tk_error_type)
+            if tk_error_type is not None and tk_error_type is not RuntimeError
+            else (RuntimeError,)
+        )
 
     def register(
         self,
@@ -62,13 +73,24 @@ class ButtonCoordinator:
             return
         if widget not in record.widgets:
             record.widgets.append(widget)
+        clicked = widget.clicked if isinstance(widget, QAbstractButton) else None
+        if clicked is not None:
+            bound_id = getattr(widget, "_button_coordinator_action_id", None)
+            if bound_id != action_id:
+                clicked.connect(self.command(action_id))
+                widget._button_coordinator_action_id = action_id  # type: ignore[attr-defined]
+            if not widget.accessibleName():
+                accessible_name = widget.text().strip() or action_id.replace(":", " ")
+                widget.setAccessibleName(accessible_name)
+            self._apply_state(widget, record.enabled)
+            return
         config = self._widget_config(widget)
         if config is not None:
             try:
                 config(command=self.command(action_id))
             except TypeError:
                 pass
-            except (RuntimeError, tk.TclError):
+            except self._widget_errors:
                 record.widgets = [item for item in record.widgets if item is not widget]
                 return
         if not self._apply_state(widget, record.enabled):
@@ -85,9 +107,7 @@ class ButtonCoordinator:
             return False
         observer = self._observer
         token = (
-            observer.begin(f"ui:action:{action_id}")
-            if observer is not None
-            else None
+            observer.begin(f"ui:action:{action_id}") if observer is not None else None
         )
         try:
             record.callback()
@@ -133,10 +153,16 @@ class ButtonCoordinator:
             config = getattr(widget, "configure", None)
         return config
 
-    @staticmethod
-    def _apply_state(widget: Any, enabled: bool) -> bool:
-        if not ButtonCoordinator._widget_exists(widget):
+    def _apply_state(self, widget: Any, enabled: bool) -> bool:
+        if not self._widget_exists(widget):
             return False
+        set_enabled = widget.setEnabled if isinstance(widget, QAbstractButton) else None
+        if set_enabled is not None:
+            try:
+                set_enabled(enabled)
+            except RuntimeError:
+                return False
+            return True
         state = "normal" if enabled else "disabled"
         config = ButtonCoordinator._widget_config(widget)
         if config is None:
@@ -146,16 +172,21 @@ class ButtonCoordinator:
         except TypeError:
             # Non-button widgets may reject state updates; ignore them.
             return True
-        except (RuntimeError, tk.TclError):
+        except self._widget_errors:
             return False
         return True
 
-    @staticmethod
-    def _widget_exists(widget: Any) -> bool:
+    def _widget_exists(self, widget: Any) -> bool:
+        if isinstance(widget, QAbstractButton):
+            try:
+                widget.objectName()
+                return True
+            except RuntimeError:
+                return False
         exists = getattr(widget, "winfo_exists", None)
         if exists is None:
             return True
         try:
             return bool(exists())
-        except (RuntimeError, tk.TclError):
+        except self._widget_errors:
             return False

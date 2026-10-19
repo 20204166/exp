@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import configparser
+import os
+import tempfile
 import unittest
 from email.parser import Parser
 from pathlib import Path
+from unittest.mock import patch
 from zipfile import ZipFile
 
 from tests.support.toml import load_project
@@ -14,6 +17,12 @@ REPO = Path(__file__).parents[1]
 
 
 def latest_wheel() -> Path:
+    explicit_wheel = os.environ.get("SYSTEM_ANALYZER_TEST_WHEEL")
+    if explicit_wheel is not None:
+        wheel = Path(explicit_wheel)
+        if not wheel.is_file():
+            raise AssertionError(f"explicit validation wheel does not exist: {wheel}")
+        return wheel
     wheels = list((REPO / "dist").glob("system_analyzer-*.whl"))
     if not wheels:
         raise AssertionError("no built system_analyzer wheel found in dist/")
@@ -67,6 +76,13 @@ def wheel_metadata(path: Path) -> tuple[str, list[str], str]:
 
 
 class BuiltWheelTests(unittest.TestCase):
+    def test_latest_wheel_uses_explicit_validation_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            wheel = Path(directory) / "fresh.whl"
+            wheel.touch()
+            with patch.dict(os.environ, {"SYSTEM_ANALYZER_TEST_WHEEL": str(wheel)}):
+                self.assertEqual(latest_wheel(), wheel)
+
     def test_wheel_contains_required_modules_and_package_content(self) -> None:
         wheel = latest_wheel()
         members = wheel_members(wheel)
@@ -148,6 +164,8 @@ def _requirements_sections() -> tuple[list[str], list[str]]:
         if stripped.lstrip().startswith("#"):
             if "Dev-only" in stripped:
                 in_dev = True
+            continue
+        if stripped.startswith("-"):
             continue
         (dev if in_dev else runtime).append(stripped)
     return runtime, dev

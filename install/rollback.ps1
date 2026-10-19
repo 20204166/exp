@@ -7,6 +7,6 @@ $py = Resolve-Python $Python
 Require-Python $py
 $wheel = Get-WheelPath $Version
 Write-Host "Rolling back to: $(Split-Path $wheel -Leaf)"
-& $py -m pip install --no-index --no-deps --force-reinstall $wheel
-if ($LASTEXITCODE -ne 0) { throw "pip install failed (exit $LASTEXITCODE)" }
+Verify-ReleaseArtifacts $py $wheel
+Install-ReleaseWheels $py $wheel
 Write-Host "Restored:"; Show-InstalledVersion $py

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import window
 from maintenance.cluster import (
     ClusterState,
     ClusterStore,
@@ -42,6 +43,7 @@ from maintenance.remote_support.server import (
     _handle_pairing_request,
 )
 from maintenance.ui import window_discovery as ui_window_discovery
+from maintenance.ui.window_discovery import DiscoveryRuntime
 from tests.test_remote_contract import SECRET, _service
 
 
@@ -80,6 +82,11 @@ def _pairing_controller(state: ClusterState, *, save_result: bool = True) -> Any
     controller._cluster_state = state
     controller.master = object()
     controller._submit_ui = lambda callback: callback()
+    controller._discovery_runtime = DiscoveryRuntime(
+        approve_pairing=lambda title, message: window.messagebox.askyesno(
+            title, message
+        )
+    )
 
     def save(updated: ClusterState) -> bool:
         if save_result:
@@ -466,6 +473,11 @@ class RemoteSecurityTests(unittest.TestCase):
         controller: Any = type("Controller", (), {})()
         controller._cluster_state = state
         controller.master = object()
+        controller._discovery_runtime = DiscoveryRuntime(
+            approve_pairing=lambda title, message: window.messagebox.askyesno(
+                title, message
+            )
+        )
 
         def submit_ui(callback: Any) -> None:
             controller.callback = callback

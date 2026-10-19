@@ -9,14 +9,14 @@ installed and run locally.
 ## Layout
 
 ```
-main.py                  entrypoint (python main.py / system-analyzer)
-algo.py, window.py       app facade and Tk controller (kept top-level for
-                         compatibility with historical imports)
+main.py                  Qt entrypoint (python main.py / system-analyzer)
+algo.py                  app facade for scans and cleanup
+window.py                legacy Tk compatibility controller (not used by main)
 maintenance/             shared implementation package
 maintenance/components/  component subsystem (scan primitives, process safety,
                          downloads, GPU, background, catalog, coordinator,
                          clock/governor)
-maintenance/ui/          presentation layer (styles, layout, pages, status)
+maintenance/ui/          Qt application plus legacy Tk compatibility views
 maintenance/snapshot.py  read-only snapshot CLI (system-analyzer-snapshot)
 pyproject.toml           local packaging configuration
 ```
@@ -26,21 +26,42 @@ pyproject.toml           local packaging configuration
 - `psutil>=5.9` — required for most scans and process inspection.
 - `send2trash>=1.8` — required for the Storage cleanup action (move to Trash).
 - `nvidia-ml-py>=12.0` — optional NVIDIA GPU detail on non-Darwin platforms
-  (`pip install -e .` installs it by default; the app runs without it, showing
+  (`pip install --find-links dist -e .` installs it by default; the app runs
+  without it, showing
   "GPU information unavailable").
 - `zeroconf>=0.131` — local-network mDNS discovery of other running System
   Analyzer instances. Discovery is presence-only; authenticated trusted nodes
   can provide the verified remote read paths and target-side guarded process
   actions. Remote file cleanup remains read-only.
+- `expra-connect==2.2.0.4` — peer identity, authenticated transport, pairing,
+  and cluster primitives. Its universal wheel is bundled in `dist/`; pip uses
+  that local wheel and resolves its third-party dependencies from the configured
+  package index.
 
-The GUI additionally requires a Python build with `tkinter` available.
+### Updating the bundled expra-connect wheel
+
+When a newer universal wheel is available, download it without changing the
+`expra-connect` source repository, then run:
+
+```sh
+python -m maintenance._release update-companion /path/to/expra_connect-VERSION-py3-none-any.whl --package-dir .
+```
+
+The command rejects non-universal, malformed, or non-newer wheels. On success
+it replaces the bundled wheel, updates maintained dependency and installer
+pins, and regenerates `dist/SHA256SUMS`. Then run the focused release and
+installer tests and build/verify the app wheel before distributing the update.
+
+The active desktop application uses PySide6 Qt Widgets, installed as a project
+dependency. The legacy `window.py` controller and compatibility views still
+require `tkinter`; they are not imported by the active `main.py` startup path.
 
 ## Development install
 
 ```sh
 python -m venv .venv
 . .venv/bin/activate
-pip install -e .
+pip install --find-links dist -e .
 ```
 
 After this, `python main.py` and the `system-analyzer` command both launch the
@@ -65,8 +86,10 @@ work on native Windows (and any OS with PowerShell).
 On Windows, the second column is a target-venv installer, not a machine-wide
 system install.
 
-All scripts auto-find a Python 3.10+, verify the committed wheel, install the
-app with its dependencies, and print the exact PATH step for your shell/OS.
+All scripts auto-find a Python 3.10+, verify the app and companion wheels,
+install `expra-connect` from the bundled local wheel, resolve any missing
+third-party dependencies from pip's configured index, and print the exact PATH
+step for your shell/OS.
 `build.ps1` / `verify.ps1` / `upgrade.ps1` / `rollback.ps1` / `uninstall.ps1`
 mirror their `.sh` counterparts for the release workflow on Windows.
 
@@ -86,8 +109,8 @@ irm https://raw.githubusercontent.com/20204166/exp/main/install/install-online.p
 ```
 
 After adding the printed scripts directory to PATH, `system-analyzer` works
-from any folder. The repository-local scripts remain available for offline
-wheel installs and release management.
+from any folder. The repository-local scripts use the bundled wheel artifacts;
+third-party dependencies may be fetched from pip's configured index.
 
 If a shell still reports `command not found`, use the exact `Direct launcher`
 path printed by the installer, run `hash -r`, or open a new terminal after
@@ -102,8 +125,8 @@ updating PATH.
   `/usr/bin/python3` — use your installed newer Python (e.g. `brew install
   python@3.12`, then `python3.12 -m venv .venv`), or point the script at it:
   `SA_SYSTEM_PYTHON=/path/to/python3.12 ./install/install-user.sh`.
-- **tkinter** — the only non-pip prerequisite (system package `python3-tk` on
-  Linux; included with python.org/Homebrew builds on macOS).
+- **Qt runtime** — provided by the PySide6 project dependency; Linux installs
+  may need the platform's standard Qt GUI libraries and a graphical session.
 
 ### Common install commands
 
@@ -201,7 +224,7 @@ script says "requires Python 3.10")** — the interpreter is older than 3.10
 brew install python@3.12
 python3.12 -m venv .venv
 . .venv/bin/activate
-pip install .
+pip install --find-links dist .
 # or point the install script at your newer Python:
 SA_SYSTEM_PYTHON=/path/to/python3.12 ./install/install-user.sh
 ```
@@ -227,7 +250,7 @@ Or use a virtual environment, which sidesteps PEP 668 entirely:
 ```sh
 python -m venv .venv
 . .venv/bin/activate
-pip install .
+pip install --find-links dist .
 ```
 
 **`no such option: --break-system-packages`** — pip is older than 23.0. The
@@ -236,14 +259,14 @@ PEP 668 anyway); if you are typing the manual commands, upgrade pip or use a
 venv.
 
 **`pip install -e` says "option requires 1 argument"** — the `.` is required:
-run `pip install -e .` (and be inside the repo).
+run `pip install --find-links dist -e .` (and be inside the repo).
 
 ### Dev/venv install
 
 ```sh
 python -m venv .venv
 . .venv/bin/activate
-pip install -e .
+pip install --find-links dist -e .
 ```
 
 The following commands become available on `PATH`:
@@ -266,8 +289,9 @@ The following commands become available on `PATH`:
 The package version is a single source of truth in `maintenance/_version.py`;
 `build.sh` auto-bumps it (patch/feature/minor) only when the source inputs
 differ from the newest wheel, so rebuilds are no-ops unless something changed.
-The app needs only its declared dependencies plus a Python build with
-`tkinter` (the only non-pip prerequisite).
+The active Qt application needs its declared dependencies and a graphical
+session. The legacy compatibility controller/views may additionally require
+`tkinter` when imported directly.
 
 ## Run
 

@@ -9,6 +9,10 @@ Require-Python $py
 $here = Get-PackageDir
 
 try {
+    Invoke-Versioned $py "maintenance._release" @(
+        "verify-companion-wheel",
+        (Join-Path $here "dist\expra_connect-2.2.0.4-py3-none-any.whl")
+    )
     Write-Host "Preparing build inputs and version..."
     Invoke-Versioned $py "maintenance._release" @("prepare-build", "--package-dir", $here, "--bump", $Bump)
 
@@ -24,4 +28,5 @@ try {
 }
 
 Get-ChildItem (Join-Path $here "dist\system_analyzer-*.whl") | Select-Object -ExpandProperty Name
+Get-ChildItem (Join-Path $here "dist\expra_connect-2.2.0.4-py3-none-any.whl") | Select-Object -ExpandProperty Name
 Write-Host "Building does not install. Run install.ps1 to install explicitly."

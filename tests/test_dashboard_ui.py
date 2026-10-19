@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock, patch
 
-from maintenance.dialogs import ResourceCard, action_label_text, metric_label_pairs
+from maintenance.dialogs import ResourceCard
 from maintenance.models import (
     CapabilityState,
     DashboardSnapshot,
@@ -18,6 +18,7 @@ from maintenance.preferences import AppPreferences
 from maintenance.ui import dashboard_page
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
+from maintenance.ui.resource_details import action_label_text, metric_label_pairs
 from tests.support.models import make_snapshot, make_summary
 from tests.support.widget_recording import RecordingControl, WidgetRecorder
 from tests.support.window import make_window as make_bare_window

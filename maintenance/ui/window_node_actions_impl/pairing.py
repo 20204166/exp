@@ -114,7 +114,7 @@ def _prepare_pairing(
     except (KeyError, ValueError) as error:
         controller._nodes_error(str(error))
         return None
-    if not messagebox_module.askyesno(
+    if messagebox_module is not None and not messagebox_module.askyesno(
         "Confirm peer fingerprint",
         pairing_confirmation(candidate),
         parent=controller.master,
@@ -399,11 +399,17 @@ def pair_discovered_node_async(
         if not is_current():
             return
         transport_error = (
-            f"Could not reach target: {message}" if message else "Could not reach target"
+            f"Could not reach target: {message}"
+            if message
+            else "Could not reach target"
         )
         attempts.pop(attempt.node, None)
         _finish_pairing(
-            controller, attempt, False, role_state=role_state, error_message=transport_error
+            controller,
+            attempt,
+            False,
+            role_state=role_state,
+            error_message=transport_error,
         )
         if dialog is not None:
             dialog.show_error(transport_error)

@@ -17,6 +17,7 @@ from maintenance.ui import layout as ui_layout
 from maintenance.ui import node_presentation
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
+from maintenance.ui.page_specs import ClusterNodeSpec
 
 _DEFAULT_COLOR = "indigo"
 
@@ -49,30 +50,6 @@ class ClusterPageCallbacks:
     on_open_sharing: Callable[["ClusterNodeSpec"], None] = _noop_open_sharing
     on_create_invite: Callable[[], None] | None = None
     on_join_cluster: Callable[[str], None] | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ClusterNodeSpec:
-    """Presentation data for one machine on the All Systems overview."""
-
-    node_id: str
-    display_name: str
-    hostname: str
-    color: str | None
-    trust: str
-    status: str
-    capabilities: tuple[str, ...]
-    is_local: bool
-    selectable: bool
-    last_refresh: str | None = None
-    pairing_state: str = "trusted"
-    target_state: str = "Unknown"
-    role: str = "worker"
-    paused: bool = False
-    role_editable: bool = False
-    has_active_job: bool = False
-    share_active: bool = False
-    is_cluster_member: bool = False
 
 
 class ClusterPage:
@@ -334,7 +311,12 @@ class ClusterPage:
             )
             remove_connection.pack(side="right", padx=(0, 8))
         on_remove_job = self.callbacks.on_remove_job
-        if spec.role_editable and not spec.is_local and spec.has_active_job and on_remove_job is not None:
+        if (
+            spec.role_editable
+            and not spec.is_local
+            and spec.has_active_job
+            and on_remove_job is not None
+        ):
             remove_job = self.button_cls(
                 row,
                 text="Remove job",

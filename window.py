@@ -9,20 +9,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue
 from tkinter import messagebox, simpledialog, ttk
+from types import SimpleNamespace
 from typing import Any
 
 import algo
-from maintenance import __version__  # noqa: F401 - retained patch/import seam
+from maintenance import __version__
 from maintenance.actions import FileManager, ProcessManager
+from maintenance.application_controller import ApplicationController
 from maintenance.cluster import (
-    ClusterSaveError,  # noqa: F401 - retained cluster patch seam
+    ClusterSaveError,
     ClusterState,
     ClusterStore,
     PeerGrantRecord,
     default_cluster_path,
 )
 from maintenance.components import (
-    DOWNLOADS_SCAN_CANCELLED,  # noqa: F401 - retained scan patch seam
+    DOWNLOADS_SCAN_CANCELLED,
     CoordinatorTimeline,
     DashboardScanLifecycle,
     NodeSelection,
@@ -31,7 +33,7 @@ from maintenance.components import (
     ScanCoordinator,
     StandbyBuffer,
     StorageStatus,
-    node_context,  # noqa: F401 - retained context patch seam
+    node_context,
 )
 from maintenance.components.background_orchestration import (
     BackgroundItem,
@@ -42,12 +44,12 @@ from maintenance.components.coordinator import (
     ComponentRefreshScheduler,
 )
 from maintenance.components.discovery_session import DiscoverySession
-from maintenance.components.network_discovery import (  # noqa: F401 - patch seam
+from maintenance.components.network_discovery import (
     NetworkDiscovery,
 )
 from maintenance.components.scan_support import (
-    SCAN_CANCELLED_NOTICE,  # noqa: F401 - retained scan patch seam
-    call_legacy_compatible,  # noqa: F401 - retained scan patch seam
+    SCAN_CANCELLED_NOTICE,
+    call_legacy_compatible,
 )
 from maintenance.components.temperature import (
     TemperatureRenderState,
@@ -72,7 +74,7 @@ from maintenance.models import (
 )
 from maintenance.nodes import (
     ConnectionState,  # noqa: F401 - retained scan patch seam
-    LocalNodeProvider,  # noqa: F401 - retained scan patch seam
+    LocalNodeProvider,
     NodeCapability,  # noqa: F401 - retained dialog patch seam
     NodeConnectionStatus,  # noqa: F401 - retained scan patch seam
     NodeContext,
@@ -80,11 +82,11 @@ from maintenance.nodes import (
     NodePermission,  # noqa: F401 - retained dialog patch seam
     NodeRegistry,
     NodeSnapshot,
-    generate_node_secret,  # noqa: F401 - retained listener patch seam
-    is_trusted_descriptor,  # noqa: F401 - retained discovery patch seam
-    local_node_descriptor,  # noqa: F401 - retained scan patch seam
-    node_identity_fingerprint,  # noqa: F401 - retained discovery patch seam
-    node_operation_key,  # noqa: F401 - retained dialog patch seam
+    generate_node_secret,
+    is_trusted_descriptor,
+    local_node_descriptor,
+    node_identity_fingerprint,
+    node_operation_key,
 )
 from maintenance.observability import ObservabilityWatcher
 from maintenance.persistence import atomic_write_text
@@ -96,12 +98,13 @@ from maintenance.preferences import (
 )
 from maintenance.remote import (
     AuthenticatedNodeProvider,
-    PeerGrant,  # noqa: F401 - retained dialog patch seam
+    PeerGrant,
     RemoteProcessActionBackend,
-    RemoteService,  # noqa: F401 - retained listener patch seam
+    RemoteService,
     RemoteSocketServer,
     SocketRemoteTransport,  # noqa: F401 - retained transport patch seam
     TLSRemoteTransport,
+    build_trusted_transport,
 )
 from maintenance.ui import cluster_page as ui_cluster
 from maintenance.ui import dashboard_page as ui_dashboard
@@ -149,8 +152,50 @@ DIAGNOSTICS_PAGE = "diagnostics"
 HELP_PAGE = "help"
 
 
-class AppWindow:
+class AppWindow(ApplicationController):
     tk: Any
+    analyzer: Any
+    process_manager: Any
+    file_manager: Any
+    snapshot: DashboardSnapshot | None
+    _preferences_store: Any
+    _preferences: AppPreferences
+    _cluster_store: ClusterStore
+    _cluster_state: ClusterState
+    _cluster_timeline: CoordinatorTimeline | None
+    _standby_buffer: StandbyBuffer | None
+    _provision_target_grant: Callable[[PeerGrantRecord], bool] | None
+    _developer_mode: bool
+    _is_closing: bool
+    _pending_after_ids: set[str]
+    _background_poll_id: str | None
+    _background_tasks: int
+    _observer: ObservabilityWatcher
+    _scan_coordinator: ScanCoordinator
+    _analysis_cancel_event: threading.Event | None
+    _scan_timeout_id: str | None
+    _lease_grace_id: str | None
+    _timed_out_generation: int | None
+    _resolved_scan_generation: int
+    _background_queue: Queue[BackgroundItem]
+    _coordinator: AppCoordinator
+    _component_scheduler: ComponentRefreshScheduler
+    _button_coordinator: ButtonCoordinator
+    _ui_coordinator: ui_render.UICoordinator
+    _background_orchestrator: BackgroundOrchestrator
+    _feature_catalog: ResourceFeatureCatalog
+    _component_poll_id: str | None
+    _diagnostics_refresh_id: str | None
+    _capabilities: dict[str, CapabilityState]
+    _node_registry: NodeRegistry
+    _selected_node_id: NodeId | None
+    _discovery_tick_id: str | None
+    _peer_reconcile_timer_id: str | None
+    _peer_server: RemoteSocketServer | None
+    _connection_dialog: ConnectionDialog | None
+    _pairing_dialog: PairingDialog | None
+    _node_details_dialog: NodeDetailsDialog | None
+    _sharing_dialog: SharingDialog | None
     cards: dict[str, ResourceCard]
     cards_frame: Any
     _refresh_cards_scrollbar: Callable[..., None]
@@ -196,111 +241,91 @@ class AppWindow:
         preferences_store: PreferencesStore | None = None,
         cluster_store: ClusterStore | None = None,
         provision_target_grant: Callable[[PeerGrantRecord], bool] | None = None,
+        initialize_ui: bool = True,
     ) -> None:
-        self.analyzer = algo.Analyzer()
-        self.process_manager = ProcessManager()
-        self.file_manager = FileManager(self.analyzer.scanner.downloads_path)
-        self._preferences_store = preferences_store or PreferencesStore(
-            default_preferences_path()
+        dependencies = SimpleNamespace(
+            analyzer_factory=algo.Analyzer,
+            process_manager_factory=ProcessManager,
+            file_manager_factory=FileManager,
+            preferences_store_factory=lambda: (
+                preferences_store or PreferencesStore(default_preferences_path())
+            ),
+            cluster_store_factory=lambda: (
+                cluster_store or ClusterStore(default_cluster_path())
+            ),
+            timeline_factory=CoordinatorTimeline,
+            standby_factory=StandbyBuffer,
+            provision_target_grant=provision_target_grant,
+            developer_mode=developer_mode_enabled(os.environ),
+            observer_factory=ObservabilityWatcher,
+            scan_coordinator_factory=ScanCoordinator,
+            queue_factory=Queue,
+            coordinator_factory=AppCoordinator,
+            scheduler_factory=ComponentRefreshScheduler,
+            button_factory=lambda **kwargs: ButtonCoordinator(
+                **kwargs, tk_error_type=tk.TclError
+            ),
+            ui_coordinator_factory=ui_render.UICoordinator,
+            catalog_factory=ResourceFeatureCatalog,
+            registry_factory=NodeRegistry,
         )
-        self._preferences = self._preferences_store.load()
-        self._cluster_store = cluster_store or ClusterStore(default_cluster_path())
-        self._cluster_state = self._cluster_store.load()
-        local_roles = self._cluster_state.local_assignment.roles
-        self._cluster_timeline = (
-            CoordinatorTimeline(
-                self._cluster_store.path.with_name("cluster-history.sqlite3")
+        super().__init__(master=master, dependencies=dependencies)
+
+        if initialize_ui:
+            self.master = master or tk.Tk()
+            self._timer_delivery = TimerDelivery(
+                master=self.master,
+                is_closing=lambda: self._is_closing,
+                pending_ids=self._pending_after_ids,
+                logger=LOGGER,
+                on_interrupt=self._close,
             )
-            if any(role.value == "coordinator" for role in local_roles)
-            else None
-        )
-        self._standby_buffer = (
-            StandbyBuffer(self._cluster_store.path.with_name("cluster-standby.sqlite3"))
-            if any(role.value == "subcoordinator" for role in local_roles)
-            else None
-        )
-        self._provision_target_grant = provision_target_grant
-        self._developer_mode = developer_mode_enabled(os.environ)
-        self.snapshot: DashboardSnapshot | None = None
-        self._is_closing = False
-        self._pending_after_ids: set[str] = set()
-        self._background_poll_id: str | None = None
-        self._background_tasks = 0
-        self._observer = ObservabilityWatcher()
-        self._scan_coordinator = ScanCoordinator(observer=self._observer)
-        self._analysis_cancel_event: threading.Event | None = None
-        self._scan_timeout_id: str | None = None
-        self._lease_grace_id: str | None = None
-        self._timed_out_generation: int | None = None
-        self._resolved_scan_generation = 0
-        self._background_queue: Queue[BackgroundItem] = Queue()
-        self._coordinator = AppCoordinator(
-            deliver=self._submit_ui,
-            deliver_progress=self._submit_latest_progress,
-            on_activity=self._start_background_poll,
-            observer=self._observer,
-        )
-        self._component_scheduler = ComponentRefreshScheduler(
-            self._preferences.refresh_intervals.as_dict(), observer=self._observer
-        )
-        self._button_coordinator = ButtonCoordinator(observer=self._observer)
-        self._ui_coordinator = ui_render.UICoordinator(
-            schedule=lambda delay, callback: self._schedule_timer(delay, callback),
-            cancel=lambda identifier: self._cancel_timer(identifier),
-            observer=self._observer,
-        )
-        self._background_orchestrator = self._make_background_orchestrator()
-        self._feature_catalog = ResourceFeatureCatalog()
-        self._component_poll_id: str | None = None
-        self._diagnostics_refresh_id: str | None = None
-        self._capabilities: dict[str, CapabilityState] = {}
-        self._node_registry = NodeRegistry()
-        self._selected_node_id: NodeId | None = None
-        self._discovery_tick_id: str | None = None
-        self._peer_reconcile_timer_id: str | None = None
-        self._build_local_node_context()
-        self._restore_trusted_nodes()
-        self._peer_server: RemoteSocketServer | None = None
-        self._connection_dialog: ConnectionDialog | None = None
-        self._pairing_dialog: PairingDialog | None = None
-        self._node_details_dialog: NodeDetailsDialog | None = None
-        self._sharing_dialog: SharingDialog | None = None
+            self.master.title("System Analyzer")
+            self.master.geometry("1040x760")
+            self.master.minsize(900, 680)
+            self.master.configure(bg=self.BACKGROUND)
+            self.master.protocol("WM_DELETE_WINDOW", self._close)
 
-        self.master = master or tk.Tk()
-        self._timer_delivery = TimerDelivery(
-            master=self.master,
-            is_closing=lambda: self._is_closing,
-            pending_ids=self._pending_after_ids,
-            logger=LOGGER,
-            on_interrupt=self._close,
-        )
-        self.master.title("System Analyzer")
-        self.master.geometry("1040x760")
-        self.master.minsize(900, 680)
-        self.master.configure(bg=self.BACKGROUND)
-        self.master.protocol("WM_DELETE_WINDOW", self._close)
-
-        self._configure_styles()
-        self._build_window()
-        self._start_peer_listener()
-        self._start_discovery()
-        self._schedule_timer(350, self.handle_analyze)
+            self._configure_styles()
+            self._build_window()
+            self._start_peer_listener()
+            self._start_discovery()
+            self._schedule_timer(350, self.handle_analyze)
+        else:
+            if master is None:
+                raise ValueError("A host window is required when UI setup is deferred")
+            self.master = master
 
     def _build_local_node_context(self) -> None:
-        ui_window_context.build_local_node_context(self)
+        ui_window_context.build_local_node_context(self, context_builder=node_context)
 
     def _restore_trusted_nodes(self) -> None:
-        ui_window_context.restore_trusted_nodes(self)
+        ui_window_context.restore_trusted_nodes(
+            self, context_builder=node_context, logger=LOGGER
+        )
 
     @property
     def colors(self) -> dict[str, str]:
         return ui_window_page_data.colors(self)
 
     def _scan_coordinator_state(self) -> ScanCoordinator:
+        self._refresh_scan_runtime()
         return ui_window_scan.scan_coordinator_state(self)
 
     def _dashboard_scan_lifecycle(self) -> DashboardScanLifecycle:
+        self._refresh_scan_runtime()
         return ui_window_scan.dashboard_scan_lifecycle(self)
+
+    def _refresh_scan_runtime(self) -> None:
+        self.__dict__["_scan_runtime"] = ui_window_scan.ScanRuntime(
+            scan_coordinator_factory=ScanCoordinator,
+            dashboard_scan_lifecycle_factory=DashboardScanLifecycle,
+            legacy_compatible=call_legacy_compatible,
+            local_node_provider_factory=LocalNodeProvider,
+            local_node_descriptor_factory=local_node_descriptor,
+            downloads_scan_cancelled=DOWNLOADS_SCAN_CANCELLED,
+            scan_cancelled_notice=SCAN_CANCELLED_NOTICE,
+        )
 
     def _sync_dashboard_scan_state(self) -> None:
         ui_window_scan.sync_dashboard_scan_state(self)
@@ -693,10 +718,14 @@ class AppWindow:
         ui_window_pages.refresh_cluster(self)
 
     def _save_cluster_state(self, state: ClusterState) -> bool:
-        return ui_window_context.save_cluster_state(self, state)
+        return ui_window_context.save_cluster_state(
+            self, state, save_error=ClusterSaveError, logger=LOGGER
+        )
 
     def _sync_peer_listener_grants(self) -> None:
-        ui_window_context.sync_peer_listener_grants(self)
+        ui_window_context.sync_peer_listener_grants(
+            self, node_id_type=NodeId, peer_grant_type=PeerGrant
+        )
 
     def _apply_discovery_enabled(self, enabled: bool) -> None:
         ui_node_actions.apply_discovery_enabled(self, enabled)
@@ -735,13 +764,15 @@ class AppWindow:
         ui_node_actions.resume_node(self, node_id)
 
     def _revoke_node(self, node_id: str) -> None:
-        ui_node_actions.revoke_node(self, node_id)
+        ui_node_actions.revoke_node(self, node_id, messagebox_module=messagebox)
 
     def _remove_connection_node(self, node_id: str) -> None:
-        ui_node_actions.remove_connection_node(self, node_id)
+        ui_node_actions.remove_connection_node(
+            self, node_id, messagebox_module=messagebox
+        )
 
     def _remove_job_node(self, node_id: str) -> None:
-        ui_node_actions.remove_job_node(self, node_id)
+        ui_node_actions.remove_job_node(self, node_id, messagebox_module=messagebox)
 
     def _create_cluster_invite(self) -> None:
         blob = ui_node_actions.create_cluster_invite(self)
@@ -868,7 +899,7 @@ class AppWindow:
         ui_node_actions.revoke_trusted_node(self, node_id)
 
     def _remove_manual_host(self, node_id: str) -> None:
-        ui_node_actions.remove_manual_host(self, node_id)
+        ui_node_actions.remove_manual_host(self, node_id, messagebox_module=messagebox)
 
     def _test_connection(self, node_id: str) -> None:
         ui_node_actions.test_connection(
@@ -926,7 +957,29 @@ class AppWindow:
         ui_node_runtime.render_selected_node(self, context)
 
     def _get_discovery_session(self) -> DiscoverySession:
-        return ui_window_discovery.get_discovery_session(self)
+        runtime = ui_window_discovery.DiscoveryRuntime(
+            network_discovery=NetworkDiscovery,
+            app_version=__version__,
+            approve_pairing=lambda title, message: messagebox.askyesno(
+                title, message, parent=self.master
+            ),
+            approve_elevation=lambda title, message: messagebox.askyesno(
+                title, message, parent=self.master
+            ),
+            attempt_pending_trust_revocations=attempt_pending_trust_revocations,
+            propagate_coordinator_lease=propagate_coordinator_lease,
+            authenticated_node_provider=lambda **kwargs: AuthenticatedNodeProvider(
+                **kwargs
+            ),
+            trusted_transport_factory=lambda record: build_trusted_transport(record),
+            is_trusted=lambda descriptor: is_trusted_descriptor(descriptor),
+            identity_fingerprint=lambda node_id: node_identity_fingerprint(node_id),
+            operation_key=lambda node_id, operation: node_operation_key(
+                node_id, operation
+            ),
+        )
+        self.__dict__["_discovery_runtime"] = runtime
+        return ui_window_discovery.get_discovery_session(self, runtime=runtime)
 
     def _listener_endpoint(
         self,
@@ -934,7 +987,32 @@ class AppWindow:
         return ui_window_discovery.listener_endpoint(self)
 
     def _start_peer_listener(self) -> None:
-        ui_window_discovery.start_peer_listener(self)
+        runtime = ui_window_discovery.DiscoveryRuntime(
+            remote_service=RemoteService,
+            remote_socket_server=RemoteSocketServer,
+            network_discovery=NetworkDiscovery,
+            secret_factory=generate_node_secret,
+            app_version=__version__,
+            approve_pairing=lambda title, message: messagebox.askyesno(
+                title, message, parent=self.master
+            ),
+            approve_elevation=lambda title, message: messagebox.askyesno(
+                title, message, parent=self.master
+            ),
+            attempt_pending_trust_revocations=attempt_pending_trust_revocations,
+            propagate_coordinator_lease=propagate_coordinator_lease,
+            authenticated_node_provider=lambda **kwargs: AuthenticatedNodeProvider(
+                **kwargs
+            ),
+            trusted_transport_factory=lambda record: build_trusted_transport(record),
+            is_trusted=lambda descriptor: is_trusted_descriptor(descriptor),
+            identity_fingerprint=lambda node_id: node_identity_fingerprint(node_id),
+            operation_key=lambda node_id, operation: node_operation_key(
+                node_id, operation
+            ),
+        )
+        self.__dict__["_discovery_runtime"] = runtime
+        ui_window_discovery.start_peer_listener(self, runtime=runtime)
 
     def _start_discovery(self) -> None:
         ui_window_discovery.start_discovery(self)
@@ -1048,6 +1126,7 @@ class AppWindow:
         ui_window_lifecycle.invoke_delivered(callback)
 
     def handle_analyze(self) -> None:
+        self._refresh_scan_runtime()
         ui_window_scan.handle_analyze(self)
 
     def _show_snapshot(
@@ -1122,7 +1201,15 @@ class AppWindow:
         ui_window_preferences.on_appearance_change(self, theme)
 
     def _on_reset(self) -> None:
-        ui_window_preferences.on_reset(self)
+        ui_window_preferences.on_reset(
+            self,
+            confirm=lambda: messagebox.askyesno(
+                "Reset Preferences?",
+                "Reset all preferences to their defaults?",
+                parent=self.master,
+            ),
+            defaults_factory=AppPreferences.defaults,
+        )
 
     def _component_poll_delay(self) -> int | None:
         return ui_window_components.component_poll_delay(self)
@@ -1325,6 +1412,7 @@ class AppWindow:
         *,
         node_id: NodeId | None = None,
     ) -> None:
+        self._refresh_scan_runtime()
         ui_window_scan.show_error_for_generation(
             self, generation, message, node_id=node_id
         )

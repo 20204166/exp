@@ -7,14 +7,18 @@ from dataclasses import replace
 from typing import Any
 
 from maintenance.nodes import NodeId, NodeIdentityStatus, is_trusted_descriptor
-from maintenance.ui import cluster_page as ui_cluster
-from maintenance.ui import nodes_connections as ui_nodes
+from maintenance.ui.page_specs import (
+    ClusterNodeSpec,
+    DiscoveredPeerSpec,
+    LocalClusterSpec,
+    TrustedNodeSpec,
+)
 from maintenance.ui.target_state import render_target_state
 
 
 def discovered_peer_specs(
     registry: Any, cluster_state: Any = None
-) -> list[ui_nodes.DiscoveredPeerSpec]:
+) -> list[DiscoveredPeerSpec]:
     """Project untrusted discovery observations without adding capabilities.
 
     Peers that have an inbound PeerGrantRecord (accepted-pair acceptor side) are
@@ -27,7 +31,7 @@ def discovered_peer_specs(
         for grant in (cluster_state.peer_grants if cluster_state is not None else ())
     )
     return [
-        ui_nodes.DiscoveredPeerSpec(
+        DiscoveredPeerSpec(
             node_id=candidate.stable_id,
             hostname=candidate.hostname,
             app_version=candidate.app_version,
@@ -49,7 +53,7 @@ def trusted_node_specs(
     manual_node_ids: Iterable[str] = (),
     *,
     disconnected_ids: Iterable[Any] = (),
-) -> list[ui_nodes.TrustedNodeSpec]:
+) -> list[TrustedNodeSpec]:
     """Project trusted non-manual contexts and preserve their display policy."""
 
     manual = set(manual_node_ids)
@@ -66,7 +70,7 @@ def trusted_node_specs(
         if _epoch is not None and _epoch.coordinator_id.value != _local_id
         else None
     )
-    specs: list[ui_nodes.TrustedNodeSpec] = []
+    specs: list[TrustedNodeSpec] = []
     for context in registry.contexts():
         descriptor = context.descriptor
         if (
@@ -112,7 +116,7 @@ def trusted_node_specs(
             node_roles = ("worker",)
             is_member = False
         specs.append(
-            ui_nodes.TrustedNodeSpec(
+            TrustedNodeSpec(
                 node_id=descriptor.id.value,
                 display_name=descriptor.display_name,
                 hostname=descriptor.hostname,
@@ -156,11 +160,11 @@ def manual_node_specs(
     manual_node_ids: Iterable[str] = (),
     *,
     disconnected_ids: Iterable[Any] = (),
-) -> list[ui_nodes.TrustedNodeSpec]:
+) -> list[TrustedNodeSpec]:
     """Project manually configured hosts as non-selectable trusted rows."""
 
     disconnected = frozenset(disconnected_ids)
-    specs: list[ui_nodes.TrustedNodeSpec] = []
+    specs: list[TrustedNodeSpec] = []
     for node_id in tuple(manual_node_ids):
         try:
             context = registry.context(NodeId(node_id))
@@ -169,7 +173,7 @@ def manual_node_specs(
         descriptor = context.descriptor
         record = cluster_state.record(node_id)
         specs.append(
-            ui_nodes.TrustedNodeSpec(
+            TrustedNodeSpec(
                 node_id=node_id,
                 display_name=descriptor.display_name,
                 hostname=descriptor.hostname,
@@ -201,7 +205,7 @@ def cluster_node_specs(
     cluster_state: Any = None,
     role_editable: bool = False,
     dashboard_share_active: bool = False,
-) -> list[ui_cluster.ClusterNodeSpec]:
+) -> list[ClusterNodeSpec]:
     """Project registered contexts and untrusted observations for All Systems."""
 
     selectable = {descriptor.id for descriptor in registry.selectable_descriptors()}
@@ -217,7 +221,7 @@ def cluster_node_specs(
         and _cs_epoch.coordinator_id.value != _cs_local_id
         else None
     )
-    specs: list[ui_cluster.ClusterNodeSpec] = []
+    specs: list[ClusterNodeSpec] = []
     for context in registry.contexts():
         descriptor = context.descriptor
         snapshot = context.snapshot
@@ -256,7 +260,7 @@ def cluster_node_specs(
             cs_role = descriptor.role
             cs_is_member = False
         specs.append(
-            ui_cluster.ClusterNodeSpec(
+            ClusterNodeSpec(
                 node_id=descriptor.id.value,
                 display_name=descriptor.display_name,
                 hostname=descriptor.hostname,
@@ -285,7 +289,7 @@ def cluster_node_specs(
         )
     for candidate in registry.discovered_candidates():
         specs.append(
-            ui_cluster.ClusterNodeSpec(
+            ClusterNodeSpec(
                 node_id=candidate.stable_id,
                 display_name=candidate.hostname,
                 hostname=candidate.hostname,
@@ -320,7 +324,7 @@ def local_cluster_spec(
     dashboard_share_expires_at: float = 0.0,
     coordinator_lease_expires_at: float = 0.0,
     now: float | None = None,
-) -> ui_nodes.LocalClusterSpec | None:
+) -> LocalClusterSpec | None:
     """Build the local cluster membership spec from canonical state.
 
     Returns ``None`` for a solo bootstrap (coordinator of its own single-node
@@ -367,7 +371,7 @@ def local_cluster_spec(
             if record is not None:
                 coordinator_display_name = record.display_name
 
-    return ui_nodes.LocalClusterSpec(
+    return LocalClusterSpec(
         joined=joined,
         local_role=local_role,
         coordinator_node_id=coordinator_id if joined else None,

@@ -7,11 +7,13 @@ import tkinter as tk
 from collections.abc import Callable
 from typing import Any
 
+from maintenance.ui.window_supports.deadline import deadline_delay_ms
+from maintenance.ui.window_supports.qt_timer_delivery import (
+    QtDeliveryQueue,
+    QtTimerDelivery,
+)
 
-def deadline_delay_ms(deadline: float, now: float) -> int:
-    """Convert a monotonic deadline into a non-negative Tk delay."""
-
-    return max(0, int((deadline - now) * 1000))
+__all__ = ["QtDeliveryQueue", "QtTimerDelivery", "TimerDelivery", "deadline_delay_ms"]
 
 
 class TimerDelivery:

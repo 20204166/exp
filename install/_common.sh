@@ -103,6 +103,25 @@ wheel_version() {
   echo "${name%-py3-none-any.whl}"
 }
 
+companion_wheel_path() {
+  printf '%s\n' "$(pkg_dir)/dist/expra_connect-2.2.0.4-py3-none-any.whl"
+}
+
+validate_release_artifacts() {
+  local py="$1" app_wheel="$2" root
+  root="$(pkg_dir)"
+  (cd "$root" && "$py" -m maintenance._release verify-release-artifacts \
+    "$app_wheel" --dist-dir "$root/dist")
+}
+
+install_release_wheels() {
+  local py="$1" app_wheel="$2" companion dist
+  companion="$(companion_wheel_path)"
+  dist="$(pkg_dir)/dist"
+  "$py" -m pip install --find-links "$dist" "$companion"
+  "$py" -m pip install --find-links "$dist" "$app_wheel"
+}
+
 clean_installed_package() {
   local py="$1" attempt
   shift

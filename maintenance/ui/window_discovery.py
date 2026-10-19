@@ -9,9 +9,11 @@ import secrets
 import subprocess
 import threading
 import time
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from typing import Any, cast
 
+from maintenance import __version__
 from maintenance.cluster import PeerGrantRecord, PendingPairing
 from maintenance.components import PeerConnectionManager
 from maintenance.components.cluster_storage import (
@@ -21,6 +23,7 @@ from maintenance.components.cluster_storage import (
 )
 from maintenance.components.coordinator import ComponentRefreshScheduler
 from maintenance.components.discovery_session import DiscoverySession
+from maintenance.components.network_discovery import NetworkDiscovery
 from maintenance.nodes import (
     NodeCapability,
     NodeContext,
@@ -28,6 +31,9 @@ from maintenance.nodes import (
     NodeIdentityStatus,
     NodePermission,
     NodeStatus,
+    generate_node_secret,
+    is_trusted_descriptor,
+    node_identity_fingerprint,
     node_operation_key,
 )
 from maintenance.remote import (
@@ -36,16 +42,20 @@ from maintenance.remote import (
     PairingRequest,
     PeerGrant,
     RemoteAuthError,
+    RemoteProcessActionBackend,
     RemoteRequest,
+    RemoteService,
+    RemoteSocketServer,
     RemoteUnavailableError,
     build_trusted_transport,
 )
 from maintenance.remote_security import ensure_tls_material, server_context
 from maintenance.remote_support.protocol import PairingControlRequest
 from maintenance.remote_support.server import PEER_SERVICE_DEFAULT_PORT
+from maintenance.remote_support.transport import SocketRemoteTransport
 from maintenance.ui import discovery_refresh as ui_discovery_refresh
 from maintenance.ui import render_coordinator as ui_render
-from maintenance.ui.window_supports.timer_delivery import deadline_delay_ms
+from maintenance.ui.window_supports.deadline import deadline_delay_ms
 
 JOB_UPLOAD_DIVISOR = 5
 
@@ -60,11 +70,30 @@ def should_upload_job(sequence: int, has_active_job: bool) -> bool:
 LOGGER = logging.getLogger(__name__)
 
 
-def _window_symbols() -> Any:
-    # Keep the historical window-module patch seams for injected transports.
-    import window
+@dataclass(frozen=True)
+class DiscoveryRuntime:
+    """Canonical service constructors used by discovery/listener adapters."""
 
-    return window
+    remote_service: Any = RemoteService
+    remote_socket_server: Any = RemoteSocketServer
+    network_discovery: Any = NetworkDiscovery
+    secret_factory: Callable[[], str] = generate_node_secret
+    app_version: str = __version__
+    approve_pairing: Callable[[str, str], bool] = lambda _title, _message: False
+    approve_elevation: Callable[[str, str], bool] = lambda _title, _message: False
+    attempt_pending_trust_revocations: Callable[[Any, str], None] | None = None
+    propagate_coordinator_lease: Callable[[Any, str | None], None] | None = None
+    authenticated_node_provider: Any = AuthenticatedNodeProvider
+    socket_remote_transport: Any = SocketRemoteTransport
+    trusted_transport_factory: Callable[[Any], Any] = build_trusted_transport
+    is_trusted: Callable[[Any], bool] = is_trusted_descriptor
+    identity_fingerprint: Callable[[NodeId], str] = node_identity_fingerprint
+    operation_key: Callable[[NodeId, str], str] = node_operation_key
+
+
+def _runtime(controller: Any) -> DiscoveryRuntime:
+    """Return the host's explicitly composed discovery callbacks."""
+    return controller.__dict__.get("_discovery_runtime") or DiscoveryRuntime()
 
 
 def _lan_address_key(addr: str) -> int:
@@ -92,11 +121,13 @@ def _lan_address_key(addr: str) -> int:
     return 4
 
 
-def get_discovery_session(controller: Any) -> DiscoverySession:
+def get_discovery_session(
+    controller: Any, *, runtime: DiscoveryRuntime | None = None
+) -> DiscoverySession:
     session = controller.__dict__.get("_discovery_session")
     if session is None:
-        window = _window_symbols()
-        session = window.DiscoverySession(
+        runtime = runtime or _runtime(controller)
+        session = DiscoverySession(
             coordinator=controller._coordinator,
             registry=controller._node_registry,
             get_cluster_state=lambda: controller.__dict__.get("_cluster_state"),
@@ -110,8 +141,8 @@ def get_discovery_session(controller: Any) -> DiscoverySession:
             on_candidate=controller._on_discovered_candidate,
             on_lost=controller._on_discovered_lost,
             on_stabilized=lambda: controller._queue_discovery_presentation(False),
-            discovery_factory=window.NetworkDiscovery,
-            app_version=window.__version__,
+            discovery_factory=runtime.network_discovery,
+            app_version=runtime.app_version,
             is_closing=lambda: controller._is_closing,
             get_listener_endpoint=controller._listener_endpoint,
             on_presence_changed=controller._reconcile_peer_connections,
@@ -135,7 +166,9 @@ def listener_endpoint(
     )
 
 
-def start_peer_listener(controller: Any) -> None:
+def start_peer_listener(
+    controller: Any, *, runtime: DiscoveryRuntime | None = None
+) -> None:
     """Start the TLS target listener, including before the first grant exists."""
     if controller.__dict__.get("_peer_server") is not None:
         return
@@ -152,8 +185,8 @@ def start_peer_listener(controller: Any) -> None:
         controller._node_registry.local_id() or NodeId("local")
     )
     descriptor = local_context.descriptor
-    window = _window_symbols()
-    service = window.RemoteService(
+    runtime = runtime or _runtime(controller)
+    service = runtime.remote_service(
         node_id=descriptor.id,
         display_name=descriptor.display_name,
         hostname=descriptor.hostname,
@@ -162,8 +195,8 @@ def start_peer_listener(controller: Any) -> None:
         capabilities=descriptor.capabilities,
         provider=local_context.provider,
         process_manager=local_context.process_manager,
-        secret=window.generate_node_secret(),
-        app_version=window.__version__,
+        secret=runtime.secret_factory(),
+        app_version=runtime.app_version,
         grants=grants,
         identity_fingerprint=descriptor.identity_fingerprint,
         cluster_id=controller._cluster_state.cluster_id,
@@ -189,7 +222,7 @@ def start_peer_listener(controller: Any) -> None:
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         LOGGER.warning("Remote peer listener unavailable: %s", error)
         return
-    server = window.RemoteSocketServer(
+    server = runtime.remote_socket_server(
         service,
         host="0.0.0.0",
         ssl_context=tls_context,
@@ -455,13 +488,8 @@ def handle_pairing_request(controller: Any, request: PairingRequest) -> dict[str
 
     def ask_on_ui() -> None:
         try:
-            window = _window_symbols()
             LOGGER.info("Showing pairing dialog for %s", request.caller_node_id.value)
-            try:
-                controller.master.lift()
-            except Exception:
-                pass
-            approved = window.messagebox.askyesno(
+            approved = _runtime(controller).approve_pairing(
                 "Approve peer pairing",
                 (
                     f"Allow {request.caller_node_id.value} to read this system?\n\n"
@@ -469,7 +497,6 @@ def handle_pairing_request(controller: Any, request: PairingRequest) -> dict[str
                     f"TLS fingerprint: {request.transport_fingerprint}\n"
                     f"Requested permissions: {', '.join(sorted(p.value for p in request.permissions))}"
                 ),
-                parent=controller.master,
             )
             LOGGER.info(
                 "Pairing dialog answered for %s: approved=%s",
@@ -707,9 +734,7 @@ def handle_elevation_request(
     prior = controller._cluster_state.grant(request.caller_node_id.value)
     if prior is None or not hmac.compare_digest(prior.secret, request.current_secret):
         return False
-    elevation_lock = controller.__dict__.setdefault(
-        "_elevation_lock", threading.Lock()
-    )
+    elevation_lock = controller.__dict__.setdefault("_elevation_lock", threading.Lock())
     if not elevation_lock.acquire(blocking=False):
         return False
     result: dict[str, bool] = {"approved": False}
@@ -717,15 +742,13 @@ def handle_elevation_request(
 
     def ask_on_ui() -> None:
         try:
-            window = _window_symbols()
-            approved = window.messagebox.askyesno(
+            approved = _runtime(controller).approve_elevation(
                 "Approve permission elevation",
                 (
                     f"Allow {request.caller_node_id.value} additional access?\n\n"
                     f"Requested permissions: "
                     f"{', '.join(sorted(p.value for p in request.permissions))}"
                 ),
-                parent=controller.master,
             )
             if not approved:
                 return
@@ -917,7 +940,7 @@ def connect_peer(
         node_id=context.node_id,
         secret=record.secret,
         caller_node_id=NodeId(controller._cluster_state.local_node_id),
-        transport=build_trusted_transport(record),
+        transport=_runtime(controller).trusted_transport_factory(record),
     )
     hello = provider.hello(cancel_event=cancel_event)
     if hello.get("node_id") != context.node_id.value:
@@ -942,7 +965,7 @@ def attach_peer(
     if context.descriptor.identity_fingerprint not in (None, fingerprint):
         return
     context.provider = provider
-    context.process_manager = _window_symbols().RemoteProcessActionBackend(provider)
+    context.process_manager = RemoteProcessActionBackend(provider)
     context.scheduler = ComponentRefreshScheduler()
     context.coordinator = controller._coordinator
     context.descriptor = replace(
@@ -1026,7 +1049,9 @@ def _renew_local_coordinator_lease(
         )
     except FencingError:
         return
-    _window_symbols().propagate_coordinator_lease(controller)
+    callback = _runtime(controller).propagate_coordinator_lease
+    if callback is not None:
+        callback(controller, None)
 
 
 def reconcile_peer_connections(controller: Any) -> None:
@@ -1170,9 +1195,7 @@ def on_discovered_candidate(controller: Any, candidate: Any) -> None:
             context = registry.context(NodeId(candidate.stable_id))
         except KeyError:
             context = None
-        if context is not None and _window_symbols().is_trusted_descriptor(
-            context.descriptor
-        ):
+        if context is not None and _runtime(controller).is_trusted(context.descriptor):
             trusted_descriptor = context.descriptor
         trusted_updated = controller._sync_trusted_node_endpoint(candidate)
         if trusted_descriptor is not None:
@@ -1190,8 +1213,11 @@ def on_discovered_candidate(controller: Any, candidate: Any) -> None:
                 controller._nodes_status(
                     f"Verified {descriptor.display_name} at a new address"
                 )
-    _window_symbols().attempt_pending_trust_revocations(controller, candidate.stable_id)
-    _window_symbols().propagate_coordinator_lease(controller, candidate.stable_id)
+    runtime = _runtime(controller)
+    if runtime.attempt_pending_trust_revocations is not None:
+        runtime.attempt_pending_trust_revocations(controller, candidate.stable_id)
+    if runtime.propagate_coordinator_lease is not None:
+        runtime.propagate_coordinator_lease(controller, candidate.stable_id)
 
 
 def on_discovered_lost(controller: Any, stable_id: str) -> None:
@@ -1208,9 +1234,7 @@ def on_discovered_lost(controller: Any, stable_id: str) -> None:
             context = registry.context(NodeId(stable_id))
         except KeyError:
             context = None
-        if context is not None and _window_symbols().is_trusted_descriptor(
-            context.descriptor
-        ):
+        if context is not None and _runtime(controller).is_trusted(context.descriptor):
             trusted_descriptor = context.descriptor
     if trusted_descriptor is not None:
         controller.__dict__["_discovery_trusted_refresh_pending"] = True
@@ -1273,7 +1297,8 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
     except (AttributeError, KeyError):
         return False
     descriptor = context.descriptor
-    if descriptor.is_local or not _window_symbols().is_trusted_descriptor(descriptor):
+    runtime = _runtime(controller)
+    if descriptor.is_local or not runtime.is_trusted(descriptor):
         return False
     record = state.record(descriptor.id.value)
     if record is None:
@@ -1308,7 +1333,7 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
         record.identity_fingerprint is None
         and candidate.identity_fingerprint is not None
         and candidate.identity_fingerprint
-        == _window_symbols().node_identity_fingerprint(descriptor.id)
+        == runtime.identity_fingerprint(descriptor.id)
     )
     needs_identity_recovery = (
         descriptor.identity_status is NodeIdentityStatus.MISMATCH
@@ -1333,16 +1358,18 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
         return False
 
     # Build the provider (cheap — no network call yet).
-    window = _window_symbols()
+    runtime = _runtime(controller)
     try:
-        provider = window.AuthenticatedNodeProvider(
+        provider = runtime.authenticated_node_provider(
             node_id=descriptor.id,
             secret=record.secret,
             caller_node_id=NodeId(controller._cluster_state.local_node_id),
             transport=(
-                build_trusted_transport(replace(record, host=address, port=port))
+                runtime.trusted_transport_factory(
+                    replace(record, host=address, port=port)
+                )
                 if record.transport_fingerprint
-                else window.SocketRemoteTransport(address, port)
+                else runtime.socket_remote_transport(address, port)
             ),
         )
     except Exception:  # noqa: BLE001 - provider construction failure means no update.
@@ -1365,11 +1392,9 @@ def sync_trusted_node_endpoint(controller: Any, candidate: Any) -> bool:
     snap_record = record
     snap_candidate_fingerprint = candidate.identity_fingerprint
 
-    key = node_operation_key(node_id, "endpoint_verify")
+    key = runtime.operation_key(node_id, "endpoint_verify")
 
-    def _task(
-        cancel_event: threading.Event, _progress: Any
-    ) -> Any:
+    def _task(cancel_event: threading.Event, _progress: Any) -> Any:
         return provider.hello()
 
     def _on_result(_key: str, hello: Any) -> None:
@@ -1474,7 +1499,9 @@ def _finish_endpoint_verify(
         port=port,
         platform=descriptor.platform,
         identity_fingerprint=(
-            candidate_fingerprint if needs_identity_hydration else record.identity_fingerprint
+            candidate_fingerprint
+            if needs_identity_hydration
+            else record.identity_fingerprint
         ),
         transport_fingerprint=record.transport_fingerprint,
     )

@@ -3,6 +3,9 @@ send2trash>=1.8
 nvidia-ml-py>=12.0; platform_system != "Darwin"
 zeroconf>=0.131
 cryptography>=3.0
+PySide6>=6.7
+--find-links dist
+expra-connect==2.2.0.4
 
 # Dev-only static-analysis gates (pinned for reproducible checks)
 ruff==0.16.6

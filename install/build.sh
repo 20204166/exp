@@ -20,6 +20,9 @@ isolation="${SA_BUILD_ISOLATION:-auto}"
 
 require_python "$py" || exit 1
 
+(cd "$here" && "$py" -m maintenance._release verify-companion-wheel \
+  "$here/dist/expra_connect-2.2.0.4-py3-none-any.whl")
+
 cleanup() { rm -rf "$here/build" "$here"/*.egg-info; }
 trap cleanup EXIT
 
@@ -78,5 +81,6 @@ echo "Building system-analyzer wheel from: $here"
 "$py" -m maintenance._release sync-artifacts --package-dir "$here"
 built_ok=1
 echo "Built wheels:"
-ls -1 "$here"/dist/system_analyzer-*.whl
+ls -1 "$here"/dist/system_analyzer-*.whl \
+  "$here/dist/expra_connect-2.2.0.4-py3-none-any.whl"
 echo "Building does not install. Run install.sh to install explicitly."

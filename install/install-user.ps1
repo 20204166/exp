@@ -24,11 +24,12 @@ if (Test-VenvPython $py) {
 $wheel = Get-WheelPath $Version
 Write-Host "System interpreter: $($py -join ' ') (Python $(Get-PythonVersion $py))"
 Write-Host "Verifying wheel: $(Split-Path $wheel -Leaf)"
+Verify-ReleaseArtifacts $py $wheel
 Invoke-Versioned $py "maintenance._release" @("verify-wheel", $wheel)
 
 Write-Host "Installing into the user environment (no venv)..."
 Remove-InstalledPackage $py
-Install-UserWheel $py $wheel
+Install-UserWheels $py @((Get-CompanionWheelPath), $wheel)
 Verify-InstalledWheel $py (Get-WheelVersion $wheel)
 
 $binDir = & $py -c "import os,sysconfig;print(sysconfig.get_path('scripts', scheme='nt_user' if os.name=='nt' else 'posix_user'))" 2>$null

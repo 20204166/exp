@@ -106,6 +106,7 @@ class ValidateTargetPlacementTests(unittest.TestCase):
         )
 
         self.assertIsInstance(decision, PlacementDecision)
+        assert decision is not None
         self.assertEqual(decision.selected_node_id, remote.node_id)
 
     def test_rejects_a_target_missing_the_required_capability(self) -> None:
@@ -130,6 +131,7 @@ class ValidateTargetPlacementTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(decision)
+        assert decision is not None
         self.assertIsNone(decision.selected_node_id)
         self.assertIn((remote.node_id, "missing capability"), decision.rejected)
 
@@ -154,6 +156,7 @@ class ValidateTargetPlacementTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(decision)
+        assert decision is not None
         self.assertIsNone(decision.selected_node_id)
 
     def test_never_selects_a_different_node_than_the_explicit_target(self) -> None:
@@ -186,6 +189,7 @@ class ValidateTargetPlacementTests(unittest.TestCase):
             required_capability=NodeCapability.COMPONENT_READ,
         )
 
+        assert decision is not None
         self.assertIsNone(decision.selected_node_id)
         self.assertNotIn(NodeId("other"), decision.eligible_node_ids)
 
@@ -325,9 +329,7 @@ class BuildMovableViewsTests(unittest.TestCase):
         registry.register_context(worker)
         controller = _make_controller(registry)
         state = self._cluster_state(
-            RoleAssignment(
-                frozenset({ClusterRole.WORKER}), node_id=NodeId("worker1")
-            )
+            RoleAssignment(frozenset({ClusterRole.WORKER}), node_id=NodeId("worker1"))
         )
         views = window_placement.build_movable_views(controller, cluster_state=state)
         worker_view = next(v for v in views if v.node_id == NodeId("worker1"))

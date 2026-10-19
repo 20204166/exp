@@ -22,6 +22,7 @@ from maintenance.ui import layout as ui_layout
 from maintenance.ui import scan_status
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
+from maintenance.ui.page_specs import CardControlSpec, IntervalControlSpec
 
 _SECONDS_UNIT = "seconds"
 
@@ -43,27 +44,6 @@ class PreferencesPageCallbacks:
     on_reset: Callable[[], None]
     on_full_system_scan_change: Callable[[bool], None]
     on_appearance_change: Callable[[str], None] | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class IntervalControlSpec:
-    """Presentation data for one interval Spinbox (values in whole seconds)."""
-
-    key: str
-    title: str
-    seconds: int
-    minimum_seconds: int
-    maximum_seconds: int
-    step_seconds: int
-
-
-@dataclass(frozen=True, slots=True)
-class CardControlSpec:
-    """Presentation data for one card visibility Checkbutton."""
-
-    key: str
-    title: str
-    enabled: bool
 
 
 class PreferencesPage:

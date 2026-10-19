@@ -13,10 +13,11 @@ stable host and only ever shown/hidden, so page state, widgets, scroll
 positions and live Tk variables are preserved across navigation.
 """
 
-import tkinter as tk
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+from PySide6.QtWidgets import QWidget
 
 from maintenance.components.coordinator import CachePolicy
 
@@ -142,6 +143,23 @@ class PageRouter:
         destination = self._pages[key]
         previous_key = self._active_key
         previous_page = self._pages[previous_key] if previous_key is not None else None
+        if isinstance(destination, QWidget):
+            if previous_page is not None:
+                previous_page.hide()
+            try:
+                destination.show()
+            except Exception:
+                destination.hide()
+                if previous_page is not None:
+                    previous_page.show()
+                raise
+            self._active_key = key
+            return destination
+
+        # Transitional Tk route: remaining pages are migrated in later plan
+        # sections. Qt consumers use visibility, never geometry-manager APIs.
+        import tkinter as tk
+
         if previous_page is not None:
             previous_page.pack_forget()
 

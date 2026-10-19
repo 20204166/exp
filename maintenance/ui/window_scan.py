@@ -4,33 +4,55 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, cast
 
+from maintenance.components import DashboardScanLifecycle, ScanCoordinator
+from maintenance.components.scan_support import (
+    DOWNLOADS_SCAN_CANCELLED,
+    SCAN_CANCELLED_NOTICE,
+    call_legacy_compatible,
+)
 from maintenance.models import DashboardSnapshot
 from maintenance.nodes import (
     ConnectionState,
+    LocalNodeProvider,
     NodeCapability,
     NodeConnectionStatus,
     NodeId,
     NodePermission,
     NodeSnapshot,
+    local_node_descriptor,
 )
 from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui import window_placement as ui_window_placement
 
 
-def _window_symbols() -> Any:
-    # Keep historical window-module patch seams for provider compatibility.
-    import window
+@dataclass(frozen=True)
+class ScanRuntime:
+    """Explicit dependencies that may differ between desktop shells/tests."""
 
-    return window
+    scan_coordinator_factory: Callable[[], Any] = ScanCoordinator
+    dashboard_scan_lifecycle_factory: Callable[..., Any] = DashboardScanLifecycle
+    legacy_compatible: Callable[..., Any] = call_legacy_compatible
+    local_node_provider_factory: Callable[..., Any] = LocalNodeProvider
+    local_node_descriptor_factory: Callable[[], Any] = local_node_descriptor
+    downloads_scan_cancelled: str = DOWNLOADS_SCAN_CANCELLED
+    scan_cancelled_notice: str = SCAN_CANCELLED_NOTICE
+
+
+DEFAULT_SCAN_RUNTIME = ScanRuntime()
+
+
+def _runtime(controller: Any) -> ScanRuntime:
+    return controller.__dict__.get("_scan_runtime", DEFAULT_SCAN_RUNTIME)
 
 
 def scan_coordinator_state(controller: Any) -> Any:
     coordinator = controller.__dict__.get("_scan_coordinator")
     if coordinator is None:
-        window = _window_symbols()
-        coordinator = window.ScanCoordinator()
+        coordinator = _runtime(controller).scan_coordinator_factory()
         controller.__dict__["_scan_coordinator"] = coordinator
     return coordinator
 
@@ -38,8 +60,7 @@ def scan_coordinator_state(controller: Any) -> Any:
 def dashboard_scan_lifecycle(controller: Any) -> Any:
     lifecycle = controller.__dict__.get("_dashboard_scan_lifecycle_obj")
     if lifecycle is None:
-        window = _window_symbols()
-        lifecycle = window.DashboardScanLifecycle(
+        lifecycle = _runtime(controller).dashboard_scan_lifecycle_factory(
             coordinator=controller._scan_coordinator_state(),
             is_closing=lambda: controller._is_closing,
             schedule_timer=controller._schedule_timer,
@@ -128,11 +149,11 @@ def handle_analyze(controller: Any) -> None:
             )
 
         def dashboard_task() -> DashboardSnapshot:
-            window = _window_symbols()
+            runtime = _runtime(controller)
             provider_snapshot = getattr(type(source_provider), "node_snapshot", None)
             if callable(provider_snapshot):
                 provider_snapshot = cast(Any, source_provider).node_snapshot
-                result = window.call_legacy_compatible(
+                result = runtime.legacy_compatible(
                     lambda: provider_snapshot(
                         cancel_event=cancel_event,
                         progress_callback=report_progress,
@@ -140,7 +161,7 @@ def handle_analyze(controller: Any) -> None:
                     lambda: provider_snapshot(),
                 )
             else:
-                dashboard = window.call_legacy_compatible(
+                dashboard = runtime.legacy_compatible(
                     lambda: source_provider.dashboard_snapshot(
                         cancel_event=cancel_event,
                         progress_callback=report_progress,
@@ -150,9 +171,9 @@ def handle_analyze(controller: Any) -> None:
                 descriptor = (
                     source_context.descriptor
                     if source_context is not None
-                    else window.local_node_descriptor()
+                    else runtime.local_node_descriptor_factory()
                 )
-                result = window.LocalNodeProvider(
+                result = runtime.local_node_provider_factory(
                     source_provider, descriptor
                 ).snapshot_from_dashboard(dashboard)
             if not isinstance(result, NodeSnapshot):
@@ -311,7 +332,7 @@ def show_error_for_generation(
     *,
     node_id: NodeId | None = None,
 ) -> None:
-    window = _window_symbols()
+    runtime = _runtime(controller)
     rerun_requested = controller._resolution_for_generation(generation)
     if rerun_requested is None:
         return
@@ -334,10 +355,14 @@ def show_error_for_generation(
     if node_id is not None and node_id != controller.__dict__.get("_selected_node_id"):
         controller._schedule_rerun_if_requested(rerun_requested)
         return
-    if message == window.DOWNLOADS_SCAN_CANCELLED:
+    if message == runtime.downloads_scan_cancelled:
         controller._set_busy(False)
         controller._reset_progress_bar()
-        controller.refreshed_label.config(text=window.SCAN_CANCELLED_NOTICE)
+        show_notice = getattr(controller, "_show_scan_cancelled_notice", None)
+        if callable(show_notice):
+            show_notice(runtime.scan_cancelled_notice)
+        elif hasattr(controller, "refreshed_label"):
+            controller.refreshed_label.config(text=runtime.scan_cancelled_notice)
         controller._schedule_rerun_if_requested(rerun_requested)
         return
     controller._show_error(message)

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "system-analyzer": {
+      "command": "./tools/system_analyzer_mcp/run.sh",
+      "args": []
+    }
+  }
+}

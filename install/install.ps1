@@ -8,9 +8,9 @@ Require-Python $py
 $wheel = Get-WheelPath $Version
 Write-Host "Target python: $($py -join ' ')"
 Write-Host "Before:"; Show-InstalledVersion $py
+Verify-ReleaseArtifacts $py $wheel
 Remove-InstalledPackage $py
-& $py -m pip install --no-index --no-deps --force-reinstall $wheel
-if ($LASTEXITCODE -ne 0) { throw "pip install failed (exit $LASTEXITCODE)" }
+Install-ReleaseWheels $py $wheel
 Verify-InstalledWheel $py (Get-WheelVersion $wheel)
 Write-Host "After:"; Show-InstalledVersion $py
 Write-Host "Verify: system-analyzer-snapshot --help"

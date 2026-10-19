@@ -66,14 +66,23 @@ choose_python() {
 
 py="$(choose_python)"
 download "$base/SHA256SUMS" "$tmp/SHA256SUMS"
-wheel="$(tail -n 1 "$tmp/SHA256SUMS" | tr -s ' ' | cut -d' ' -f2)"
-[ -n "$wheel" ] || { echo "Could not determine the latest wheel" >&2; exit 1; }
+app_entry="$(awk '$2 ~ /^system_analyzer-[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-py3-none-any\.whl$/ { if (++count > 1) exit 1; print $1, $2 } END { if (count != 1) exit 1 }' "$tmp/SHA256SUMS")" \
+  || { echo "Could not identify exactly one application wheel" >&2; exit 1; }
+companion_name="expra_connect-2.2.0.4-py3-none-any.whl"
+companion_entry="$(awk -v name="$companion_name" '$2 == name { if (++count > 1) exit 1; print $1, $2 } END { if (count != 1) exit 1 }' "$tmp/SHA256SUMS")" \
+  || { echo "Could not identify the pinned expra-connect wheel" >&2; exit 1; }
+read -r app_expected wheel <<<"$app_entry"
+read -r companion_expected companion <<<"$companion_entry"
 download "$base/$wheel" "$tmp/$wheel"
-expected="$(tail -n 1 "$tmp/SHA256SUMS" | cut -d' ' -f1)"
-if command -v sha256sum >/dev/null 2>&1; then actual="$(sha256sum "$tmp/$wheel" | cut -d' ' -f1)"
-elif command -v shasum >/dev/null 2>&1; then actual="$(shasum -a 256 "$tmp/$wheel" | cut -d' ' -f1)"
-else actual="$("$py" -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$tmp/$wheel")"; fi
-[ "$expected" = "$actual" ] || { echo "Wheel checksum mismatch" >&2; exit 1; }
+download "$base/$companion" "$tmp/$companion"
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+  else "$py" -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; fi
+}
+[ "$app_expected" = "$(sha256_file "$tmp/$wheel")" ] || { echo "Application wheel checksum mismatch" >&2; exit 1; }
+[ "$companion_expected" = "$(sha256_file "$tmp/$companion")" ] || { echo "expra-connect wheel checksum mismatch" >&2; exit 1; }
 
 install_pip() {
   local err; err="$(mktemp)"
@@ -140,7 +149,7 @@ uninstall_pip() {
 }
 
 clean_user_installed_package
-install_pip "$py" -m pip install --user "${reinstall_flag[@]}" "$tmp/$wheel"
+install_pip "$py" -m pip install --user "${reinstall_flag[@]}" "$tmp/$companion" "$tmp/$wheel"
 expected_version="${wheel#system_analyzer-}"
 expected_version="${expected_version%-py3-none-any.whl}"
 (cd / && "$py" - "$expected_version" <<'PY'

@@ -1,5 +1,9 @@
 """Reusable presentation primitives for dialogs, cards and dashboards.
 
+The ``qt_*`` helpers are the migration target. Legacy Tk helpers remain
+temporarily for consumers assigned to later plan sections; they are not a
+second long-term UI implementation.
+
 Every helper here is presentation-only and widget-agnostic about *which*
 tkinter it constructs from: callers pass their own widget classes
 (``frame_cls``, ``label_cls``, ``canvas_cls``, ...) so existing test seams

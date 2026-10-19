@@ -21,6 +21,11 @@ from maintenance.ui import layout as ui_layout
 from maintenance.ui import node_presentation
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
+from maintenance.ui.page_specs import (
+    DiscoveredPeerSpec,
+    LocalClusterSpec,
+    TrustedNodeSpec,
+)
 
 _DEFAULT_COLOR = "indigo"
 
@@ -63,71 +68,6 @@ class NodesConnectionsCallbacks:
     on_open_pairing: Callable[[Any], None] = _noop_open_pairing
     on_details: Callable[[Any], None] = _noop_details
     on_share_dashboard: Callable[[], None] | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DiscoveredPeerSpec:
-    """Presentation data for one discovered (untrusted) peer."""
-
-    node_id: str
-    hostname: str
-    app_version: str
-    compatible: bool
-    connectable: bool
-    port: int | None
-    identity_fingerprint: str | None = None
-    transport_fingerprint: str | None = None
-    pairing_state: str = "discovered"
-    has_pair_relationship: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class LocalClusterSpec:
-    """Local machine's cluster membership status and dashboard-sharing consent.
-
-    Built from ``ClusterState`` alone; never fabricates trust records.
-    """
-
-    joined: bool
-    local_role: str
-    coordinator_node_id: str | None
-    coordinator_display_name: str | None
-    coordinator_status: str
-    dashboard_share_active: bool
-    dashboard_share_expires_at: float
-    has_peer_grants: bool
-    coordinator_lease_expires_at: float = 0.0
-    coordinator_lease_healthy: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class TrustedNodeSpec:
-    """Presentation data for one trusted/authorised node."""
-
-    node_id: str
-    display_name: str
-    hostname: str
-    color: str | None
-    status: str
-    host: str
-    port: int | None
-    selectable: bool
-    openable: bool = False
-    is_manual: bool = False
-    identity_fingerprint: str | None = None
-    identity_status: str = "unverified"
-    permissions: tuple[str, ...] = ()
-    pairing_state: str = "trusted"
-    target_state: str = "Unknown"
-    role: str = "worker"
-    roles: tuple[str, ...] = ()
-    role_editable: bool = False
-    paused: bool = False
-    has_active_job: bool = False
-    connection_status: str = "unknown"
-    manual_disconnected: bool = False
-    retry_automatic: bool = True
-    is_cluster_member: bool = False
 
 
 class NodesConnectionsPage:
@@ -378,19 +318,19 @@ class NodesConnectionsPage:
                 f" · {spec.coordinator_status.title()}{lease_part}"
             )
         elif spec.joined:
-            coordinator_part = (
-                f"  ·  Coordinator: {spec.coordinator_node_id or '—'}"
-            )
+            coordinator_part = f"  ·  Coordinator: {spec.coordinator_node_id or '—'}"
         else:
             coordinator_part = ""
-        self._cluster_status_label.config(
-            text=f"Role: {role_label}{coordinator_part}"
-        )
+        self._cluster_status_label.config(text=f"Role: {role_label}{coordinator_part}")
         if spec.dashboard_share_active:
             remaining = max(0, spec.dashboard_share_expires_at - _time.time())
             minutes = int(remaining) // 60
             seconds = int(remaining) % 60
-            coord_name = spec.coordinator_display_name or spec.coordinator_node_id or "coordinator"
+            coord_name = (
+                spec.coordinator_display_name
+                or spec.coordinator_node_id
+                or "coordinator"
+            )
             share_text = (
                 f"Dashboard sharing: Shared with {coord_name}"
                 f" · expires in {minutes}:{seconds:02d}"
@@ -724,7 +664,9 @@ class NodesConnectionsPage:
             membership = f"{spec.role.title()} · Cluster member"
         else:
             membership = "Not in cluster"
-        role_status = f"{node_presentation.trust_label('trusted')} · {membership} · {conn_label}"
+        role_status = (
+            f"{node_presentation.trust_label('trusted')} · {membership} · {conn_label}"
+        )
         if spec.target_state != "Unknown":
             role_status += f" · {spec.target_state}"
         if spec.identity_status == "mismatch":
@@ -1033,7 +975,12 @@ class NodesConnectionsPage:
             )
             remove_connection.pack(side="left", padx=(0, 8))
         on_remove_job = self.callbacks.on_remove_job
-        if spec.role_editable and not spec.is_manual and spec.has_active_job and on_remove_job is not None:
+        if (
+            spec.role_editable
+            and not spec.is_manual
+            and spec.has_active_job
+            and on_remove_job is not None
+        ):
             remove_job = self.button_cls(
                 secondary_actions,
                 text="Remove job",

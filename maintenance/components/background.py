@@ -81,7 +81,52 @@ class BackgroundTaskRunner:
     """Run work off the Tkinter thread and safely deliver the result.
 
     Extracted from `maintenance/dialogs.py:21-74, 527-726`.
+
+    ``run_with_delivery`` is the toolkit-neutral Qt migration entry point:
+    callers inject the UI-owned queue's thread-safe delivery function. The
+    legacy ``run`` entry point remains temporarily for Tk dialogs assigned to
+    later migration sections.
     """
+
+    @staticmethod
+    def run_with_delivery(
+        task: Callable[[], Any],
+        on_success: Callable[[Any], None],
+        *,
+        delivery: Callable[[Callable[[], None]], None],
+        on_error: Callable[[str], None],
+        progress_task: ProgressTask | None = None,
+        cancel_event: threading.Event | None = None,
+        on_progress: ProgressCallback | None = None,
+        on_finished: Callable[[], None] | None = None,
+    ) -> threading.Thread:
+        """Run a task in a worker and enqueue every UI hook through delivery."""
+        operation_cancel_event = cancel_event or threading.Event()
+        progress_callback = on_progress
+
+        def report_progress(message: str) -> None:
+            callback = progress_callback
+            if callback is not None:
+                delivery(lambda message=message: callback(message))
+
+        def worker() -> None:
+            try:
+                result = (
+                    task()
+                    if progress_task is None
+                    else progress_task(report_progress, operation_cancel_event)
+                )
+            except Exception as error:  # noqa: BLE001 - task failures reach UI hook.
+                delivery(lambda message=str(error): on_error(message))
+            else:
+                delivery(lambda result=result: on_success(result))
+            finally:
+                if on_finished is not None:
+                    delivery(on_finished)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        return thread
 
     @staticmethod
     def run_in_thread(

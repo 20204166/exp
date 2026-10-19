@@ -9,7 +9,8 @@ from pathlib import Path
 from maintenance import instance_lock
 from maintenance._version import __version__
 from maintenance.cluster import default_cluster_path
-from window import AppWindow
+from maintenance.ui.qt_app_window import QtAppWindow as AppWindow
+from maintenance.ui.qt_application import create_application
 
 LOG_DIR_NAME = "system-analyzer"
 LOG_FILE_NAME = "system-analyzer.log"
@@ -96,6 +97,7 @@ def main() -> None:
     try:
         setup_logging()
         LOGGER.info("system-analyzer %s started", __version__)
+        create_application(sys.argv)
         app = AppWindow()
         app.run()
     finally:

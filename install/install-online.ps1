@@ -8,16 +8,34 @@ New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
     $sumsPath = Join-Path $tmp "SHA256SUMS"
     Invoke-WebRequest "$base/SHA256SUMS" -OutFile $sumsPath
-    $line = Get-Content $sumsPath | Where-Object { $_.Trim() } | Select-Object -Last 1
-    $parts = $line -split "\s+"; $expected = $parts[0]; $wheel = $parts[1]
-    $wheelPath = Join-Path $tmp $wheel
+    $entries = @{}
+    foreach ($entry in Get-Content $sumsPath) {
+        if (-not $entry.Trim()) { continue }
+        if ($entry -notmatch "^([0-9a-fA-F]{64})\s+([A-Za-z0-9_.-]+)$") {
+            throw "Invalid SHA256SUMS entry"
+        }
+        if ($entries.ContainsKey($matches[2])) { throw "Duplicate SHA256SUMS entry" }
+        $entries[$matches[2]] = $matches[1].ToLowerInvariant()
+    }
+    $appWheels = @($entries.Keys | Where-Object {
+        $_ -match "^system_analyzer-(\d+\.\d+\.\d+\.\d+)-py3-none-any\.whl$"
+    })
+    if ($appWheels.Count -ne 1) { throw "Expected exactly one application wheel in SHA256SUMS" }
+    $wheel = $appWheels[0]
     if ($wheel -notmatch "^system_analyzer-(\d+\.\d+\.\d+\.\d+)-py3-none-any\.whl$") {
-        throw "Unexpected wheel filename: $wheel"
+        throw "Unexpected application wheel filename: $wheel"
     }
     $expectedVersion = $matches[1]
+    $companion = "expra_connect-2.2.0.4-py3-none-any.whl"
+    if (-not $entries.ContainsKey($companion)) { throw "Pinned expra-connect wheel missing from SHA256SUMS" }
+    $wheelPath = Join-Path $tmp $wheel
+    $companionPath = Join-Path $tmp $companion
     Invoke-WebRequest "$base/$wheel" -OutFile $wheelPath
+    Invoke-WebRequest "$base/$companion" -OutFile $companionPath
     $actual = (Get-FileHash $wheelPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actual -ne $expected) { throw "Wheel checksum mismatch" }
+    if ($actual -ne $entries[$wheel]) { throw "Application wheel checksum mismatch" }
+    $actual = (Get-FileHash $companionPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $entries[$companion]) { throw "expra-connect wheel checksum mismatch" }
 
     function Test-VenvPython {
         param([object]$Py)
@@ -95,7 +113,7 @@ try {
     }
     $pipArgs = @("-m", "pip", "install", "--force-reinstall")
     if (-not $System) { $pipArgs += "--user" }
-    $pipArgs += @("--break-system-packages", $wheelPath)
+    $pipArgs += @("--break-system-packages", $companionPath, $wheelPath)
     & $py @pipArgs
     if ($LASTEXITCODE -ne 0) { throw "pip install failed (exit $LASTEXITCODE)" }
 

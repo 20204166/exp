@@ -4,25 +4,19 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import replace
-from tkinter import messagebox
 from typing import Any
 
-from maintenance.cluster import PendingTrustRevocation, trusted_node_record
+from maintenance.cluster import PendingTrustRevocation
 from maintenance.components.coordinator import ComponentRefreshScheduler
 from maintenance.nodes import (
-    READ_PERMISSIONS,
     NodeCapability,
-    NodeContext,
-    NodeDescriptor,
     NodeId,
     NodeIdentityStatus,
     NodeStatus,
-    NodeTrustState,
     is_trusted_descriptor,
     node_operation_key,
 )
 from maintenance.remote import (
-    READ_CAPABILITIES,
     AuthenticatedNodeProvider,
     RemoteProcessActionBackend,
     SocketRemoteTransport,
@@ -298,7 +292,11 @@ def _rejoin_stale_coordinator(controller: Any, sent_epoch: int) -> None:
     assignment = state.local_assignment
     if ClusterRole.COORDINATOR not in assignment.roles:
         return
-    manager = controller._peer_connections() if hasattr(controller, "_peer_connections") else None
+    manager = (
+        controller._peer_connections()
+        if hasattr(controller, "_peer_connections")
+        else None
+    )
     if manager is not None:
         try:
             manager.rejoin_as_worker(state, NodeId(state.local_node_id), sent_epoch)
@@ -355,9 +353,9 @@ def propagate_coordinator_lease(
 
 
 def remove_manual_host(
-    controller: Any, node_id: str, *, messagebox_module: Any = messagebox
+    controller: Any, node_id: str, *, messagebox_module: Any = None
 ) -> None:
-    if not messagebox_module.askyesno(
+    if messagebox_module is not None and not messagebox_module.askyesno(
         "Remove manual host",
         "This deletes the manual host configuration and invalidates its trust "
         "and permissions. Add it again to reconnect.",
@@ -371,7 +369,7 @@ def test_connection(
     controller: Any,
     node_id: str,
     *,
-    messagebox_module: Any = messagebox,
+    messagebox_module: Any = None,
     provider_cls: Any = AuthenticatedNodeProvider,
     transport_cls: Any = SocketRemoteTransport,
 ) -> None:
@@ -396,35 +394,39 @@ def test_connection(
 
     def on_success(result: dict[str, Any]) -> None:
         if result.get("node_id") != node_id:
-            messagebox_module.showerror(
-                "Connection Failed",
-                f"{record.display_name} answered as a different node.",
-                parent=controller.master,
-            )
+            if messagebox_module is not None:
+                messagebox_module.showerror(
+                    "Connection Failed",
+                    f"{record.display_name} answered as a different node.",
+                    parent=controller.master,
+                )
             return
         if (
             record.identity_fingerprint is not None
             and result.get("identity_fingerprint") != record.identity_fingerprint
         ):
-            messagebox_module.showerror(
-                "Connection Failed",
-                f"{record.display_name} presented a changed identity.",
-                parent=controller.master,
-            )
+            if messagebox_module is not None:
+                messagebox_module.showerror(
+                    "Connection Failed",
+                    f"{record.display_name} presented a changed identity.",
+                    parent=controller.master,
+                )
             return
         version = result.get("app_version") or "peer"
-        messagebox_module.showinfo(
-            "Connection OK",
-            f"{record.display_name} answered an authenticated hello ({version}).",
-            parent=controller.master,
-        )
+        if messagebox_module is not None:
+            messagebox_module.showinfo(
+                "Connection OK",
+                f"{record.display_name} answered an authenticated hello ({version}).",
+                parent=controller.master,
+            )
 
     def on_error(message: str) -> None:
-        messagebox_module.showerror(
-            "Connection Failed",
-            f"Could not reach {record.display_name}: {message}",
-            parent=controller.master,
-        )
+        if messagebox_module is not None:
+            messagebox_module.showerror(
+                "Connection Failed",
+                f"Could not reach {record.display_name}: {message}",
+                parent=controller.master,
+            )
 
     key = node_operation_key(node, "test_connection")
 

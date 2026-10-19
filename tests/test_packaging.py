@@ -60,9 +60,18 @@ class PyprojectConfigurationTests(unittest.TestCase):
 
     def test_dependencies_are_declared(self) -> None:
         dependencies = "\n".join(load_project()["project"]["dependencies"])
-        for requirement in ("psutil", "send2trash", "nvidia-ml-py", "zeroconf"):
+        for requirement in (
+            "psutil",
+            "send2trash",
+            "nvidia-ml-py",
+            "zeroconf",
+            "PySide6>=6.7",
+        ):
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, dependencies)
+
+        requirements = (REPO / "requirements.txt").read_text().splitlines()
+        self.assertIn("PySide6>=6.7", requirements)
 
     def test_no_publishing_registry_is_configured(self) -> None:
         text = (REPO / "pyproject.toml").read_text()
@@ -172,8 +181,14 @@ class BuildScriptReliabilityTests(unittest.TestCase):
     def test_upgrade_sh_verifies_before_installing(self) -> None:
         source = (REPO / "install" / "upgrade.sh").read_text()
         self.assertIn("verify.sh", source)
-        self.assertIn("pip install", source)
-        self.assertLess(source.index("verify.sh"), source.index("pip install"))
+        self.assertIn("install_release_wheels", source)
+        self.assertLess(
+            source.index("validate_release_artifacts"),
+            source.index("install_release_wheels"),
+        )
+        self.assertLess(
+            source.index("verify.sh"), source.index("install_release_wheels")
+        )
 
     def test_installers_clean_existing_versions_and_verify_target(self) -> None:
         common = (REPO / "install" / "_common.sh").read_text()

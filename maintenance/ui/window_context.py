@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+from maintenance.cluster import ClusterSaveError
+from maintenance.components import node_context
+from maintenance.nodes import NodeId
+from maintenance.remote import PeerGrant
 
-def build_local_node_context(controller: Any) -> None:
-    context = _window_symbols().node_context.build_local_node_context(
+LOGGER = logging.getLogger(__name__)
+
+
+def build_local_node_context(
+    controller: Any, *, context_builder: Any = node_context
+) -> None:
+    context = context_builder.build_local_node_context(
         cluster_state=controller._cluster_state,
         analyzer=controller.analyzer,
         process_manager=controller.process_manager,
@@ -23,23 +33,32 @@ def build_local_node_context(controller: Any) -> None:
     controller._selected_node_id = controller._node_registry.select(context.node_id)
 
 
-def restore_trusted_nodes(controller: Any) -> None:
+def restore_trusted_nodes(
+    controller: Any,
+    *,
+    context_builder: Any = node_context,
+    logger: Any = LOGGER,
+) -> None:
     registry = controller.__dict__.get("_node_registry")
     state = controller.__dict__.get("_cluster_state")
     if registry is None or state is None:
         return
-    window = _window_symbols()
-    window.node_context.restore_trusted_nodes(
-        registry=registry, cluster_state=state, logger=window.LOGGER
+    context_builder.restore_trusted_nodes(
+        registry=registry, cluster_state=state, logger=logger
     )
 
 
-def save_cluster_state(controller: Any, state: Any) -> bool:
-    window = _window_symbols()
+def save_cluster_state(
+    controller: Any,
+    state: Any,
+    *,
+    save_error: type[Exception] = ClusterSaveError,
+    logger: Any = LOGGER,
+) -> bool:
     try:
         controller._cluster_store.save(state)
-    except window.ClusterSaveError as error:
-        window.LOGGER.warning("Failed to save cluster settings: %s", error)
+    except save_error as error:
+        logger.warning("Failed to save cluster settings: %s", error)
         return False
     controller._cluster_state = state
     epoch = state.coordinator_epoch
@@ -54,16 +73,20 @@ def save_cluster_state(controller: Any, state: Any) -> bool:
     return True
 
 
-def sync_peer_listener_grants(controller: Any) -> None:
-    window = _window_symbols()
+def sync_peer_listener_grants(
+    controller: Any,
+    *,
+    node_id_type: Any = NodeId,
+    peer_grant_type: Any = PeerGrant,
+) -> None:
     server = controller.__dict__.get("_peer_server")
     if server is None:
         if controller._cluster_state.peer_grants:
             controller._start_peer_listener()
         return
     grants = {
-        window.NodeId(grant.caller_node_id): window.PeerGrant(
-            caller_node_id=window.NodeId(grant.caller_node_id),
+        node_id_type(grant.caller_node_id): peer_grant_type(
+            caller_node_id=node_id_type(grant.caller_node_id),
             secret=grant.secret,
             permissions=grant.permissions,
             expires_at=grant.expires_at,
@@ -74,9 +97,3 @@ def sync_peer_listener_grants(controller: Any) -> None:
         server.update_grants({})
         return
     server.update_grants(grants)
-
-
-def _window_symbols() -> Any:
-    import window
-
-    return window

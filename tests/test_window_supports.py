@@ -1,3 +1,5 @@
+import subprocess
+import sys
 import unittest
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -7,18 +9,22 @@ from unittest.mock import Mock
 from maintenance.cluster import PeerGrantRecord
 from maintenance.models import CapabilityState
 from maintenance.preferences import AppPreferences
-from maintenance.ui import nodes_connections
+from maintenance.ui import nodes_connections, page_specs
 from maintenance.ui.window_supports import card_policy, node_specs, snapshot_state
 from maintenance.ui.window_supports.timer_delivery import (
     TimerDelivery,
     deadline_delay_ms,
 )
 from tests.support.models import make_snapshot, make_summary
+from tests.support.qt import get_qapplication
 from tests.support.scheduling import FailingCancelMaster, TimerMaster
 
 
 class SnapshotStateTests(unittest.TestCase):
     def test_discovered_peer_projection_preserves_transport_fingerprint(self) -> None:
+        self.assertIs(
+            nodes_connections.DiscoveredPeerSpec, page_specs.DiscoveredPeerSpec
+        )
         candidate = SimpleNamespace(
             stable_id="peer-a",
             hostname="peer-a.local",
@@ -61,7 +67,9 @@ class SnapshotStateTests(unittest.TestCase):
 
         self.assertFalse(specs[0].has_pair_relationship)
 
-    def test_discovered_peer_with_matching_grant_has_pair_relationship_true(self) -> None:
+    def test_discovered_peer_with_matching_grant_has_pair_relationship_true(
+        self,
+    ) -> None:
         """Candidate whose NodeId matches a PeerGrantRecord → has_pair_relationship=True."""
         candidate = SimpleNamespace(
             stable_id="peer-a",
@@ -88,7 +96,9 @@ class SnapshotStateTests(unittest.TestCase):
 
         self.assertTrue(specs[0].has_pair_relationship)
 
-    def test_discovered_peer_unrelated_grant_does_not_set_pair_relationship(self) -> None:
+    def test_discovered_peer_unrelated_grant_does_not_set_pair_relationship(
+        self,
+    ) -> None:
         """A PeerGrant for a different NodeId must not affect this candidate."""
         candidate = SimpleNamespace(
             stable_id="peer-a",
@@ -115,7 +125,9 @@ class SnapshotStateTests(unittest.TestCase):
 
         self.assertFalse(specs[0].has_pair_relationship)
 
-    def test_discovered_peer_no_cluster_state_defaults_to_no_pair_relationship(self) -> None:
+    def test_discovered_peer_no_cluster_state_defaults_to_no_pair_relationship(
+        self,
+    ) -> None:
         """Omitting cluster_state is backward-compatible: no relationship assumed."""
         candidate = SimpleNamespace(
             stable_id="peer-a",
@@ -402,6 +414,137 @@ class TimerDeliveryTests(unittest.TestCase):
     def test_deadline_delay_is_milliseconds_and_never_negative(self) -> None:
         self.assertEqual(deadline_delay_ms(12.25, 12.0), 250)
         self.assertEqual(deadline_delay_ms(11.9, 12.0), 0)
+
+
+class QtDeliveryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.app = get_qapplication()
+
+    def test_qt_timer_owner_and_window_components_do_not_import_tkinter(self) -> None:
+        for module in (
+            "maintenance.ui.window_supports.qt_timer_delivery",
+            "maintenance.ui.window_components",
+        ):
+            with self.subTest(module=module):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        (
+                            f"import sys; import {module}; "
+                            "assert not any(name == 'tkinter' or "
+                            "name.startswith('tkinter.') for name in sys.modules)"
+                        ),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def pump(self) -> None:
+        from PySide6.QtTest import QTest
+
+        QTest.qWait(5)
+
+    def test_worker_callback_is_delivered_on_gui_thread_in_bounded_drains(self) -> None:
+        from maintenance.ui.window_supports.qt_timer_delivery import QtDeliveryQueue
+
+        queue = QtDeliveryQueue(batch_size=2)
+        gui_thread = self.app.thread()
+        delivered: list[object] = []
+        worker_thread: list[object] = []
+        import threading
+
+        def submit() -> None:
+            worker_thread.append(threading.current_thread())
+            for _ in range(3):
+                queue.submit(lambda: delivered.append(QThread.currentThread()))
+
+        from PySide6.QtCore import QThread
+
+        worker = threading.Thread(target=submit)
+        worker.start()
+        worker.join()
+        self.pump()
+        self.assertEqual(len(delivered), 3)
+        self.assertTrue(all(thread is gui_thread for thread in delivered))
+        self.assertNotEqual(worker_thread[0], gui_thread)
+        queue.close()
+
+    def test_close_drops_pending_callbacks_and_prevents_later_delivery(self) -> None:
+        from maintenance.ui.window_supports.qt_timer_delivery import QtDeliveryQueue
+
+        queue = QtDeliveryQueue(batch_size=1)
+        called: list[bool] = []
+        queue.submit(lambda: called.append(True))
+        queue.close()
+        self.pump()
+        self.assertEqual(called, [])
+        queue.submit(lambda: called.append(True))
+        self.pump()
+        self.assertEqual(called, [])
+
+    def test_qt_timer_cancel_and_close_suppress_callbacks(self) -> None:
+        from maintenance.ui.window_supports.qt_timer_delivery import QtTimerDelivery
+
+        delivery = QtTimerDelivery()
+        called: list[str] = []
+        timer_id = delivery.schedule(0, lambda: called.append("cancelled"))
+        self.assertTrue(delivery.cancel(timer_id))
+        delivery.schedule(0, lambda: called.append("closed"))
+        delivery.close()
+        self.pump()
+        self.assertEqual(called, [])
+
+    def test_qt_timer_cancel_all_suppresses_every_pending_callback(self) -> None:
+        from maintenance.ui.window_supports.qt_timer_delivery import QtTimerDelivery
+
+        delivery = QtTimerDelivery()
+        called: list[str] = []
+        delivery.schedule(0, lambda: called.append("first"))
+        delivery.schedule(0, lambda: called.append("second"))
+
+        delivery.cancel_all()
+        self.pump()
+
+        self.assertEqual(called, [])
+        delivery.close()
+
+    def test_callback_failure_does_not_stop_queue_drain(self) -> None:
+        from maintenance.ui.window_supports.qt_timer_delivery import QtDeliveryQueue
+
+        queue = QtDeliveryQueue()
+        called: list[str] = []
+        queue.submit(lambda: (_ for _ in ()).throw(RuntimeError("failure")))
+        queue.submit(lambda: called.append("later"))
+        self.pump()
+        self.assertEqual(called, ["later"])
+        queue.close()
+
+    def test_window_lifecycle_reuses_and_closes_qt_delivery_owners(self) -> None:
+        from PySide6.QtWidgets import QWidget
+
+        from maintenance.ui.window_lifecycle import (
+            close_qt_delivery,
+            qt_delivery_for_window,
+            qt_timer_delivery_for_window,
+        )
+
+        owner = QWidget()
+        controller = owner
+        controller.__dict__["_qt_delivery_queue"] = None
+        controller.__dict__["_qt_timer_delivery"] = None
+        queue = qt_delivery_for_window(controller)
+        timers = qt_timer_delivery_for_window(controller)
+        self.assertIs(qt_delivery_for_window(controller), queue)
+        self.assertIs(qt_timer_delivery_for_window(controller), timers)
+        close_qt_delivery(controller)
+        owner.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 
 if __name__ == "__main__":

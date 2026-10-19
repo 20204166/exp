@@ -19,6 +19,7 @@ from typing import Any
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
+from maintenance.ui.page_specs import SettingsCategorySpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,15 +32,6 @@ class SettingsHomeCallbacks:
 
     on_back: Callable[[], None]
     on_select_category: Callable[[str], None]
-
-
-@dataclass(frozen=True, slots=True)
-class SettingsCategorySpec:
-    """Presentation data for one navigation card on the Settings hub."""
-
-    key: str
-    title: str
-    description: str
 
 
 class SettingsHome:

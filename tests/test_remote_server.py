@@ -1,25 +1,32 @@
 """Tests for RemoteSocketServer port contract and PEER_SERVICE_DEFAULT_PORT."""
 
 import unittest
+from types import SimpleNamespace
 from typing import Any
 
 
 class PeerServicePortTests(unittest.TestCase):
     def test_default_port_constant_exists(self) -> None:
         from maintenance.remote_support.server import PEER_SERVICE_DEFAULT_PORT
+
         self.assertIsInstance(PEER_SERVICE_DEFAULT_PORT, int)
         self.assertGreater(PEER_SERVICE_DEFAULT_PORT, 1023)
-        self.assertLess(PEER_SERVICE_DEFAULT_PORT, 32768)  # below ephemeral range on all major platforms
+        self.assertLess(
+            PEER_SERVICE_DEFAULT_PORT, 32768
+        )  # below ephemeral range on all major platforms
 
     def test_default_port_re_exported_from_remote(self) -> None:
         from maintenance import remote
+
         self.assertTrue(hasattr(remote, "PEER_SERVICE_DEFAULT_PORT"))
         from maintenance.remote import PEER_SERVICE_DEFAULT_PORT
         from maintenance.remote_support.server import PEER_SERVICE_DEFAULT_PORT as src
+
         self.assertEqual(PEER_SERVICE_DEFAULT_PORT, src)
 
     def test_default_port_value(self) -> None:
         from maintenance.remote_support.server import PEER_SERVICE_DEFAULT_PORT
+
         self.assertEqual(PEER_SERVICE_DEFAULT_PORT, 27321)
 
 
@@ -28,8 +35,11 @@ class RemoteSocketServerPreferredPortTests(unittest.TestCase):
         from unittest.mock import MagicMock
 
         from maintenance.remote_support.server import RemoteSocketServer
+
         service = MagicMock()
-        return RemoteSocketServer(service, host="127.0.0.1", preferred_port=preferred_port)
+        return RemoteSocketServer(
+            service, host="127.0.0.1", preferred_port=preferred_port
+        )
 
     def test_preferred_port_honored_is_none_before_start(self) -> None:
         server = self._make_server(preferred_port=27321)
@@ -39,6 +49,7 @@ class RemoteSocketServerPreferredPortTests(unittest.TestCase):
         import socket
 
         from maintenance.remote_support.server import PEER_SERVICE_DEFAULT_PORT
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
@@ -61,6 +72,7 @@ class RemoteSocketServerPreferredPortTests(unittest.TestCase):
             PEER_SERVICE_DEFAULT_PORT,
             RemoteSocketServer,
         )
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as blocker:
             blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
@@ -69,7 +81,9 @@ class RemoteSocketServerPreferredPortTests(unittest.TestCase):
             except OSError:
                 self.skipTest("could not acquire port 27321 as blocker")
             service = MagicMock()
-            server = RemoteSocketServer(service, host="127.0.0.1", preferred_port=PEER_SERVICE_DEFAULT_PORT)
+            server = RemoteSocketServer(
+                service, host="127.0.0.1", preferred_port=PEER_SERVICE_DEFAULT_PORT
+            )
             try:
                 server.start()
                 self.assertIsNotNone(server.bound_port)
@@ -89,15 +103,79 @@ class RemoteSocketServerPreferredPortTests(unittest.TestCase):
 
 
 class StartPeerListenerPortTests(unittest.TestCase):
+    def test_discovery_module_import_does_not_import_tk_window(self) -> None:
+        import subprocess
+        import sys
+
+        subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; import maintenance.ui.window_discovery; "
+                    "assert 'window' not in sys.modules"
+                ),
+            ],
+            check=True,
+        )
+
+    def test_pairing_callback_is_injected_and_defaults_to_denial(self) -> None:
+        from maintenance.ui.window_discovery import DiscoveryRuntime
+
+        self.assertFalse(DiscoveryRuntime().approve_pairing("title", "message"))
+        self.assertTrue(
+            DiscoveryRuntime(
+                approve_pairing=lambda _title, _message: True
+            ).approve_pairing("title", "message")
+        )
+
+    def test_constructor_runtime_uses_injected_discovery_factory(self) -> None:
+        from maintenance.ui.window_discovery import (
+            DiscoveryRuntime,
+            get_discovery_session,
+        )
+
+        calls: dict[str, Any] = {}
+
+        class FakeDiscovery:
+            def __init__(self, **kwargs: Any) -> None:
+                calls.update(kwargs)
+
+        controller: Any = SimpleNamespace()
+        controller._coordinator = object()
+        controller._node_registry = object()
+        controller._save_cluster_state = lambda _state: True
+        controller._schedule_timer = lambda *_args: None
+        controller._cancel_timer = lambda *_args: None
+        controller._start_background_poll = lambda *_args: None
+        controller._on_discovered_candidate = lambda *_args: None
+        controller._on_discovered_lost = lambda *_args: None
+        controller._listener_endpoint = lambda: (False, None, None, None)
+        controller._reconcile_peer_connections = lambda: None
+        controller._is_closing = False
+        session = get_discovery_session(
+            controller,
+            runtime=DiscoveryRuntime(
+                network_discovery=FakeDiscovery, app_version="test"
+            ),
+        )
+        self.assertEqual(session._app_version, "test")
+        self.assertIs(session._discovery_factory, FakeDiscovery)
+
     def test_start_peer_listener_passes_preferred_port(self) -> None:
         import inspect
 
         from maintenance.ui import window_discovery
+
         src = inspect.getsource(window_discovery.start_peer_listener)
-        self.assertIn("PEER_SERVICE_DEFAULT_PORT", src,
-            "start_peer_listener must pass PEER_SERVICE_DEFAULT_PORT as preferred_port")
-        self.assertIn("preferred_port", src,
-            "start_peer_listener must use preferred_port keyword")
+        self.assertIn(
+            "PEER_SERVICE_DEFAULT_PORT",
+            src,
+            "start_peer_listener must pass PEER_SERVICE_DEFAULT_PORT as preferred_port",
+        )
+        self.assertIn(
+            "preferred_port", src, "start_peer_listener must use preferred_port keyword"
+        )
 
 
 class ListenerEndpointDiagnosticsTests(unittest.TestCase):
@@ -105,12 +183,17 @@ class ListenerEndpointDiagnosticsTests(unittest.TestCase):
         import inspect
 
         from maintenance.ui import window_discovery
+
         src = inspect.getsource(window_discovery.listener_endpoint)
-        self.assertIn("preferred_port_honored", src,
-            "listener_endpoint must include preferred_port_honored in its return value")
+        self.assertIn(
+            "preferred_port_honored",
+            src,
+            "listener_endpoint must include preferred_port_honored in its return value",
+        )
 
     def test_listener_endpoint_not_connectable_when_no_server(self) -> None:
         from maintenance.ui.window_discovery import listener_endpoint
+
         controller = type("C", (), {"__dict__": {}})()
         result = listener_endpoint(controller)
         self.assertFalse(result[0])
@@ -149,30 +232,36 @@ class PortContractIntegrityTests(unittest.TestCase):
 
     def test_no_duplicate_port_literal_outside_canonical_owner(self) -> None:
         import pathlib
+
         py_files = list(pathlib.Path("maintenance").rglob("*.py"))
         py_files += list(pathlib.Path("tests").rglob("*.py"))
         if pathlib.Path("window.py").exists():
             py_files.append(pathlib.Path("window.py"))
         matches = [
-            str(f) for f in py_files
+            str(f)
+            for f in py_files
             if "27321" in f.read_text()
             and "remote_support/server.py" not in str(f)
             and "test_remote_server.py" not in str(f)
         ]
         self.assertEqual(
-            matches, [],
+            matches,
+            [],
             f"Literal 27321 found outside canonical owner: {matches}. "
             "Import PEER_SERVICE_DEFAULT_PORT instead.",
         )
 
     def test_window_discovery_imports_constant_not_literal(self) -> None:
         import pathlib
+
         src = pathlib.Path("maintenance/ui/window_discovery.py").read_text()
         self.assertIn(
-            "PEER_SERVICE_DEFAULT_PORT", src,
+            "PEER_SERVICE_DEFAULT_PORT",
+            src,
             "window_discovery.py must import PEER_SERVICE_DEFAULT_PORT",
         )
         self.assertNotIn(
-            "27321", src,
+            "27321",
+            src,
             "window_discovery.py must not contain the literal 27321 — import the constant",
         )

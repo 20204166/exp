@@ -10,12 +10,14 @@ specialized wiring stays local.
 from queue import Queue
 from typing import Any
 
+import window as window_module
 from maintenance.components import ResourceFeatureCatalog, ScanCoordinator
 from maintenance.components.coordinator import (
     AppCoordinator,
     ComponentRefreshScheduler,
 )
 from maintenance.ui.render_coordinator import UICoordinator
+from maintenance.ui.window_discovery import DiscoveryRuntime
 from tests.support.scheduling import TimerMaster
 from window import AppWindow
 
@@ -49,5 +51,32 @@ def make_window(master: Any | None = None, **overrides: Any) -> Any:
     window._coordinator = AppCoordinator()
     window._timed_out_generation = None
     window._lease_grace_id = None
+    window._discovery_runtime = DiscoveryRuntime(
+        approve_pairing=lambda title, message: window_module.messagebox.askyesno(
+            title, message, parent=window.master
+        ),
+        approve_elevation=lambda title, message: window_module.messagebox.askyesno(
+            title, message, parent=window.master
+        ),
+        attempt_pending_trust_revocations=lambda controller, node_id: (
+            window_module.attempt_pending_trust_revocations(controller, node_id)
+        ),
+        propagate_coordinator_lease=lambda controller, node_id: (
+            window_module.propagate_coordinator_lease(controller, node_id)
+        ),
+        authenticated_node_provider=lambda **kwargs: (
+            window_module.AuthenticatedNodeProvider(**kwargs)
+        ),
+        trusted_transport_factory=lambda record: window_module.build_trusted_transport(
+            record
+        ),
+        is_trusted=lambda descriptor: window_module.is_trusted_descriptor(descriptor),
+        identity_fingerprint=lambda node_id: window_module.node_identity_fingerprint(
+            node_id
+        ),
+        operation_key=lambda node_id, operation: window_module.node_operation_key(
+            node_id, operation
+        ),
+    )
     window.__dict__.update(overrides)
     return window

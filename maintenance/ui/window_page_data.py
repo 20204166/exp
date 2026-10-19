@@ -4,11 +4,16 @@ import time
 from typing import Any
 
 from maintenance.preferences import INTERVAL_POLICIES
-from maintenance.ui import cluster_page as ui_cluster
-from maintenance.ui import nodes_connections as ui_nodes
-from maintenance.ui import preferences_page as ui_preferences
-from maintenance.ui import settings_home as ui_settings_home
 from maintenance.ui import styles as ui_styles
+from maintenance.ui.page_specs import (
+    CardControlSpec,
+    ClusterNodeSpec,
+    DiscoveredPeerSpec,
+    IntervalControlSpec,
+    LocalClusterSpec,
+    SettingsCategorySpec,
+    TrustedNodeSpec,
+)
 from maintenance.ui.window_supports import node_specs
 
 
@@ -25,29 +30,29 @@ def colors(controller: Any) -> dict[str, str]:
 
 def settings_categories(
     controller: Any,
-) -> list[ui_settings_home.SettingsCategorySpec]:
+) -> list[SettingsCategorySpec]:
     categories = [
-        ui_settings_home.SettingsCategorySpec(
+        SettingsCategorySpec(
             "preferences",
             "Preferences",
             "Refresh intervals, visible dashboard cards, scan behaviour, and interface options.",
         ),
-        ui_settings_home.SettingsCategorySpec(
+        SettingsCategorySpec(
             "nodes",
             "Nodes & Connections",
             "Discover peers, pair trusted nodes, manage manual hosts, and control local-network discovery.",
         ),
-        ui_settings_home.SettingsCategorySpec(
+        SettingsCategorySpec(
             "cluster",
             "All Systems",
             "Overview of every known machine and its connection, trust, and capability state.",
         ),
-        ui_settings_home.SettingsCategorySpec(
+        SettingsCategorySpec(
             "diagnostics",
             "Diagnostics",
             "See current work, recent failures, node reasons, and component health.",
         ),
-        ui_settings_home.SettingsCategorySpec(
+        SettingsCategorySpec(
             "help",
             "Help & Guide",
             "How System Analyzer works: installing, dashboard, thermals, pairing, "
@@ -59,10 +64,10 @@ def settings_categories(
     return categories
 
 
-def interval_specs(controller: Any) -> list[ui_preferences.IntervalControlSpec]:
+def interval_specs(controller: Any) -> list[IntervalControlSpec]:
     intervals = controller._preferences.refresh_intervals.as_dict()
     return [
-        ui_preferences.IntervalControlSpec(
+        IntervalControlSpec(
             key=feature.key,
             title=feature.title,
             seconds=intervals[feature.key] // 1000,
@@ -74,9 +79,9 @@ def interval_specs(controller: Any) -> list[ui_preferences.IntervalControlSpec]:
     ]
 
 
-def card_specs(controller: Any) -> list[ui_preferences.CardControlSpec]:
+def card_specs(controller: Any) -> list[CardControlSpec]:
     return [
-        ui_preferences.CardControlSpec(
+        CardControlSpec(
             feature.key,
             feature.title,
             feature.key in controller._preferences.visible_cards,
@@ -85,7 +90,7 @@ def card_specs(controller: Any) -> list[ui_preferences.CardControlSpec]:
     ]
 
 
-def nodes_peer_specs(controller: Any) -> list[ui_nodes.DiscoveredPeerSpec]:
+def nodes_peer_specs(controller: Any) -> list[DiscoveredPeerSpec]:
     registry = controller.__dict__.get("_node_registry")
     if registry is None:
         return []
@@ -107,7 +112,7 @@ def _peer_disconnected_ids(controller: Any) -> list[Any]:
     ]
 
 
-def nodes_trusted_specs(controller: Any) -> list[ui_nodes.TrustedNodeSpec]:
+def nodes_trusted_specs(controller: Any) -> list[TrustedNodeSpec]:
     registry = controller.__dict__.get("_node_registry")
     return (
         []
@@ -121,7 +126,7 @@ def nodes_trusted_specs(controller: Any) -> list[ui_nodes.TrustedNodeSpec]:
     )
 
 
-def nodes_manual_specs(controller: Any) -> list[ui_nodes.TrustedNodeSpec]:
+def nodes_manual_specs(controller: Any) -> list[TrustedNodeSpec]:
     registry = controller.__dict__.get("_node_registry")
     return (
         []
@@ -135,7 +140,7 @@ def nodes_manual_specs(controller: Any) -> list[ui_nodes.TrustedNodeSpec]:
     )
 
 
-def nodes_cluster_spec(controller: Any) -> ui_nodes.LocalClusterSpec | None:
+def nodes_cluster_spec(controller: Any) -> LocalClusterSpec | None:
     registry = controller.__dict__.get("_node_registry")
     if registry is None:
         return None
@@ -152,7 +157,7 @@ def nodes_cluster_spec(controller: Any) -> ui_nodes.LocalClusterSpec | None:
     )
 
 
-def cluster_specs(controller: Any) -> list[ui_cluster.ClusterNodeSpec]:
+def cluster_specs(controller: Any) -> list[ClusterNodeSpec]:
     registry = controller.__dict__.get("_node_registry")
     return (
         []
@@ -166,7 +171,9 @@ def cluster_specs(controller: Any) -> list[ui_cluster.ClusterNodeSpec]:
             ),
             dashboard_share_active=any(
                 exp > time.time()
-                for exp in controller.__dict__.get("_peer_dashboard_shares", {}).values()
+                for exp in controller.__dict__.get(
+                    "_peer_dashboard_shares", {}
+                ).values()
             ),
         )
     )

@@ -14,10 +14,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
+import shutil
+import tempfile
 import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
+from email.parser import Parser
 from pathlib import Path
 from typing import Literal
 
@@ -29,6 +33,26 @@ _WHEEL_NAME_RE = re.compile(r"^system_analyzer-(\d+\.\d+\.\d+\.\d+)-py3-none-any
 _VERSION_MODULE = Path("maintenance") / "_version.py"
 _PACKAGE_ROOT = "maintenance"
 _TOP_LEVEL_MODULES = ("main.py", "window.py", "algo.py")
+_COMPANION_VERSION = "2.2.0.4"
+_COMPANION_WHEEL_NAME = f"expra_connect-{_COMPANION_VERSION}-py3-none-any.whl"
+_COMPANION_WHEEL_SHA256 = (
+    "2207230eb5731d20cd50b375734715c0e99376630bacf873ceebc9f0d27d75fe"
+)
+_COMPANION_UPDATE_FILES = (
+    Path("README.md"),
+    Path("pyproject.toml"),
+    Path("requirements.txt"),
+    Path("maintenance/_release.py"),
+    Path("install/_common.sh"),
+    Path("install/_common.ps1"),
+    Path("install/build.sh"),
+    Path("install/build.ps1"),
+    Path("install/install-online.sh"),
+    Path("install/install-online.ps1"),
+)
+_COMPANION_WHEEL_RE = re.compile(
+    r"^expra_connect-(?P<version>\d+\.\d+\.\d+\.\d+)-py3-none-any\.whl$"
+)
 
 
 @dataclass(frozen=True)
@@ -248,16 +272,185 @@ def write_current_version(package_dir: Path, version: str) -> None:
     version_path.write_text(updated, encoding="utf-8")
 
 
-def rewrite_sha256sums(dist_dir: Path) -> None:
+def rewrite_sha256sums(dist_dir: Path, *, companion_wheel: Path | None = None) -> None:
     wheel = _newest_wheel(dist_dir)
-    lines = (
-        [f"{_sha256_bytes(wheel.read_bytes())}  {wheel.name}"]
-        if wheel is not None
-        else []
-    )
+    artifacts = [wheel] if wheel is not None else []
+    companion = companion_wheel or dist_dir / _COMPANION_WHEEL_NAME
+    if companion.is_file():
+        artifacts.append(companion)
+    lines = [
+        f"{_sha256_bytes(path.read_bytes())}  {path.name}"
+        for path in artifacts
+        if path is not None
+    ]
     (dist_dir / "SHA256SUMS").write_text(
         "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
     )
+
+
+def validate_companion_wheel(
+    wheel_path: Path,
+    *,
+    expected_version: str | None = _COMPANION_VERSION,
+    expected_sha256: str | None = _COMPANION_WHEEL_SHA256,
+) -> str:
+    """Validate an expra-connect universal wheel and return its SHA-256 digest."""
+
+    match = _COMPANION_WHEEL_RE.fullmatch(wheel_path.name)
+    if match is None:
+        raise ValueError(f"unexpected expra-connect wheel filename: {wheel_path.name}")
+    filename_version = match.group("version")
+    if expected_version is not None and filename_version != expected_version:
+        raise ValueError("expra-connect wheel has unexpected filename version")
+    actual_sha256 = _sha256_bytes(wheel_path.read_bytes())
+    if expected_sha256 is not None and actual_sha256 != expected_sha256:
+        raise ValueError("expra-connect wheel checksum mismatch")
+
+    try:
+        with zipfile.ZipFile(wheel_path) as archive:
+            metadata_paths = [
+                name
+                for name in archive.namelist()
+                if name.endswith(".dist-info/METADATA")
+            ]
+            wheel_paths = [
+                name for name in archive.namelist() if name.endswith(".dist-info/WHEEL")
+            ]
+            if len(metadata_paths) != 1 or len(wheel_paths) != 1:
+                raise ValueError("expra-connect wheel has ambiguous metadata")
+            metadata = Parser().parsestr(
+                archive.read(metadata_paths[0]).decode("utf-8")
+            )
+            wheel_metadata = Parser().parsestr(
+                archive.read(wheel_paths[0]).decode("utf-8")
+            )
+    except (OSError, UnicodeDecodeError, zipfile.BadZipFile) as error:
+        raise ValueError("invalid expra-connect wheel archive") from error
+
+    if metadata.get("Name", "").lower().replace("_", "-") != "expra-connect":
+        raise ValueError("expra-connect wheel has unexpected distribution metadata")
+    if metadata.get("Version") != filename_version:
+        raise ValueError("expra-connect wheel filename and metadata versions differ")
+    if expected_version is not None and metadata.get("Version") != expected_version:
+        raise ValueError("expra-connect wheel has unexpected version metadata")
+    tags = wheel_metadata.get_all("Tag", [])
+    if wheel_metadata.get("Root-Is-Purelib", "").lower() != "true" or tags != [
+        "py3-none-any"
+    ]:
+        raise ValueError("expra-connect wheel is not universal")
+    return actual_sha256
+
+
+def update_companion_release(wheel_path: Path, package_dir: Path) -> None:
+    """Install a validated universal wheel and update maintained release pins."""
+
+    if not wheel_path.is_file():
+        raise FileNotFoundError(f"missing candidate expra-connect wheel: {wheel_path}")
+    candidate_digest = validate_companion_wheel(
+        wheel_path, expected_version=None, expected_sha256=None
+    )
+    version = _COMPANION_WHEEL_RE.fullmatch(wheel_path.name)
+    if version is None:
+        raise ValueError("candidate wheel filename is invalid")
+    new_version = version.group("version")
+    new_name = f"expra_connect-{new_version}-py3-none-any.whl"
+    if _compare_versions(new_version, _COMPANION_VERSION) <= 0:
+        raise ValueError(
+            f"candidate version {new_version} is not newer than {_COMPANION_VERSION}"
+        )
+
+    staged_text: dict[Path, str] = {}
+    old_name = _COMPANION_WHEEL_NAME
+    for relative in _COMPANION_UPDATE_FILES:
+        path = package_dir / relative
+        if not path.is_file():
+            raise FileNotFoundError(f"missing companion update target: {path}")
+        text = path.read_text(encoding="utf-8")
+        if _COMPANION_VERSION not in text:
+            raise ValueError(f"expected current companion version in {path}")
+        updated = text.replace(_COMPANION_VERSION, new_version)
+        updated = updated.replace(old_name, new_name)
+        updated = updated.replace(_COMPANION_WHEEL_SHA256, candidate_digest)
+        staged_text[path] = updated
+
+    dist_dir = package_dir / "dist"
+    old_wheel = dist_dir / old_name
+    if not old_wheel.is_file():
+        raise FileNotFoundError(f"missing current companion wheel: {old_wheel}")
+    new_wheel = dist_dir / new_name
+    if new_wheel.exists() and new_wheel != old_wheel:
+        raise FileExistsError(f"target companion wheel already exists: {new_wheel}")
+
+    original_files = {path: path.read_bytes() for path in staged_text}
+    original_companion = old_wheel.read_bytes()
+    original_manifest = (
+        (dist_dir / "SHA256SUMS").read_bytes()
+        if (dist_dir / "SHA256SUMS").exists()
+        else None
+    )
+    with tempfile.TemporaryDirectory(
+        prefix="expra-connect-update-", dir=package_dir
+    ) as temp:
+        staged_dir = Path(temp)
+        staged_wheel = staged_dir / new_name
+        shutil.copyfile(wheel_path, staged_wheel)
+        staged_files: dict[Path, Path] = {}
+        for index, (path, text) in enumerate(staged_text.items()):
+            staged_path = staged_dir / f"file-{index}"
+            staged_path.write_text(text, encoding="utf-8")
+            staged_files[path] = staged_path
+        try:
+            os.replace(staged_wheel, new_wheel)
+            for path, staged_path in staged_files.items():
+                os.replace(staged_path, path)
+            old_wheel.unlink()
+            rewrite_sha256sums(dist_dir, companion_wheel=new_wheel)
+        except OSError:
+            for path, payload in original_files.items():
+                path.write_bytes(payload)
+            old_wheel.write_bytes(original_companion)
+            if original_manifest is None:
+                (dist_dir / "SHA256SUMS").unlink(missing_ok=True)
+            else:
+                (dist_dir / "SHA256SUMS").write_bytes(original_manifest)
+            new_wheel.unlink(missing_ok=True)
+            raise
+    print(f"Updated expra-connect to {new_version} ({new_name})")
+
+
+def verify_release_artifacts(app_wheel: Path, dist_dir: Path) -> None:
+    """Validate the selected app wheel and its pinned companion release artifact."""
+
+    if app_wheel.parent.resolve() != dist_dir.resolve():
+        raise ValueError("application wheel must be in the release dist directory")
+    verify_wheel(app_wheel)
+
+    manifest_path = dist_dir / "SHA256SUMS"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"missing release checksum manifest: {manifest_path}")
+    checksums: dict[str, str] = {}
+    for line in manifest_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        match = re.fullmatch(r"([0-9a-fA-F]{64})\s+([A-Za-z0-9_.-]+)", line.strip())
+        if match is None:
+            raise ValueError("invalid release checksum manifest entry")
+        digest, name = match.groups()
+        if name in checksums:
+            raise ValueError(f"duplicate release checksum entry for {name}")
+        checksums[name] = digest.lower()
+
+    companion = dist_dir / _COMPANION_WHEEL_NAME
+    validate_companion_wheel(companion)
+    companion_digest = checksums.get(companion.name)
+    if companion_digest != _COMPANION_WHEEL_SHA256:
+        raise ValueError(
+            "release manifest does not match the pinned expra-connect wheel"
+        )
+
+    app_digest = checksums.get(app_wheel.name)
+    if app_digest is not None and app_digest != _sha256_bytes(app_wheel.read_bytes()):
+        raise ValueError(f"release checksum mismatch for {app_wheel.name}")
 
 
 def prepare_build(package_dir: Path, *, bump_override: str | None = None) -> str:
@@ -293,6 +486,10 @@ def sync_artifacts(package_dir: Path) -> Path:
     wheel = _newest_wheel(dist_dir)
     if wheel is None:
         raise FileNotFoundError(f"no system_analyzer wheel found in {dist_dir}")
+    companion = dist_dir / _COMPANION_WHEEL_NAME
+    if not companion.is_file():
+        raise FileNotFoundError(f"missing companion wheel: {companion}")
+    validate_companion_wheel(companion)
     rewrite_sha256sums(dist_dir)
     print(f"SHA256SUMS refreshed for {wheel.name}")
     return wheel
@@ -342,6 +539,24 @@ def _build_parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify-wheel", help="verify one built wheel")
     verify.add_argument("wheel", nargs="?", help="path to the wheel to verify")
 
+    release = sub.add_parser(
+        "verify-release-artifacts",
+        help="verify an app wheel and its companion artifact",
+    )
+    release.add_argument("wheel", help="selected app wheel path")
+    release.add_argument("--dist-dir", help="release artifact directory")
+
+    companion = sub.add_parser(
+        "verify-companion-wheel", help="verify the pinned expra-connect wheel"
+    )
+    companion.add_argument("wheel", help="expra-connect wheel path")
+
+    update_companion = sub.add_parser(
+        "update-companion", help="update to a newer universal expra-connect wheel"
+    )
+    update_companion.add_argument("wheel", help="new universal expra-connect wheel")
+    update_companion.add_argument("--package-dir", required=True)
+
     return parser
 
 
@@ -358,6 +573,21 @@ def main(argv: list[str] | None = None) -> int:
         if not args.wheel:
             parser.error("verify-wheel requires a wheel path")
         verify_wheel(Path(args.wheel).resolve())
+        return 0
+    if args.command == "verify-release-artifacts":
+        wheel = Path(args.wheel).resolve()
+        dist_dir = Path(args.dist_dir).resolve() if args.dist_dir else wheel.parent
+        verify_release_artifacts(wheel, dist_dir)
+        return 0
+    if args.command == "verify-companion-wheel":
+        wheel = Path(args.wheel).resolve()
+        validate_companion_wheel(wheel)
+        print(f"expra-connect wheel OK: {wheel.name}")
+        return 0
+    if args.command == "update-companion":
+        update_companion_release(
+            Path(args.wheel).resolve(), Path(args.package_dir).resolve()
+        )
         return 0
     parser.error(f"unsupported command: {args.command}")
     return 2

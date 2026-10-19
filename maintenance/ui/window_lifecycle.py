@@ -1,4 +1,8 @@
-"""Background, presentation, timer, and shutdown adapters for ``AppWindow``."""
+"""Background, presentation, timer, and shutdown adapters for ``AppWindow``.
+
+Qt delivery factories are the target for the upcoming shell migration. Current
+Tk window lifecycle consumers remain transitional until that assigned section.
+"""
 
 from __future__ import annotations
 
@@ -14,9 +18,41 @@ from maintenance.components.background_orchestration import (
 from maintenance.ui import render_coordinator as ui_render
 from maintenance.ui import scan_status
 from maintenance.ui import styles as ui_styles
+from maintenance.ui.window_supports.qt_timer_delivery import (
+    QtDeliveryQueue,
+    QtTimerDelivery,
+)
 from maintenance.ui.window_supports.timer_delivery import TimerDelivery
 
 LOGGER = logging.getLogger(__name__)
+
+
+def qt_delivery_for_window(controller: Any) -> QtDeliveryQueue:
+    """Return the Qt-owned callback queue for the future Qt window shell."""
+    queue = controller.__dict__.get("_qt_delivery_queue")
+    if queue is None:
+        queue = QtDeliveryQueue(parent=controller)
+        controller.__dict__["_qt_delivery_queue"] = queue
+    return queue
+
+
+def qt_timer_delivery_for_window(controller: Any) -> QtTimerDelivery:
+    """Return the Qt-owned timer registry for the future Qt window shell."""
+    timers = controller.__dict__.get("_qt_timer_delivery")
+    if timers is None:
+        timers = QtTimerDelivery(parent=controller)
+        controller.__dict__["_qt_timer_delivery"] = timers
+    return timers
+
+
+def close_qt_delivery(controller: Any) -> None:
+    """Close Qt delivery resources before the owner QWidget is destroyed."""
+    queue = controller.__dict__.get("_qt_delivery_queue")
+    if queue is not None:
+        queue.close()
+    timers = controller.__dict__.get("_qt_timer_delivery")
+    if timers is not None:
+        timers.close()
 
 
 def make_background_orchestrator(controller: Any) -> BackgroundOrchestrator:
@@ -295,8 +331,9 @@ def finalize_shutdown(controller: Any) -> None:
         coordinator.shutdown()
     controller._cancel_all_node_operations()
     cluster_page = getattr(controller, "cluster_page", None)
-    if cluster_page is not None:
-        cluster_page.dispose()
+    dispose_cluster_page = getattr(cluster_page, "dispose", None)
+    if callable(dispose_cluster_page):
+        dispose_cluster_page()
     controller._cancel_pending_timers()
     controller._component_poll_id = None
     controller._background_poll_id = None

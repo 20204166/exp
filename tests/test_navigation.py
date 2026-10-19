@@ -4,6 +4,7 @@ import unittest
 from typing import Any
 from unittest.mock import Mock
 
+from tests.support.qt import get_qapplication
 from tests.support.scheduling import DeferredRunner
 
 
@@ -253,6 +254,45 @@ class PageRouterLoaderTests(unittest.TestCase):
         router = PageRouter(Mock(), coordinator=Mock())
         with self.assertRaises(KeyError):
             router.register_loader("nope", lambda: None, lambda _result: None)
+
+
+class QtPageRouterTests(unittest.TestCase):
+    def test_qt_pages_retain_identity_and_restore_visibility_after_failure(
+        self,
+    ) -> None:
+        from PySide6.QtWidgets import QWidget
+
+        from maintenance.ui.navigation import PageRouter, PageSpec
+
+        get_qapplication()
+        host = QWidget()
+        host.show()
+        pages: dict[str, QWidget] = {}
+        router = PageRouter(host)
+        for name in ("a", "b"):
+            page = QWidget(host)
+            page.hide()
+            pages[name] = page
+            router.register(PageSpec(name, lambda _parent, widget=page: widget))
+        router.show("a")
+        pages["a"].setProperty("retained-state", "kept")
+        router.show("b")
+        self.assertFalse(pages["a"].isVisible())
+        self.assertTrue(pages["b"].isVisible())
+        self.assertIs(router.show("a"), pages["a"])
+        self.assertEqual(pages["a"].property("retained-state"), "kept")
+
+        class FailingPage(QWidget):
+            def show(self) -> None:
+                raise RuntimeError("activation failed")
+
+        failing = FailingPage(host)
+        router.register(PageSpec("broken", lambda _parent: failing))
+        with self.assertRaises(RuntimeError):
+            router.show("broken")
+        self.assertEqual(router.active_key, "a")
+        self.assertTrue(pages["a"].isVisible())
+        host.close()
 
 
 if __name__ == "__main__":

@@ -31,6 +31,11 @@ from maintenance.scanner import ProgressCallback, SystemScanner
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.action_coordinator import ButtonCoordinator
+from maintenance.ui.resource_details import (
+    action_label_text,
+    detail_sections,
+    metric_label_pairs,
+)
 
 
 def _invoke_delivered(callback: Callable[[], None]) -> None:
@@ -146,98 +151,6 @@ def selected_items(
         if selected_item is not None:
             selected.append(selected_item)
     return selected
-
-
-def action_label_text(actionable: bool) -> str:
-    """Return the card action label for one summary's actionable flag."""
-
-    return "Review and clean  →" if actionable else "View details  →"
-
-
-def metric_label_pairs(
-    details: tuple[str, ...],
-    value: str,
-) -> tuple[tuple[str, str], ...]:
-    """Return ``(label, value)`` pairs for one summary's detail lines.
-
-    The headline value is not repeated as a row; lines without a ``": "``
-    separator keep an empty label.
-    """
-
-    pairs: list[tuple[str, str]] = []
-    for line in details:
-        if line == value:
-            continue
-        label, separator, line_value = line.partition(": ")
-        if separator:
-            pairs.append((label, line_value))
-        else:
-            pairs.append(("", line))
-    return tuple(pairs)
-
-
-_INFO_SECTION_RULES: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
-    "gpu": (
-        ("Hardware", ()),
-        ("Status", ("Temperature", "GPU usage", "Memory", "Driver", "Metal")),
-    ),
-    "network": (
-        (
-            "Traffic",
-            ("Download rate", "Upload rate", "Received this boot", "Sent this boot"),
-        ),
-        ("Interface", ("Active interface", "VPN")),
-    ),
-    "battery": (
-        (
-            "Battery",
-            (
-                "Charge",
-                "Power",
-                "Time remaining",
-                "Battery",
-                "CPU",
-                "GPU",
-                "NVMe",
-            ),
-        ),
-    ),
-}
-
-
-def detail_sections(
-    key: str,
-    details: tuple[str, ...],
-) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
-    """Group one summary's detail lines into titled dialog sections.
-
-    Lines whose label matches a section's pinned prefixes land in that
-    section; unprefixed lines (full hardware identifiers, guidance text)
-    land in the first declared section; anything else lands in a trailing
-    "Details" section. Unknown keys get one "Details" section only.
-    """
-
-    rules = _INFO_SECTION_RULES.get(key, ())
-    buckets: list[list[tuple[str, str]]] = [[] for _ in range(len(rules) + 1)]
-    for line in details:
-        prefix, separator, value = line.partition(": ")
-        if not separator:
-            buckets[0 if rules else -1].append(("", line))
-            continue
-        for index, (_title, prefixes) in enumerate(rules):
-            if prefix in prefixes:
-                buckets[index].append((prefix, value))
-                break
-        else:
-            buckets[-1].append((prefix, value))
-
-    sections: list[tuple[str, tuple[tuple[str, str], ...]]] = []
-    for (title, _prefixes), rows in zip(rules, buckets):
-        if rows:
-            sections.append((title, tuple(rows)))
-    if buckets[-1]:
-        sections.append(("Details", tuple(buckets[-1])))
-    return tuple(sections)
 
 
 def show_action_result(

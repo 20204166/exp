@@ -4,7 +4,6 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import replace
-from tkinter import messagebox
 from typing import Any
 
 from maintenance.cluster import (
@@ -528,11 +527,11 @@ def remove_job_node(
     controller: Any,
     node_id: str,
     *,
-    messagebox_module: Any = messagebox,
+    messagebox_module: Any = None,
     provider_cls: Any = AuthenticatedNodeProvider,
     transport_cls: Any = SocketRemoteTransport,
 ) -> None:
-    if not messagebox_module.askyesno(
+    if messagebox_module is not None and not messagebox_module.askyesno(
         "Remove job",
         "This removes the active assignment and reduces normal collection to 20%.",
         parent=controller.master,
@@ -583,14 +582,14 @@ def revoke_node(
     controller: Any,
     node_id: str,
     *,
-    messagebox_module: Any = messagebox,
+    messagebox_module: Any = None,
     provider_cls: Any = AuthenticatedNodeProvider,
     transport_cls: Any = SocketRemoteTransport,
     revoke_trusted_node_fn: Callable[[Any, str], Any] = lambda _controller, _node_id: (
         None
     ),
 ) -> None:
-    if not messagebox_module.askyesno(
+    if messagebox_module is not None and not messagebox_module.askyesno(
         "Revoke",
         "This invalidates trust and permissions. A new invite is required to reconnect.",
         parent=controller.master,

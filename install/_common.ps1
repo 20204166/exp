@@ -180,6 +180,28 @@ function Get-WheelVersion {
     return $matches[1]
 }
 
+function Get-CompanionWheelPath {
+    return (Join-Path (Get-PackageDir) "dist\expra_connect-2.2.0.4-py3-none-any.whl")
+}
+
+function Verify-ReleaseArtifacts {
+    param([object]$Py, [string]$AppWheel)
+    $dist = Join-Path (Get-PackageDir) "dist"
+    Invoke-Versioned $Py "maintenance._release" @(
+        "verify-release-artifacts", $AppWheel, "--dist-dir", $dist
+    )
+}
+
+function Install-ReleaseWheels {
+    param([object]$Py, [string]$AppWheel)
+    $dist = Join-Path (Get-PackageDir) "dist"
+    $companion = Get-CompanionWheelPath
+    & $Py -m pip install --find-links $dist $companion
+    if ($LASTEXITCODE -ne 0) { throw "expra-connect install failed (exit $LASTEXITCODE)" }
+    & $Py -m pip install --find-links $dist $AppWheel
+    if ($LASTEXITCODE -ne 0) { throw "application install failed (exit $LASTEXITCODE)" }
+}
+
 function Verify-InstalledWheel {
     param([object]$Py, [string]$ExpectedVersion)
     $script = @'
@@ -209,14 +231,14 @@ print(f"  window: {window.__file__}")
 
 # Install one wheel per-user, handling old pip that lacks the flag. The
 # --break-system-packages flag is a no-op where PEP 668 does not apply.
-function Install-UserWheel {
-    param([object]$Py, [string]$Wheel)
-    $argsWith = @("-m", "pip", "install", "--user", "--force-reinstall", "--break-system-packages", $Wheel)
+function Install-UserWheels {
+    param([object]$Py, [string[]]$Wheels)
+    $argsWith = @("-m", "pip", "install", "--user", "--force-reinstall", "--break-system-packages") + $Wheels
     $out = & $Py @argsWith 2>&1
     if ($LASTEXITCODE -eq 0) { return }
     $joined = ($out -join "`n")
     if ($joined -match "no such option") {
-        $argsPlain = @("-m", "pip", "install", "--user", "--force-reinstall", $Wheel)
+        $argsPlain = @("-m", "pip", "install", "--user", "--force-reinstall") + $Wheels
         $out = & $Py @argsPlain 2>&1
         if ($LASTEXITCODE -ne 0) { throw ($out -join "`n") }
         return

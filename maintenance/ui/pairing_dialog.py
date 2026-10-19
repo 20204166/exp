@@ -2,25 +2,12 @@
 
 import tkinter as tk
 from collections.abc import Callable
-from dataclasses import dataclass
 from tkinter import ttk
 from typing import Any
 
 from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
-
-
-@dataclass(frozen=True, slots=True)
-class PairingDialogSpec:
-    node_id: str
-    display_name: str = ""
-    identity_fingerprint: str | None = None
-    transport_fingerprint: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class PairingDialogCallbacks:
-    on_pair: Callable[[str], None]
+from maintenance.ui.node_dialog_contracts import PairingDialogSpec
 
 
 class PairingDialog:

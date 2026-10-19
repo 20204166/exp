@@ -234,6 +234,28 @@ class EntryPointEndToEndTests(unittest.TestCase):
             self._run_main([])
         self.assertEqual(call_order, ["run", "release"])
 
+    def test_qt_application_is_created_before_constructing_the_window(self) -> None:
+        call_order: list[str] = []
+        mock_lock = MagicMock()
+        mock_app = MagicMock()
+        with (
+            patch("main.instance_lock.acquire", return_value=mock_lock),
+            patch("main.setup_logging", return_value=None),
+            patch(
+                "main.create_application",
+                side_effect=lambda *_: call_order.append("qt"),
+            ),
+            patch(
+                "main.AppWindow",
+                side_effect=lambda: call_order.append("window") or mock_app,
+            ),
+            patch("sys.argv", ["system-analyzer"]),
+        ):
+            main.main()
+
+        self.assertEqual(call_order, ["qt", "window"])
+        mock_app.run.assert_called_once_with()
+
 
 if __name__ == "__main__":
     unittest.main()

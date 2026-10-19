@@ -10,6 +10,7 @@ from maintenance.ui import layout as ui_layout
 from maintenance.ui import styles as ui_styles
 from maintenance.ui.styles import configure_app_styles
 from tests.support.models import make_summary
+from tests.support.qt import get_qapplication
 from tests.support.widget_recording import RecordingControl
 from window import AppWindow
 
@@ -163,6 +164,48 @@ class StyleRegistrationTests(unittest.TestCase):
             style.configured["Complete.Horizontal.TProgressbar"]["background"],
             ui_styles.COLORS["success"],
         )
+
+
+class QtPrimitiveTests(unittest.TestCase):
+    def test_qt_style_adapter_uses_semantic_palette_and_accessible_focus(self) -> None:
+        from PySide6.QtWidgets import QWidget
+
+        get_qapplication()
+        widget = QWidget()
+        ui_styles.configure_qt_styles(widget)
+        stylesheet = widget.styleSheet()
+        self.assertIn(ui_styles.COLORS["accent"], stylesheet)
+        self.assertIn(ui_styles.COLORS["danger"], stylesheet)
+        self.assertIn(":focus", stylesheet)
+        self.assertIn("font-size: 24pt", stylesheet)
+        self.assertEqual(
+            widget.palette().color(widget.backgroundRole()).name().upper(),
+            ui_styles.COLORS["background"].upper(),
+        )
+        widget.close()
+
+    def test_qt_scroll_area_is_widget_resizable_and_wrap_shrinks_to_fit(self) -> None:
+        from PySide6.QtWidgets import QLabel, QWidget
+
+        from maintenance.ui.qt_layout import qt_scrollable_area, qt_wrap_label
+
+        get_qapplication()
+        host = QWidget()
+        area, content = qt_scrollable_area(host)
+        self.assertTrue(area.widgetResizable())
+        self.assertIs(area.widget(), content)
+        content_layout = content.layout()
+        assert content_layout is not None
+        self.assertEqual(content_layout.spacing(), ui_styles.SPACING["section_gap"])
+        label = QLabel("long text")
+        update = qt_wrap_label(label, max_wrap=500, margin=20)
+        update(150)
+        self.assertEqual(label.maximumWidth(), 130)
+        update(149)
+        self.assertEqual(label.maximumWidth(), 129)
+        update(100)
+        self.assertEqual(label.maximumWidth(), 80)
+        host.close()
 
 
 class ScanStatusPresentationTests(unittest.TestCase):

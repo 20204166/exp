@@ -8,7 +8,6 @@ keeping node administration out of the window's composition code.
 import threading
 from collections.abc import Callable
 from dataclasses import replace
-from tkinter import messagebox, simpledialog
 from typing import Any
 
 from maintenance.cluster import (
@@ -71,11 +70,11 @@ def remove_connection_node(
     controller: Any,
     node_id: str,
     *,
-    messagebox_module: Any = messagebox,
+    messagebox_module: Any = None,
     provider_cls: Any = AuthenticatedNodeProvider,
     transport_cls: Any = SocketRemoteTransport,
 ) -> None:
-    if not messagebox_module.askyesno(
+    if messagebox_module is not None and not messagebox_module.askyesno(
         "Remove connection",
         "The connection will close, but trusted reconnect remains available.",
         parent=controller.master,
@@ -170,12 +169,14 @@ def reject_discovered_node(controller: Any, node_id: str) -> None:
 
 
 def rename_node(
-    controller: Any, node_id: str, *, simpledialog_module: Any = simpledialog
+    controller: Any, node_id: str, *, simpledialog_module: Any = None
 ) -> None:
     registry = controller.__dict__.get("_node_registry")
     if registry is None:
         return
     current = registry.context(NodeId(node_id)).descriptor.display_name
+    if simpledialog_module is None:
+        return
     name = simpledialog_module.askstring(
         "Rename Node", "Display name:", initialvalue=current, parent=controller.master
     )
@@ -231,20 +232,16 @@ def attempt_pending_trust_revocations(controller: Any, node_id: str) -> None:
 def propagate_coordinator_lease(
     controller: Any, target_node_id: str | None = None
 ) -> None:
-    return _connections_impl.propagate_coordinator_lease(
-        controller, target_node_id
-    )
+    return _connections_impl.propagate_coordinator_lease(controller, target_node_id)
 
 
 def remove_manual_host(
-    controller: Any, node_id: str, *, messagebox_module: Any = messagebox
+    controller: Any, node_id: str, *, messagebox_module: Any = None
 ) -> None:
     return _connections_impl.remove_manual_host(
         controller,
         node_id,
-        messagebox_module=_current_connection_dependency(
-            messagebox_module, _CONNECTION_DEFAULT_MESSAGEBOX, messagebox
-        ),
+        messagebox_module=messagebox_module,
     )
 
 
@@ -252,16 +249,14 @@ def test_connection(
     controller: Any,
     node_id: str,
     *,
-    messagebox_module: Any = messagebox,
+    messagebox_module: Any = None,
     provider_cls: Any = AuthenticatedNodeProvider,
     transport_cls: Any = SocketRemoteTransport,
 ) -> None:
     return _connections_impl.test_connection(
         controller,
         node_id,
-        messagebox_module=_current_connection_dependency(
-            messagebox_module, _CONNECTION_DEFAULT_MESSAGEBOX, messagebox
-        ),
+        messagebox_module=messagebox_module,
         provider_cls=_current_connection_dependency(
             provider_cls, _CONNECTION_DEFAULT_PROVIDER, AuthenticatedNodeProvider
         ),
@@ -306,7 +301,7 @@ def activate_remote_node(
 # collaborators from this module at invocation time.
 _ROLE_DEFAULT_PROVIDER = AuthenticatedNodeProvider
 _ROLE_DEFAULT_TRANSPORT = SocketRemoteTransport
-_CONNECTION_DEFAULT_MESSAGEBOX = messagebox
+_CONNECTION_DEFAULT_MESSAGEBOX = None
 _CONNECTION_DEFAULT_PROVIDER = AuthenticatedNodeProvider
 _CONNECTION_DEFAULT_TRANSPORT = SocketRemoteTransport
 _CONNECTION_DEFAULT_BACKEND = RemoteProcessActionBackend
@@ -336,7 +331,7 @@ def pair_discovered_node(
     controller: Any,
     node_id: str,
     *,
-    messagebox_module: Any = messagebox,
+    messagebox_module: Any = None,
     provision_target_grant: Callable[[PeerGrantRecord], bool] | None = None,
 ) -> None:
     return _pairing_impl.pair_discovered_node(
@@ -354,7 +349,7 @@ def pair_discovered_node_async(
     controller: Any,
     node_id: str,
     *,
-    messagebox_module: Any = messagebox,
+    messagebox_module: Any = None,
     provision_target_grant: Callable[[PeerGrantRecord], bool] | None = None,
     dialog: Any = None,
 ) -> None:
@@ -505,7 +500,7 @@ def remove_job_node(
     controller: Any,
     node_id: str,
     *,
-    messagebox_module: Any = messagebox,
+    messagebox_module: Any = None,
     provider_cls: Any = AuthenticatedNodeProvider,
     transport_cls: Any = SocketRemoteTransport,
 ) -> None:
@@ -526,7 +521,7 @@ def revoke_node(
     controller: Any,
     node_id: str,
     *,
-    messagebox_module: Any = messagebox,
+    messagebox_module: Any = None,
     provider_cls: Any = AuthenticatedNodeProvider,
     transport_cls: Any = SocketRemoteTransport,
 ) -> None:

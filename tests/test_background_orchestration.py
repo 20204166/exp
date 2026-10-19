@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 from maintenance.components.background_orchestration import BackgroundOrchestrator
 from maintenance.ui.window_supports.timer_delivery import TimerDelivery
+from tests.support.qt import get_qapplication
 
 
 class BackgroundOrchestratorTests(unittest.TestCase):
@@ -146,6 +147,103 @@ class BackgroundOrchestratorTests(unittest.TestCase):
         )
         orchestrator.drain_queue()
         callback.assert_called_once_with()
+
+    def test_qt_delivery_adapter_affinity_progress_coalescing_and_finished_marker(
+        self,
+    ) -> None:
+        from PySide6.QtCore import QThread
+        from PySide6.QtTest import QTest
+
+        from maintenance.ui.window_supports.qt_timer_delivery import (
+            QtDeliveryQueue,
+            QtTimerDelivery,
+        )
+
+        app = get_qapplication()
+        delivery = QtDeliveryQueue()
+        timers = QtTimerDelivery()
+        queue: Queue[Any] = Queue()
+        state: dict[str, Any] = {"poll": None, "tasks": 1, "closing": False}
+        received: list[tuple[str, object]] = []
+        orchestrator = BackgroundOrchestrator(
+            queue=queue,
+            is_closing=lambda: bool(state["closing"]),
+            schedule_timer=lambda delay, callback: timers.schedule(delay, callback),
+            get_poll_id=lambda: state["poll"],
+            set_poll_id=lambda identifier: state.__setitem__("poll", identifier),
+            get_task_count=lambda: int(state["tasks"]),
+            set_task_count=lambda count: state.__setitem__("tasks", count),
+            set_busy=lambda _busy: None,
+            resolve_completed_worker=lambda: None,
+            get_render_coordinator=lambda: None,
+            has_pending_coordinator_work=lambda: False,
+            has_discovery_tick=lambda: False,
+            invoke_delivered=delivery.submit,
+            poll_milliseconds=1,
+            logger=Mock(),
+            max_drain_items=1,
+        )
+        orchestrator.submit_progress(
+            "scan", lambda: received.append(("old", QThread.currentThread()))
+        )
+        orchestrator.submit_progress(
+            "scan", lambda: received.append(("latest", QThread.currentThread()))
+        )
+
+        def finish_task() -> None:
+            received.append(("finished", QThread.currentThread()))
+            state["tasks"] = 0
+
+        queue.put(("finished", finish_task))
+        for _ in range(20):
+            if len(received) == 2:
+                break
+            QTest.qWait(10)
+        self.assertEqual([name for name, _ in received], ["latest", "finished"])
+        self.assertTrue(all(thread is app.thread() for _, thread in received))
+        delivery.close()
+        timers.close()
+
+    def test_app_coordinator_keeps_deliver_injected_and_qt_affine(self) -> None:
+        from PySide6.QtCore import QThread
+        from PySide6.QtTest import QTest
+
+        from maintenance.components.coordinator import AppCoordinator
+        from maintenance.ui.window_supports.qt_timer_delivery import QtDeliveryQueue
+
+        app = get_qapplication()
+        delivery = QtDeliveryQueue()
+        coordinator = AppCoordinator(
+            deliver=delivery.submit,
+            deliver_progress=lambda _key, callback: delivery.submit(callback),
+        )
+        delivered: list[tuple[str, object]] = []
+
+        def task(_cancel: threading.Event, progress: Any) -> str:
+            progress("working")
+            return "result"
+
+        coordinator.run(
+            "qt-test",
+            task,
+            on_progress=lambda _key, _message: delivered.append(
+                ("progress", QThread.currentThread())
+            ),
+            on_result=lambda _key, _result: delivered.append(
+                ("result", QThread.currentThread())
+            ),
+            on_finished=lambda: delivered.append(("finished", QThread.currentThread())),
+        )
+        for _ in range(40):
+            if len(delivered) == 3:
+                break
+            QTest.qWait(5)
+        self.assertEqual(
+            [name for name, _ in delivered], ["progress", "result", "finished"]
+        )
+        self.assertTrue(all(thread is app.thread() for _, thread in delivered))
+        coordinator.shutdown()
+        delivery.close()
 
 
 if __name__ == "__main__":
