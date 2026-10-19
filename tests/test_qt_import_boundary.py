@@ -8,6 +8,41 @@ import unittest
 
 
 class QtImportBoundaryTests(unittest.TestCase):
+    def test_qt_integration_test_modules_do_not_import_tkinter(self) -> None:
+        modules = (
+            "tests.test_qt_app_window",
+            "tests.test_qt_application",
+            "tests.test_qt_cluster",
+            "tests.test_qt_dashboard",
+            "tests.test_qt_diagnostics_page",
+            "tests.test_qt_help_page",
+            "tests.test_qt_import_boundary",
+            "tests.test_qt_node_dialogs",
+            "tests.test_qt_nodes_connections",
+            "tests.test_qt_resource_dialogs",
+            "tests.test_qt_settings",
+            "tests.test_qt_test_support",
+            "tests.test_qt_thermals",
+            "tests.test_qt_window_shell",
+        )
+        for module in modules:
+            with self.subTest(module=module):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        (
+                            f"import sys; import {module}; "
+                            "assert not any(name == 'tkinter' or "
+                            "name.startswith('tkinter.') for name in sys.modules)"
+                        ),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_component_cycle_runs_without_loading_tkinter_or_window(self) -> None:
         result = subprocess.run(
             [

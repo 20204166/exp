@@ -12,8 +12,11 @@ from PySide6.QtWidgets import QMainWindow, QMessageBox
 
 from maintenance.cluster import ClusterState, ClusterStore
 from maintenance.preferences import PreferencesStore
-from maintenance.ui.cluster_page import ClusterNodeSpec
-from maintenance.ui.nodes_connections import DiscoveredPeerSpec, TrustedNodeSpec
+from maintenance.ui.page_specs import (
+    ClusterNodeSpec,
+    DiscoveredPeerSpec,
+    TrustedNodeSpec,
+)
 from maintenance.ui.qt_app_window import QtAppController, QtAppWindow
 from maintenance.ui.qt_node_dialogs import (
     QtConnectionDialog,
@@ -35,10 +38,10 @@ class QtAppWindowTypeTests(unittest.TestCase):
     def test_application_window_is_a_native_qt_main_window(self) -> None:
         self.assertTrue(issubclass(QtAppWindow, QMainWindow))
 
-    def test_qt_controller_does_not_inherit_from_tk_app_window(self) -> None:
-        from window import AppWindow
+    def test_qt_controller_uses_toolkit_neutral_application_controller(self) -> None:
+        from maintenance.application_controller import ApplicationController
 
-        self.assertFalse(issubclass(QtAppController, AppWindow))
+        self.assertTrue(issubclass(QtAppController, ApplicationController))
 
     def test_run_shows_window_before_entering_event_loop(self) -> None:
         from PySide6.QtWidgets import QApplication

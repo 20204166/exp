@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QCheckBox, QComboBox
 
 from maintenance.nodes import local_node_descriptor
-from maintenance.ui.nodes_connections import (
+from maintenance.ui.page_specs import (
     DiscoveredPeerSpec,
     LocalClusterSpec,
     TrustedNodeSpec,

@@ -7,15 +7,13 @@ import unittest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QLineEdit, QPushButton
 
-from maintenance.ui.node_details_dialog import (
-    NodeDetailsDialogCallbacks,
-    NodeDetailsDialogSpec,
-)
 from maintenance.ui.node_dialog_contracts import (
     ConnectionDialogCallbacks,
+    NodeDetailsDialogCallbacks,
+    NodeDetailsDialogSpec,
+    PairingDialogSpec,
     SharingDialogCallbacks,
 )
-from maintenance.ui.pairing_dialog import PairingDialogSpec
 from maintenance.ui.qt_node_dialogs import (
     QtConnectionDialog,
     QtNodeDetailsDialog,
