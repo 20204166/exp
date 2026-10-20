@@ -250,7 +250,8 @@ At the 2026-10-20 checkpoint, the configured full suite passed 2,176 tests in
 181.781s using the preserved wheel override. Repository-wide static gates are
 not green: Ruff reports one unused import; format reports 17 files; Pyright
 reports two unresolved `expra_connect` imports and one `__all__` warning; Mypy
-is not installed in the migration venv. Re-run these gates at final acceptance
+now runs from the pinned dev environment but fails on duplicate module names in
+`docs/security_reviews/poc/SEC-20260912-001/` and `SEC-20260912-002/`. Re-run these gates at final acceptance
 rather than treating this snapshot as completion evidence. Commit and push each
 coherent migration-owned batch as requested, while staging only the files for
 that batch and preserving unrelated user working-tree edits.
