@@ -7,9 +7,21 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import ClassVar
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QMainWindow, QMessageBox
+from PySide6.QtGui import QAccessible
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QApplication,
+    QComboBox,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QSpinBox,
+    QTreeView,
+    QWidget,
+)
 
 from maintenance.cluster import ClusterState, ClusterStore
 from maintenance.preferences import PreferencesStore
@@ -32,6 +44,8 @@ from tests.support.qt import get_qapplication
 
 
 class QtAppWindowTypeTests(unittest.TestCase):
+    app: ClassVar[QApplication]
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = get_qapplication()
@@ -159,6 +173,46 @@ class QtAppWindowTypeTests(unittest.TestCase):
             self.assertEqual(delivered, [])
             self.assertTrue(cancellation.is_set())
             self.assertTrue(window.controller._is_closing)
+
+    def test_interactive_controls_on_retained_pages_have_accessible_names(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cluster = ClusterStore(root / "cluster.json")
+            cluster.save(ClusterState.create_local())
+            with (
+                patch.object(QtAppController, "_start_peer_listener"),
+                patch.object(QtAppController, "_start_discovery"),
+                patch.object(QtAppController, "_schedule_timer"),
+            ):
+                window = QtAppWindow(
+                    preferences_store=PreferencesStore(root / "preferences.json"),
+                    cluster_store=cluster,
+                )
+
+            control_types = (
+                QAbstractButton,
+                QComboBox,
+                QLineEdit,
+                QSpinBox,
+                QTreeView,
+            )
+            unnamed: list[str] = []
+            for control in window.findChildren(QWidget):
+                if not isinstance(control, control_types):
+                    continue
+                if isinstance(control, QLineEdit) and isinstance(
+                    control.parentWidget(), QSpinBox
+                ):
+                    continue
+                accessible = QAccessible.queryAccessibleInterface(control)
+                accessible_name = (
+                    accessible.text(QAccessible.Text.Name) if accessible else ""
+                )
+                if not accessible_name.strip():
+                    unnamed.append(f"{type(control).__name__}:{control.objectName()}")
+
+            window.close()
+            self.assertEqual(unnamed, [])
 
     def test_controller_builds_a_toolkit_neutral_diagnostics_snapshot(self) -> None:
         from maintenance.diagnostics import DiagnosticsSnapshot

@@ -305,6 +305,26 @@ toolkit-neutral `maintenance/application_controller.py`.
 
 ### Phase B — matched visual evidence and rendered opposition
 
+**Checkpoint (2026-10-20):** `tests/capture_tk_ui.py` and
+`tests/dump_qt_ui.py` produced paired default-startup captures for eight page
+routes at 900/1280/1600 widths under
+`.ui/qt-ui-migration/evidence/screenshots/matched/{tk,qt}/`. The exact commands
+and representative paths are recorded in the local UI validation report.
+Inspection found these are viewport-paired, not state-matched: thermal status
+and Nodes selection differ, and Dashboard/Settings/Preferences composition also
+differs. The fixture only aligns temporary stores, synthetic local identity,
+discovery preference, and viewport; no projection/telemetry equivalence check
+exists yet. Thus the evidence confirms open parity questions, not acceptance.
+Automated harness tests, populated/error/dialog captures, diffs, and independent
+opposition review of this new evidence remain outstanding.
+
+The 48-image inventory was verified at the requested dimensions. The focused
+Qt app-window/import-boundary command passed 41 tests after the accessible-name
+test and capture-module import boundary were added. Ruff check/format and
+Pyright pass for the five changed Python files; targeted Mypy remains blocked
+by existing method-assignment and imported-module typing errors. This advances
+capture inventory only and does not close any Phase B gate.
+
 **Files:** existing Tk capture harness `tests/dump_ui.py` (read-only baseline
 until final removal), new Qt capture harness `tests/dump_qt_ui.py`,
 `tests/support/qt.py` and shared model fixtures only if needed, screenshots under
@@ -332,6 +352,15 @@ until final removal), new Qt capture harness `tests/dump_qt_ui.py`,
   **Gate:** no unresolved parity concern that could hide a behavior regression.
 
 ### Phase C — keyboard and accessibility acceptance
+
+**Checkpoint (2026-10-20):** `test_interactive_controls_on_retained_pages_have_accessible_names`
+walks all retained Qt pages, queries each interactive control's Qt accessibility
+interface, and checks its computed name. The offscreen render contained 84
+controls and found zero unnamed controls (internal spin-box editor children are
+excluded because the owning spin boxes carry the accessible control name).
+Ruff and Pyright pass for this test. This is partial automated evidence only;
+it does not replace the full keyboard walkthrough, dialog focus-return checks,
+contrast measurement, or Orca spot-check.
 
 **Files:** relevant Qt tests under `tests/test_qt_*.py`, Qt UI modules only when
 tests demonstrate a defect, and `.ui/qt-ui-migration/reports/ui-validation-report.md`.
