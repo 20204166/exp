@@ -99,9 +99,6 @@ class QtAppWindowTypeTests(unittest.TestCase):
                 events.append("cluster-loaded")
                 return original_cluster_load()
 
-            preferences.load = load_preferences
-            cluster.load = load_cluster
-
             def start_listener(_controller):
                 events.append("listener-started")
 
@@ -113,6 +110,8 @@ class QtAppWindowTypeTests(unittest.TestCase):
                 return "timer-id"
 
             with (
+                patch.object(preferences, "load", side_effect=load_preferences),
+                patch.object(cluster, "load", side_effect=load_cluster),
                 patch.object(QtAppController, "_start_peer_listener", start_listener),
                 patch.object(QtAppController, "_start_discovery", start_discovery),
                 patch.object(QtAppController, "_schedule_timer", schedule),

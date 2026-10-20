@@ -249,9 +249,9 @@ dynamic lookups, patch seams, and command-entry references. Source files under
 At the 2026-10-20 checkpoint, the configured full suite passed 2,176 tests in
 181.781s using the preserved wheel override. Repository-wide static gates are
 not green: Ruff reports one unused import; format reports 17 files; Pyright
-reports two unresolved `expra_connect` imports and one `__all__` warning; Mypy
-now runs from the pinned dev environment but fails on duplicate module names in
-`docs/security_reviews/poc/SEC-20260912-001/` and `SEC-20260912-002/`. Re-run these gates at final acceptance
+with the migration interpreter reports zero errors and one `__all__` warning;
+Mypy 2.3.1 reports 129 existing typing errors across 28 files when run with the
+repository-configured app-and-test scope. Re-run these gates at final acceptance
 rather than treating this snapshot as completion evidence. Commit and push each
 coherent migration-owned batch as requested, while staging only the files for
 that batch and preserving unrelated user working-tree edits.
@@ -265,7 +265,8 @@ is scheduled through the Qt timer owner at 350 ms, and closing twice suppresses
 queued worker/timer callbacks. `test_run_shows_window_before_entering_event_loop`
 continues to cover show-before-event-loop ordering. The focused command below
 passed 62 tests; Ruff check/format and Pyright passed for the changed test file.
-Mypy remains unavailable in the migration venv. This is partial Phase A
+Mypy is now installed, but its configured repo-wide run still reports 129
+existing errors across 28 files. This is partial Phase A
 evidence—not completion of the crosswalk, startup edge cases, or cancellation
 propagation requirements.
 
