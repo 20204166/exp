@@ -258,17 +258,19 @@ that batch and preserving unrelated user working-tree edits.
 
 ### Phase A — close lifecycle and behavior-coverage gaps
 
-**Checkpoint (2026-10-20):** `tests/test_qt_app_window.py` now characterizes
-that preferences and cluster state load before listener startup, the listener
-and discovery startup hooks both run when discovery is disabled, the first scan
-is scheduled through the Qt timer owner at 350 ms, and closing twice suppresses
-queued worker/timer callbacks. `test_run_shows_window_before_entering_event_loop`
-continues to cover show-before-event-loop ordering. The focused command below
-passed 62 tests; Ruff check/format and Pyright passed for the changed test file.
-Mypy is now installed, but its configured repo-wide run still reports 129
-existing errors across 28 files. This is partial Phase A
-evidence—not completion of the crosswalk, startup edge cases, or cancellation
-propagation requirements.
+**Checkpoint (2026-10-20):** `tests/test_qt_app_window.py` characterizes that
+preferences and cluster state load before listener startup, the peer listener
+startup is independent of discovery being disabled, the real discovery session
+remains inactive for a disabled cluster, and the first scan is scheduled at
+350 ms. Repeated close cancels the analysis event and suppresses queued worker
+and timer callbacks. `test_run_shows_window_before_entering_event_loop` covers
+show-before-event-loop ordering; `tests/test_background_task_runner.py::test_cancelled_late_result_is_dropped_after_delivery_owner_closes` covers a
+worker that finishes after its Qt delivery owner closes. The focused lifecycle,
+delivery, and discovery command passed 42 tests; Ruff, format, and Pyright pass
+for the changed test file. Mypy is installed, but the configured repo-wide run
+still reports 129 errors across 28 files. This is partial Phase A evidence—not
+completion of the behavior crosswalk, all startup edge cases, or all shutdown
+contracts.
 
 **Files:** `tests/test_qt_app_window.py`, `tests/test_qt_application.py`,
 `tests/test_application_controller.py`, `tests/test_qt_window_shell.py`,

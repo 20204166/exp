@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -102,9 +103,6 @@ class QtAppWindowTypeTests(unittest.TestCase):
             def start_listener(_controller):
                 events.append("listener-started")
 
-            def start_discovery(_controller):
-                events.append("discovery-started")
-
             def schedule(_controller, delay, callback):
                 events.append(("scan-scheduled", delay, callback.__name__))
                 return "timer-id"
@@ -113,7 +111,6 @@ class QtAppWindowTypeTests(unittest.TestCase):
                 patch.object(preferences, "load", side_effect=load_preferences),
                 patch.object(cluster, "load", side_effect=load_cluster),
                 patch.object(QtAppController, "_start_peer_listener", start_listener),
-                patch.object(QtAppController, "_start_discovery", start_discovery),
                 patch.object(QtAppController, "_schedule_timer", schedule),
             ):
                 window = QtAppWindow(
@@ -128,7 +125,9 @@ class QtAppWindowTypeTests(unittest.TestCase):
                 events.index("cluster-loaded"), events.index("listener-started")
             )
             self.assertIn("listener-started", events)
-            self.assertIn("discovery-started", events)
+            discovery_session = window.controller.__dict__.get("_discovery_session")
+            assert discovery_session is not None
+            self.assertFalse(discovery_session._active)
             self.assertIn(("scan-scheduled", 350, "handle_analyze"), events)
             self.assertFalse(window.isVisible())
             window.close()
@@ -149,6 +148,8 @@ class QtAppWindowTypeTests(unittest.TestCase):
                 )
 
             delivered: list[str] = []
+            cancellation = threading.Event()
+            window.controller._analysis_cancel_event = cancellation
             window.delivery.submit(lambda: delivered.append("worker"))
             window.timers.schedule(0, lambda: delivered.append("timer"))
             window.close()
@@ -156,6 +157,7 @@ class QtAppWindowTypeTests(unittest.TestCase):
             self.app.processEvents()
 
             self.assertEqual(delivered, [])
+            self.assertTrue(cancellation.is_set())
             self.assertTrue(window.controller._is_closing)
 
     def test_controller_builds_a_toolkit_neutral_diagnostics_snapshot(self) -> None:
