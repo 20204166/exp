@@ -256,6 +256,17 @@ the files for that batch and preserving any unrelated future working-tree edits.
 
 ### Phase A — close lifecycle and behavior-coverage gaps
 
+**Checkpoint (2026-10-20):** `tests/test_qt_app_window.py` now characterizes
+that preferences and cluster state load before listener startup, the listener
+and discovery startup hooks both run when discovery is disabled, the first scan
+is scheduled through the Qt timer owner at 350 ms, and closing twice suppresses
+queued worker/timer callbacks. `test_run_shows_window_before_entering_event_loop`
+continues to cover show-before-event-loop ordering. The focused command below
+passed 62 tests; Ruff check/format and Pyright passed for the changed test file.
+Mypy remains unavailable in the migration venv. This is partial Phase A
+evidence—not completion of the crosswalk, startup edge cases, or cancellation
+propagation requirements.
+
 **Files:** `tests/test_qt_app_window.py`, `tests/test_qt_application.py`,
 `tests/test_application_controller.py`, `tests/test_qt_window_shell.py`,
 `tests/test_qt_import_boundary.py`; implementation only if a test exposes a

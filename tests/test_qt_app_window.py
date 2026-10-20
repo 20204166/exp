@@ -79,6 +79,86 @@ class QtAppWindowTypeTests(unittest.TestCase):
             window.show_page("dashboard")
             window.close()
 
+    def test_startup_restores_state_then_starts_listener_and_defers_first_scan(
+        self,
+    ) -> None:
+        events: list[object] = []
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            preferences = PreferencesStore(root / "preferences.json")
+            cluster = ClusterStore(root / "cluster.json")
+            cluster.save(replace(ClusterState.create_local(), discovery_enabled=False))
+            original_preferences_load = preferences.load
+            original_cluster_load = cluster.load
+
+            def load_preferences():
+                events.append("preferences-loaded")
+                return original_preferences_load()
+
+            def load_cluster():
+                events.append("cluster-loaded")
+                return original_cluster_load()
+
+            preferences.load = load_preferences
+            cluster.load = load_cluster
+
+            def start_listener(_controller):
+                events.append("listener-started")
+
+            def start_discovery(_controller):
+                events.append("discovery-started")
+
+            def schedule(_controller, delay, callback):
+                events.append(("scan-scheduled", delay, callback.__name__))
+                return "timer-id"
+
+            with (
+                patch.object(QtAppController, "_start_peer_listener", start_listener),
+                patch.object(QtAppController, "_start_discovery", start_discovery),
+                patch.object(QtAppController, "_schedule_timer", schedule),
+            ):
+                window = QtAppWindow(
+                    preferences_store=preferences,
+                    cluster_store=cluster,
+                )
+
+            self.assertLess(
+                events.index("preferences-loaded"), events.index("listener-started")
+            )
+            self.assertLess(
+                events.index("cluster-loaded"), events.index("listener-started")
+            )
+            self.assertIn("listener-started", events)
+            self.assertIn("discovery-started", events)
+            self.assertIn(("scan-scheduled", 350, "handle_analyze"), events)
+            self.assertFalse(window.isVisible())
+            window.close()
+
+    def test_close_suppresses_pending_qt_delivery_and_timer_callbacks(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            cluster = ClusterStore(root / "cluster.json")
+            cluster.save(replace(ClusterState.create_local(), discovery_enabled=False))
+            with (
+                patch.object(QtAppController, "_start_peer_listener"),
+                patch.object(QtAppController, "_start_discovery"),
+                patch.object(QtAppController, "_schedule_timer"),
+            ):
+                window = QtAppWindow(
+                    preferences_store=PreferencesStore(root / "preferences.json"),
+                    cluster_store=cluster,
+                )
+
+            delivered: list[str] = []
+            window.delivery.submit(lambda: delivered.append("worker"))
+            window.timers.schedule(0, lambda: delivered.append("timer"))
+            window.close()
+            window.close()
+            self.app.processEvents()
+
+            self.assertEqual(delivered, [])
+            self.assertTrue(window.controller._is_closing)
+
     def test_controller_builds_a_toolkit_neutral_diagnostics_snapshot(self) -> None:
         from maintenance.diagnostics import DiagnosticsSnapshot
 
