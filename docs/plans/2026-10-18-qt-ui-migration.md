@@ -246,13 +246,14 @@ each deletion, search all source, tests, package metadata, and docs for imports,
 dynamic lookups, patch seams, and command-entry references. Source files under
 `build/` are generated build artifacts and are not migration owners; build into
 `/tmp/opencode/qt-migration-wheel` and do not replace the preserved `dist/` wheel.
-At this plan revision, the configured full suite has passed 2,174 tests; the
-repository-wide static gates are not yet green (Ruff reports one unused import,
-format reports 17 files, Pyright reports zero errors plus one `__all__` warning,
-and Mypy is not installed in the migration venv). Re-run these gates at final
-acceptance rather than treating this snapshot as completion evidence. Commit
-and push each coherent migration-owned batch as requested, while staging only
-the files for that batch and preserving any unrelated future working-tree edits.
+At the 2026-10-20 checkpoint, the configured full suite passed 2,176 tests in
+181.781s using the preserved wheel override. Repository-wide static gates are
+not green: Ruff reports one unused import; format reports 17 files; Pyright
+reports two unresolved `expra_connect` imports and one `__all__` warning; Mypy
+is not installed in the migration venv. Re-run these gates at final acceptance
+rather than treating this snapshot as completion evidence. Commit and push each
+coherent migration-owned batch as requested, while staging only the files for
+that batch and preserving unrelated user working-tree edits.
 
 ### Phase A — close lifecycle and behavior-coverage gaps
 
