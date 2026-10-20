@@ -7,7 +7,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import ClassVar
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 from PySide6.QtGui import QAccessible
@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
 )
 
 from maintenance.cluster import ClusterState, ClusterStore
+from maintenance.components.coordinator import ComponentRefreshScheduler
+from maintenance.nodes import NodeRegistry
 from maintenance.preferences import PreferencesStore
 from maintenance.ui.page_specs import (
     ClusterNodeSpec,
@@ -117,6 +119,16 @@ class QtAppWindowTypeTests(unittest.TestCase):
             def start_listener(_controller):
                 events.append("listener-started")
 
+            def create_scheduler(
+                *args: Any, **kwargs: Any
+            ) -> ComponentRefreshScheduler:
+                events.append("scheduler-created")
+                return ComponentRefreshScheduler(*args, **kwargs)
+
+            def create_registry(*args: Any, **kwargs: Any) -> NodeRegistry:
+                events.append("registry-created")
+                return NodeRegistry(*args, **kwargs)
+
             def schedule(_controller, delay, callback):
                 events.append(("scan-scheduled", delay, callback.__name__))
                 return "timer-id"
@@ -124,6 +136,14 @@ class QtAppWindowTypeTests(unittest.TestCase):
             with (
                 patch.object(preferences, "load", side_effect=load_preferences),
                 patch.object(cluster, "load", side_effect=load_cluster),
+                patch(
+                    "maintenance.application_controller.ComponentRefreshScheduler",
+                    side_effect=create_scheduler,
+                ),
+                patch(
+                    "maintenance.application_controller.NodeRegistry",
+                    side_effect=create_registry,
+                ),
                 patch.object(QtAppController, "_start_peer_listener", start_listener),
                 patch.object(QtAppController, "_schedule_timer", schedule),
             ):
@@ -137,6 +157,12 @@ class QtAppWindowTypeTests(unittest.TestCase):
             )
             self.assertLess(
                 events.index("cluster-loaded"), events.index("listener-started")
+            )
+            self.assertLess(
+                events.index("preferences-loaded"), events.index("scheduler-created")
+            )
+            self.assertLess(
+                events.index("cluster-loaded"), events.index("registry-created")
             )
             self.assertIn("listener-started", events)
             discovery_session = window.controller.__dict__.get("_discovery_session")

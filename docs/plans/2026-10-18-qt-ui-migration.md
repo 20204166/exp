@@ -272,6 +272,32 @@ still reports 129 errors across 28 files. This is partial Phase A evidence—not
 completion of the behavior crosswalk, all startup edge cases, or all shutdown
 contracts.
 
+**Latest Phase A run (2026-10-20):** after adding assertions that preference
+loading precedes scheduler construction and cluster loading precedes registry
+construction, the required focused command passed 63 tests in 69.393s:
+`QT_QPA_PLATFORM=offscreen PYTHON=/tmp/opencode/system-analyzer-qt-migration-venv/bin/python scripts/run_tests.sh tests.test_qt_app_window tests.test_qt_application tests.test_application_controller tests.test_qt_window_shell tests.test_qt_import_boundary -v`.
+Ruff check/format and Pyright pass for `tests/test_qt_app_window.py`. The first
+run produced expected error-path logger output from passing failure-isolation
+tests; unittest finished `OK`. Remaining crosswalk/lifecycle bullets are still
+open.
+
+**Crosswalk progress (2026-10-20; partial—not a suite-level acceptance):**
+
+| Legacy owner / assertion group | Current Qt or toolkit-neutral evidence | Classification / remaining work |
+|---|---|---|
+| `tests/test_window_placement.py` (`TargetContextResolutionTests`, `ValidateTargetPlacementTests`, `HandleAnalyzePlacementTests`, `BuildMovableViewsTests`) | `tests/test_window_placement.py` remains the policy/target-placement contract owner; Qt action dispatch is covered in `tests/test_qt_app_window.py` and `tests/test_qt_cluster.py`. | Retain as domain/policy tests; still verify each assertion against removal impact. Do not move target authorization into widgets. |
+| `tests/test_window_preferences.py::test_commit_saves_before_publishing_and_reconciling`, `test_save_failure_keeps_previous_preferences_and_reports_error`, `test_invalid_interval_is_rejected_without_persisting` | `tests/test_preferences.py`, `tests/test_qt_settings.py::test_preference_apply_and_save_semantics_are_callback_owned`, `test_interval_bounds_are_enforced_and_controls_are_accessible`; controller commits route through `window_preferences`. | Domain persistence tests retained; Qt callback/presentation tests cover widget integration. Complete per-assertion crosswalk remains open. |
+| `tests/test_window_supports.py::SnapshotStateTests` and `CardPolicyTests` | Same module tests pure projections/policies; direct Qt render/control consumers are covered by `tests/test_qt_dashboard.py`, `tests/test_qt_nodes_connections.py`, and `tests/test_qt_settings.py`. | Retain toolkit-neutral policy contracts; still enumerate all assertion-level consumers before deleting the Tk owner. |
+| `tests/test_window_supports.py::TimerDeliveryTests` | Qt delivery lifecycle cases in `tests/test_window_supports.py::QtDeliveryTests` and `tests/test_qt_window_shell.py`; Tk-specific `after` interruption remains legacy-only. | Partial: Qt callback cancellation/close coverage exists; exact parity for all timer failure/interrupt cases is unverified. |
+| `tests/test_window_scan_runtime.py` (`test_scan_coordinator_adapter_does_not_import_window_or_tk`, `test_cancel_notice_uses_shell_callback_without_tk_label`, `test_cancel_notice_retains_legacy_label_fallback`) | `tests.test_qt_import_boundary` covers fresh-process import boundaries; `tests.test_qt_app_window::test_cancelled_scan_notice_is_visible_on_both_scan_surfaces` covers Qt notice. | First two have current equivalent evidence; Tk fallback is intentionally retained until Tk removal. |
+| `tests/test_window.py`, `tests/test_window_extraction.py`, `tests/test_window_nodes.py` (including `tests/window_node_cases/*`) | Multiple owners: scan lifecycle in `tests/test_qt_app_window.py`/toolkit-neutral coordinator suites; node actions in `tests/test_qt_app_window.py`, `tests/test_qt_nodes_connections.py`, `tests/test_qt_cluster.py`; extracted service/lifecycle behavior in `tests/test_application_controller.py` and `tests/test_window_extraction.py`. | Not crosswalked assertion-by-assertion; this is the largest remaining Phase A gap. Legacy characterization stays. |
+
+Startup-order coverage was strengthened: the named startup test now records
+`ComponentRefreshScheduler` and `NodeRegistry` factory invocation and asserts
+preferences load before scheduler construction and cluster load before registry
+construction. The focused test passed. This does not claim the untouched
+crosswalk groups are complete.
+
 **Files:** `tests/test_qt_app_window.py`, `tests/test_qt_application.py`,
 `tests/test_application_controller.py`, `tests/test_qt_window_shell.py`,
 `tests/test_qt_import_boundary.py`; implementation only if a test exposes a
